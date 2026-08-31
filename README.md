@@ -45,7 +45,3 @@ src/
 
 Terraform · Puppet · Kubernetes (EKS/AKS) · APIs de AWS y Azure
 
-
-## Licencia
-
-🔹 *Definir (ej. MIT) según lineamientos del curso.*
