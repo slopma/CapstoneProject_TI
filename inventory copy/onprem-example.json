@@ -1,0 +1,41 @@
+{
+  "architecture": {
+    "name": "onprem-reference",
+    "provider": "on-premise"
+  },
+  "resources": [
+    {
+      "id": "backend",
+      "name": "Backend Application",
+      "type": "compute",
+      "platform": "ubuntu",
+      "location": "on-premise"
+    },
+    {
+      "id": "postgres",
+      "name": "PostgreSQL Database",
+      "type": "database",
+      "engine": "postgresql",
+      "location": "on-premise"
+    },
+    {
+      "id": "redis",
+      "name": "Redis Cache",
+      "type": "cache",
+      "engine": "redis",
+      "location": "on-premise"
+    }
+  ],
+  "relationships": [
+    {
+      "source": "backend",
+      "target": "postgres",
+      "type": "depends_on"
+    },
+    {
+      "source": "backend",
+      "target": "redis",
+      "type": "depends_on"
+    }
+  ]
+}
