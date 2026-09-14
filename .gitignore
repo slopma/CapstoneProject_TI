@@ -4,9 +4,11 @@
 
 # Terraform generated files
 **/.terraform/
-generated/aws/*.tfvars
-generated/aws/*.tfplan
+**/*.tfstate
+**/*.tfvars
+**/tfplan
 generated/aws/plan-evidence.txt
+
 
 __pycache__/
 .pytest_cache/
