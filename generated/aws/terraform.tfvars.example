@@ -1,0 +1,13 @@
+aws_region = "replace-with-region"
+ami_id = "replace-with-ami-id"
+availability_zones = ["replace-with-zone-a", "replace-with-zone-b"]
+
+vpc_cidr = "replace-with-vpc-cidr"
+public_subnet_cidr = "replace-with-public-subnet-cidr"
+private_subnet_a_cidr = "replace-with-private-subnet-a-cidr"
+private_subnet_b_cidr = "replace-with-private-subnet-b-cidr"
+public_ingress_cidr = "replace-with-approved-ingress-cidr"
+egress_cidr = "replace-with-approved-egress-cidr"
+
+db_username = "replace-with-db-username"
+db_password = "replace-with-db-password"

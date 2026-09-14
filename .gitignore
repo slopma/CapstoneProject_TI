@@ -1,22 +1,13 @@
-# Terraform generated files
-**/.terraform/
-**/*.tfstate
-**/*.tfstate.*
-**/*.tfvars
-**/*.tfvars.json
-**/crash.log
-**/crash.*.log
-**/tfplan
-**/plan-evidence.txt
-
-# Local environment and tooling
 .env
 .env.*
 !.env.example
+
+# Terraform generated files
+**/.terraform/
+generated/aws/*.tfvars
+generated/aws/*.tfplan
+generated/aws/plan-evidence.txt
+
 __pycache__/
-*.py[cod]
-*.v1
 .pytest_cache/
 .venv/
-node_modules/
-dist/

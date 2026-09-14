@@ -1,17 +1,14 @@
 import json
-from pathlib import Path
 
 from app.cmir.normalizer import normalize_inventory
 from app.translators.aws import translate_cmir_to_aws
 from app.generators.terraform import generate_aws_terraform
+from app.config import AWS_OUTPUT_PATH, INVENTORY_PATH
 
 
 def generate():
 
-    inventory_path = Path("inventory/onprem-example.json")
-    output_path = Path("generated/aws/main.tf")
-
-    with open(inventory_path) as file:
+    with open(INVENTORY_PATH) as file:
         inventory = json.load(file)
 
     cmir = normalize_inventory(inventory)
@@ -20,12 +17,12 @@ def generate():
 
     terraform = generate_aws_terraform(resources)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    AWS_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(output_path, "w") as file:
+    with open(AWS_OUTPUT_PATH, "w") as file:
         file.write(terraform)
 
-    print(f"Terraform generated: {output_path}")
+    print(f"Terraform generated: {AWS_OUTPUT_PATH}")
 
 
 if __name__ == "__main__":

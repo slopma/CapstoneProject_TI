@@ -1,15 +1,31 @@
-def resolve_dependencies(graph, selected_resources):
+import networkx as nx
 
-    resolved = set(selected_resources)
+
+def resolve_dependencies(
+    graph,
+    selected_resources
+):
+
+    resolved = set(
+        selected_resources
+    )
+
 
     for resource in selected_resources:
 
         if resource not in graph:
             continue
 
-        dependencies = graph.successors(resource)
 
-        for dependency in dependencies:
-            resolved.add(dependency)
+        dependencies = nx.descendants(
+            graph,
+            resource
+        )
+
+
+        resolved.update(
+            dependencies
+        )
+
 
     return sorted(resolved)

@@ -159,19 +159,19 @@ function ResourceGlyph({ type, accent }) {
 
 function getNodeDimensions(node) {
   const textLength = `${node.name} ${node.type}`.length;
-  const width = Math.min(320, Math.max(220, 120 + textLength * 5.2));
+  const width = Math.min(260, Math.max(210, 120 + textLength * 4.5));
   const descriptionLines = Math.max(1, Math.ceil((metaDescription(node) || "").length / 32));
   const height = Math.min(240, Math.max(180, 150 + descriptionLines * 16));
 
   if (node.type === "database") {
-    return { width: Math.max(width, 255), height: 235 };
+    return { width: Math.max(width, 220), height: 210 };
   }
 
   if (node.type === "cache") {
-    return { width: Math.max(width, 255), height: 225 };
+    return { width: Math.max(width, 220), height: 195 };
   }
 
-  return { width: Math.max(width, 240), height: 220 };
+  return { width: Math.max(width, 230), height: 220 };
 }
 
 function metaDescription(node) {
@@ -254,9 +254,6 @@ function ResourceNode({ data }) {
 
         <div
           style={{
-            display: "flex",
-            flexDirection: "column",
-            width: "100%",
             height: node.type === "database" ? 88 : node.type === "cache" ? 80 : 82,
             display: "flex",
             alignItems: "center",
@@ -282,8 +279,6 @@ function ResourceNode({ data }) {
             display: "block",
             fontSize: 14,
             marginBottom: 4,
-            overflowWrap: "anywhere",
-            wordBreak: "break-word",
           }}
         >
           {node.name}
@@ -296,7 +291,6 @@ function ResourceNode({ data }) {
             color: "#64748b",
             lineHeight: 1.4,
             whiteSpace: "normal",
-            overflowWrap: "anywhere",
             wordBreak: "break-word",
           }}
         >
