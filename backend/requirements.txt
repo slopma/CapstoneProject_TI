@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pydantic
+networkx
+jinja2
+boto3
+google-cloud-compute
+python-dotenv
+pytest
+httpx
