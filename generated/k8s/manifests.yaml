@@ -1,0 +1,544 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: datacenter-on-premise-principal
+  labels:
+    app: datacenter-on-premise-principal
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: datacenter-on-premise-principal
+  template:
+    metadata:
+      labels:
+        app: datacenter-on-premise-principal
+    spec:
+      containers:
+      - name: datacenter-on-premise-principal
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: datacenter-on-premise-principal-svc
+spec:
+  selector:
+    app: datacenter-on-premise-principal
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rack-a1---infraestructura-física
+  labels:
+    app: rack-a1---infraestructura-física
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rack-a1---infraestructura-física
+  template:
+    metadata:
+      labels:
+        app: rack-a1---infraestructura-física
+    spec:
+      containers:
+      - name: rack-a1---infraestructura-física
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rack-a1---infraestructura-física-svc
+spec:
+  selector:
+    app: rack-a1---infraestructura-física
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: red-vlan-producción-(192.168.10.0/24)
+  labels:
+    app: red-vlan-producción-(192.168.10.0/24)
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: red-vlan-producción-(192.168.10.0/24)
+  template:
+    metadata:
+      labels:
+        app: red-vlan-producción-(192.168.10.0/24)
+    spec:
+      containers:
+      - name: red-vlan-producción-(192.168.10.0/24)
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: red-vlan-producción-(192.168.10.0/24)-svc
+spec:
+  selector:
+    app: red-vlan-producción-(192.168.10.0/24)
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: subred-interna-servidores-(192.168.10.100/28)
+  labels:
+    app: subred-interna-servidores-(192.168.10.100/28)
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: subred-interna-servidores-(192.168.10.100/28)
+  template:
+    metadata:
+      labels:
+        app: subred-interna-servidores-(192.168.10.100/28)
+    spec:
+      containers:
+      - name: subred-interna-servidores-(192.168.10.100/28)
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: subred-interna-servidores-(192.168.10.100/28)-svc
+spec:
+  selector:
+    app: subred-interna-servidores-(192.168.10.100/28)
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: firewall-perimetral-&-dmz
+  labels:
+    app: firewall-perimetral-&-dmz
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: firewall-perimetral-&-dmz
+  template:
+    metadata:
+      labels:
+        app: firewall-perimetral-&-dmz
+    spec:
+      containers:
+      - name: firewall-perimetral-&-dmz
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: firewall-perimetral-&-dmz-svc
+spec:
+  selector:
+    app: firewall-perimetral-&-dmz
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-virtualización-vmware-esxi
+  labels:
+    app: cluster-virtualización-vmware-esxi
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cluster-virtualización-vmware-esxi
+  template:
+    metadata:
+      labels:
+        app: cluster-virtualización-vmware-esxi
+    spec:
+      containers:
+      - name: cluster-virtualización-vmware-esxi
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cluster-virtualización-vmware-esxi-svc
+spec:
+  selector:
+    app: cluster-virtualización-vmware-esxi
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pool-de-recursos:-core-applications
+  labels:
+    app: pool-de-recursos:-core-applications
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pool-de-recursos:-core-applications
+  template:
+    metadata:
+      labels:
+        app: pool-de-recursos:-core-applications
+    spec:
+      containers:
+      - name: pool-de-recursos:-core-applications
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pool-de-recursos:-core-applications-svc
+spec:
+  selector:
+    app: pool-de-recursos:-core-applications
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pool-de-recursos:-data-services
+  labels:
+    app: pool-de-recursos:-data-services
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pool-de-recursos:-data-services
+  template:
+    metadata:
+      labels:
+        app: pool-de-recursos:-data-services
+    spec:
+      containers:
+      - name: pool-de-recursos:-data-services
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pool-de-recursos:-data-services-svc
+spec:
+  selector:
+    app: pool-de-recursos:-data-services
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sistema-erp-&-servicios-centrales
+  labels:
+    app: sistema-erp-&-servicios-centrales
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sistema-erp-&-servicios-centrales
+  template:
+    metadata:
+      labels:
+        app: sistema-erp-&-servicios-centrales
+    spec:
+      containers:
+      - name: sistema-erp-&-servicios-centrales
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sistema-erp-&-servicios-centrales-svc
+spec:
+  selector:
+    app: sistema-erp-&-servicios-centrales
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vm-servidor-backend-api-(ubuntu-linux)
+  labels:
+    app: vm-servidor-backend-api-(ubuntu-linux)
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vm-servidor-backend-api-(ubuntu-linux)
+  template:
+    metadata:
+      labels:
+        app: vm-servidor-backend-api-(ubuntu-linux)
+    spec:
+      containers:
+      - name: vm-servidor-backend-api-(ubuntu-linux)
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vm-servidor-backend-api-(ubuntu-linux)-svc
+spec:
+  selector:
+    app: vm-servidor-backend-api-(ubuntu-linux)
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: servicio-autenticación-jwt
+  labels:
+    app: servicio-autenticación-jwt
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: servicio-autenticación-jwt
+  template:
+    metadata:
+      labels:
+        app: servicio-autenticación-jwt
+    spec:
+      containers:
+      - name: servicio-autenticación-jwt
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: servicio-autenticación-jwt-svc
+spec:
+  selector:
+    app: servicio-autenticación-jwt
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vm-procesamiento-batch
+  labels:
+    app: vm-procesamiento-batch
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vm-procesamiento-batch
+  template:
+    metadata:
+      labels:
+        app: vm-procesamiento-batch
+    spec:
+      containers:
+      - name: vm-procesamiento-batch
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vm-procesamiento-batch-svc
+spec:
+  selector:
+    app: vm-procesamiento-batch
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: servidor-base-de-datos-postgresql
+  labels:
+    app: servidor-base-de-datos-postgresql
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: servidor-base-de-datos-postgresql
+  template:
+    metadata:
+      labels:
+        app: servidor-base-de-datos-postgresql
+    spec:
+      containers:
+      - name: servidor-base-de-datos-postgresql
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: servidor-base-de-datos-postgresql-svc
+spec:
+  selector:
+    app: servidor-base-de-datos-postgresql
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: servidor-caché-redis-on-prem
+  labels:
+    app: servidor-caché-redis-on-prem
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: servidor-caché-redis-on-prem
+  template:
+    metadata:
+      labels:
+        app: servidor-caché-redis-on-prem
+    spec:
+      containers:
+      - name: servidor-caché-redis-on-prem
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: servidor-caché-redis-on-prem-svc
+spec:
+  selector:
+    app: servidor-caché-redis-on-prem
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: almacenamiento-san/nfs-compartido
+  labels:
+    app: almacenamiento-san/nfs-compartido
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: almacenamiento-san/nfs-compartido
+  template:
+    metadata:
+      labels:
+        app: almacenamiento-san/nfs-compartido
+    spec:
+      containers:
+      - name: almacenamiento-san/nfs-compartido
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: almacenamiento-san/nfs-compartido-svc
+spec:
+  selector:
+    app: almacenamiento-san/nfs-compartido
+  ports:
+  - port: 80
+    targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: message-broker-rabbitmq
+  labels:
+    app: message-broker-rabbitmq
+    managed-by: cloudmove
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: message-broker-rabbitmq
+  template:
+    metadata:
+      labels:
+        app: message-broker-rabbitmq
+    spec:
+      containers:
+      - name: message-broker-rabbitmq
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: message-broker-rabbitmq-svc
+spec:
+  selector:
+    app: message-broker-rabbitmq
+  ports:
+  - port: 80
+    targetPort: 80
+---

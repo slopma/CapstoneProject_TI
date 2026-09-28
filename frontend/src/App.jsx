@@ -1,21 +1,26 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
-import ArchitectureGraph from "./components/ArchitectureGraph";
-import BreadcrumbNav from "./components/BreadcrumbNav";
-import DetailPanel from "./components/DetailPanel";
-import MigrationPreviewModal from "./components/MigrationPreviewModal";
-import "./App.css";
+import AppShell from "./components/layout/AppShell";
+import Breadcrumbs from "./components/layout/Breadcrumbs";
+import ArchitectureCanvas from "./components/architecture/ArchitectureCanvas";
+import CanvasToolbar from "./components/architecture/CanvasToolbar";
+import ResourceInspector from "./components/inspector/ResourceInspector";
+import MigrationPreviewModal from "./components/migration/MigrationPreviewModal";
+import IaCViewer from "./components/migration/IaCViewer";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 function App() {
+  const [activeTab, setActiveTab] = useState("architecture");
+
   const [allNodes, setAllNodes] = useState([]);
   const [allEdges, setAllEdges] = useState([]);
-  const [architectureMeta, setArchitectureMeta] = useState({ name: "On-Premise Datacenter", provider: "on-premise" });
+  const [architectureMeta, setArchitectureMeta] = useState({ name: "On-Premise Enterprise Architecture", provider: "on-premise" });
 
   const [selectedNodes, setSelectedNodes] = useState([]);
   const [selectedNodeObj, setSelectedNodeObj] = useState(null);
-  const [expandedNodeIds, setExpandedNodeIds] = useState(["onprem-dc", "rack-infra"]);
+  const [expandedNodeIds, setExpandedNodeIds] = useState([]);
   const [activeLevel, setActiveLevel] = useState(null);
+  const [focusNodeId, setFocusNodeId] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [targetProvider, setTargetProvider] = useState("aws");
 
@@ -26,7 +31,7 @@ function App() {
   const [generationResult, setGenerationResult] = useState(null);
   const [showMigrationModal, setShowMigrationModal] = useState(false);
 
-  // Fetch Full Architecture from Backend
+  // Fetch Full Architecture from Backend API
   const fetchArchitecture = useCallback(async () => {
     try {
       const response = await fetch(`${API_URL}/api/v1/architecture/graph`);
@@ -46,13 +51,13 @@ function App() {
         provider: data.provider || "on-premise",
       });
 
-      // Expand root nodes by default
+      // Expand root level nodes initially
       const rootIds = (data.nodes || [])
         .filter((n) => !n.parent_id || n.level <= 2)
         .map((n) => n.id);
       setExpandedNodeIds((prev) => (prev.length === 0 ? rootIds : prev));
     } catch (err) {
-      setMessage("No se pudo conectar con CloudMove Backend API.");
+      setMessage("Unable to connect to CloudMove API.");
     }
   }, []);
 
@@ -60,10 +65,10 @@ function App() {
     fetchArchitecture();
   }, [fetchArchitecture]);
 
-  // Progressive Expansion Logic: Calculate visible nodes based on expanded parent chain
+  // Progressive Expansion Logic
   const visibleNodes = useMemo(() => {
     const isAncestorExpanded = (node) => {
-      if (!node.parent_id) return true; // Root nodes are always visible
+      if (!node.parent_id) return true;
       if (!expandedNodeIds.includes(node.parent_id)) return false;
       const parentNode = allNodes.find((n) => n.id === node.parent_id);
       return parentNode ? isAncestorExpanded(parentNode) : true;
@@ -73,6 +78,18 @@ function App() {
 
     if (activeLevel !== null) {
       filtered = filtered.filter((n) => (n.level ?? 8) === activeLevel);
+    }
+
+    if (focusNodeId) {
+      const focusRelated = new Set([focusNodeId]);
+      allNodes.forEach((n) => {
+        if (n.parent_id === focusNodeId || n.id === focusNodeId) focusRelated.add(n.id);
+      });
+      allEdges.forEach((e) => {
+        if (e.source === focusNodeId) focusRelated.add(e.target);
+        if (e.target === focusNodeId) focusRelated.add(e.source);
+      });
+      filtered = filtered.filter((n) => focusRelated.has(n.id));
     }
 
     if (searchQuery.trim()) {
@@ -86,7 +103,7 @@ function App() {
     }
 
     return filtered;
-  }, [allNodes, expandedNodeIds, activeLevel, searchQuery]);
+  }, [allNodes, allEdges, expandedNodeIds, activeLevel, focusNodeId, searchQuery]);
 
   const visibleNodeIds = useMemo(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
 
@@ -95,13 +112,9 @@ function App() {
   }, [allEdges, visibleNodeIds]);
 
   const handleToggleExpand = (nodeId) => {
-    setExpandedNodeIds((prev) => {
-      if (prev.includes(nodeId)) {
-        return prev.filter((id) => id !== nodeId);
-      } else {
-        return [...prev, nodeId];
-      }
-    });
+    setExpandedNodeIds((prev) =>
+      prev.includes(nodeId) ? prev.filter((id) => id !== nodeId) : [...prev, nodeId]
+    );
   };
 
   const handleExpandAll = () => {
@@ -113,20 +126,16 @@ function App() {
     setExpandedNodeIds(rootIds);
   };
 
-  const toggleResource = (nodeId) => {
+  const toggleResourceSelection = (nodeId) => {
     setSelectedNodes((current) =>
       current.includes(nodeId) ? current.filter((id) => id !== nodeId) : [...current, nodeId]
     );
-
     const targetObj = allNodes.find((n) => n.id === nodeId);
     setSelectedNodeObj(targetObj || null);
   };
 
   const resolveDependencies = async () => {
-    if (selectedNodes.length === 0) {
-      setMessage("Selecciona al menos un componente para la migración.");
-      return;
-    }
+    if (selectedNodes.length === 0) return;
 
     setLoading(true);
     setMessage("");
@@ -139,13 +148,12 @@ function App() {
       });
 
       const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || "Error resolviendo dependencias.");
+      if (!response.ok) throw new Error(data.detail || "Error resolving dependencies.");
 
       setDependencies(data);
       setShowMigrationModal(true);
-      setMessage("Subgrafo migrable y dependencias calculadas.");
     } catch (error) {
-      setMessage(error.message || "Error conectando con el backend.");
+      setMessage(error.message || "Connection error.");
     } finally {
       setLoading(false);
     }
@@ -169,19 +177,19 @@ function App() {
 
       const data = await response.json();
       if (!response.ok || data.error) {
-        throw new Error(data.error?.message || data.detail || "No se pudo generar el código IaC.");
+        throw new Error(data.error?.message || data.detail || "IaC generation failed.");
       }
 
       setGenerationResult(data);
-      setMessage(`Infraestructura (${targetProvider.toUpperCase()}) generada con éxito.`);
+      setMessage(`Infrastructure code (${targetProvider.toUpperCase()}) generated successfully.`);
     } catch (error) {
-      setMessage(error.message || "Error en la generación IaC.");
+      setMessage(error.message || "Generation error.");
     } finally {
       setGenerating(false);
     }
   };
 
-  // Compute breadcrumbs path for currently selected node
+  // Compute Breadcrumb Trail for selected node
   const breadcrumbs = useMemo(() => {
     if (!selectedNodeObj) return [];
     const crumbs = [];
@@ -195,113 +203,109 @@ function App() {
     return crumbs;
   }, [selectedNodeObj, allNodes]);
 
+  const handleBack = () => {
+    if (selectedNodeObj && selectedNodeObj.parent_id) {
+      const parentObj = allNodes.find((n) => n.id === selectedNodeObj.parent_id);
+      setSelectedNodeObj(parentObj || null);
+    } else {
+      setSelectedNodeObj(null);
+    }
+  };
+
   return (
-    <div className="app-container">
-      <header className="header-bar">
-        <div className="header-brand">
-          <span className="brand-logo">🏢</span>
-          <div>
-            <h1>CloudMove · On-Premise Migration Platform</h1>
-            <p>Descubrimiento On-Premise · Despliegue Jerárquico Progresivo · Generador IaC Multicloud</p>
-          </div>
-        </div>
+    <AppShell
+      activeTab={activeTab}
+      onSelectTab={setActiveTab}
+      architectureName={architectureMeta.name}
+      environment={architectureMeta.provider === "on-premise" ? "On-Premise Enterprise" : "Multi-Cloud Scope"}
+      searchQuery={searchQuery}
+      onSearchChange={setSearchQuery}
+      selectedCount={selectedNodes.length}
+      onPrepareMigration={resolveDependencies}
+    >
+      {activeTab === "architecture" || activeTab === "discovery" ? (
+        <>
+          <CanvasToolbar
+            activeLevel={activeLevel}
+            onSelectLevel={setActiveLevel}
+            onExpandAll={handleExpandAll}
+            onCollapseAll={handleCollapseAll}
+            focusNodeId={focusNodeId}
+            onClearFocus={() => setFocusNodeId(null)}
+            selectedCount={selectedNodes.length}
+          />
 
-        <div className="header-actions">
-          <div className="search-box">
-            <input
-              type="text"
-              placeholder="Buscar recurso, VM, DB, VLAN..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
-          <button
-            type="button"
-            className="primary-btn-action"
-            onClick={resolveDependencies}
-            disabled={selectedNodes.length === 0 || loading}
-          >
-            {loading ? "Calculando..." : `Preparar Migración (${selectedNodes.length})`}
-          </button>
-        </div>
-      </header>
-
-      <div className="main-content">
-        <section className="controls-strip">
-          <div className="progressive-expansion-controls">
-            <span className="expansion-label">Despliegue Progresivo:</span>
-            <button type="button" className="action-btn-sm" onClick={handleExpandAll}>
-              ▶ Expandir Todo
-            </button>
-            <button type="button" className="action-btn-sm outline" onClick={handleCollapseAll}>
-              ▼ Contraer a Raíz
-            </button>
-          </div>
-
-          <div className="level-filter-bar">
-            <span className="filter-label">Nivel:</span>
-            <button
-              type="button"
-              className={`level-btn ${activeLevel === null ? "active" : ""}`}
-              onClick={() => setActiveLevel(null)}
-            >
-              Todos (L1-L8)
-            </button>
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((lvl) => (
-              <button
-                key={lvl}
-                type="button"
-                className={`level-btn ${activeLevel === lvl ? "active" : ""}`}
-                onClick={() => setActiveLevel(lvl)}
-              >
-                L{lvl}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        {breadcrumbs.length > 0 && (
-          <div className="breadcrumb-wrapper">
-            <BreadcrumbNav
+          {breadcrumbs.length > 0 && (
+            <Breadcrumbs
               breadcrumbs={breadcrumbs}
               onNavigate={(nodeId) => {
-                const n = allNodes.find((item) => item.id === nodeId);
-                setSelectedNodeObj(n || null);
+                const item = allNodes.find((n) => n.id === nodeId);
+                if (item) setSelectedNodeObj(item);
               }}
               onReset={() => setSelectedNodeObj(null)}
+              onBack={handleBack}
             />
-          </div>
-        )}
+          )}
 
-        {message && <div className="app-message-banner">{message}</div>}
+          {message && <div className="app-message-banner">{message}</div>}
 
-        <section className="graph-workspace">
-          <ArchitectureGraph
+          <ArchitectureCanvas
             nodes={visibleNodes}
             edges={visibleEdges}
             selectedNodes={selectedNodes}
             expandedNodeIds={expandedNodeIds}
-            onNodeClick={toggleResource}
+            onNodeClick={toggleResourceSelection}
             onToggleExpand={handleToggleExpand}
+            zoomTargetId={selectedNodeObj?.id}
           />
-        </section>
 
-        {selectedNodeObj && (
-          <DetailPanel
-            node={selectedNodeObj}
-            allNodes={allNodes}
-            edges={allEdges}
-            onClose={() => setSelectedNodeObj(null)}
-            onSelectNode={(nodeId) => {
-              toggleResource(nodeId);
-              if (!expandedNodeIds.includes(nodeId)) {
-                handleToggleExpand(nodeId);
-              }
-            }}
-            targetProvider={targetProvider}
-          />
-        )}
-      </div>
+          {selectedNodeObj && (
+            <ResourceInspector
+              node={selectedNodeObj}
+              allNodes={allNodes}
+              edges={allEdges}
+              onClose={() => setSelectedNodeObj(null)}
+              onSelectNode={(nodeId) => {
+                toggleResourceSelection(nodeId);
+                setFocusNodeId(nodeId);
+              }}
+              targetProvider={targetProvider}
+              onToggleExpand={handleToggleExpand}
+              isExpanded={expandedNodeIds.includes(selectedNodeObj.id)}
+            />
+          )}
+        </>
+      ) : activeTab === "dependencies" ? (
+        <div className="tab-pane-view">
+          <h3>Dependency Resolution Engine</h3>
+          <p className="sub-text">Select components on the Architecture canvas to analyze direct, transitive and shared dependencies.</p>
+          {selectedNodes.length === 0 ? (
+            <p className="empty-text">No resources currently selected for dependency resolution.</p>
+          ) : (
+            <button type="button" className="tech-btn primary" onClick={resolveDependencies}>
+              Calculate Migration Scope & Dependencies ({selectedNodes.length} selected)
+            </button>
+          )}
+        </div>
+      ) : activeTab === "iac" ? (
+        <div className="tab-pane-view">
+          <h3>Generated Infrastructure as Code (IaC)</h3>
+          {generationResult ? (
+            <IaCViewer
+              code={generationResult.iac_code || generationResult.terraform}
+              language={targetProvider === "kubernetes" ? "yaml" : "hcl"}
+              filename={targetProvider === "kubernetes" ? "manifests.yaml" : "main.tf"}
+            />
+          ) : (
+            <p className="empty-text">No IaC generated yet. Select resources and run 'Prepare Migration'.</p>
+          )}
+        </div>
+      ) : (
+        <div className="tab-pane-view">
+          <h3>{activeTab.toUpperCase()} Module</h3>
+          <p className="sub-text">Module '{activeTab}' active. Connected to CMIR Domain Engine v2.0.</p>
+        </div>
+      )}
 
       {showMigrationModal && (
         <MigrationPreviewModal
@@ -315,7 +319,7 @@ function App() {
           generationResult={generationResult}
         />
       )}
-    </div>
+    </AppShell>
   );
 }
 

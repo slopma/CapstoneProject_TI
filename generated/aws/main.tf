@@ -154,7 +154,77 @@ resource "aws_db_subnet_group" "db_subnets" {
 # ------------------------------------------------------------
 # Migrated Target Resources (Dynamic Specs)
 # ------------------------------------------------------------
+# Resource: Datacenter On-Premise Principal (onprem-dc)
+resource "aws_instance" "onprem_dc" {
+  ami                         = "ami-0c55b159cbfafe1f0"
+  instance_type               = "t3.micro"
+  subnet_id                   = aws_subnet.public_subnet.id
+  vpc_security_group_ids     = [aws_security_group.app_sg.id]
+  associate_public_ip_address = true
+  tags = {
+    Name        = "datacenter-on-premise-principal"
+    CMIR_ID     = "onprem-dc"
+    ManagedBy   = "CloudMove"
+  }
+}
+
+# Resource: Rack A1 - Infraestructura Física (rack-infra)
+resource "aws_instance" "rack_infra" {
+  ami                         = "ami-0c55b159cbfafe1f0"
+  instance_type               = "t3.micro"
+  subnet_id                   = aws_subnet.public_subnet.id
+  vpc_security_group_ids     = [aws_security_group.app_sg.id]
+  associate_public_ip_address = true
+  tags = {
+    Name        = "rack-a1---infraestructura-física"
+    CMIR_ID     = "rack-infra"
+    ManagedBy   = "CloudMove"
+  }
+}
+
+# Resource: Red VLAN Producción (192.168.10.0/24) (vlan-prod)
+# Resource: Subred Interna Servidores (192.168.10.100/28) (subnet-internal)
 # Resource: Firewall Perimetral & DMZ (firewall-dmz)
+# Resource: Cluster Virtualización VMware ESXi (vmware-cluster)
+resource "aws_eks_cluster" "vmware_cluster" {
+  name     = "cluster-virtualización-vmware-esxi"
+  role_arn = "arn:aws:iam::123456789012:role/eks-cluster-role"
+  vpc_config {
+    subnet_ids = [aws_subnet.private_subnet_a.id, aws_subnet.private_subnet_b.id]
+  }
+  tags = {
+    Name        = "cluster-virtualización-vmware-esxi"
+    CMIR_ID     = "vmware-cluster"
+    ManagedBy   = "CloudMove"
+  }
+}
+
+# Resource: Pool de Recursos: Core Applications (ns-core-apps)
+resource "aws_instance" "ns_core_apps" {
+  ami           = "ami-0c55b159cbfafe1f0"
+  instance_type = "t3.micro"
+  subnet_id     = aws_subnet.public_subnet.id
+  tags = {
+    Name        = "pool-de-recursos:-core-applications"
+    CMIR_Type   = "namespace"
+    CMIR_ID     = "ns-core-apps"
+    ManagedBy   = "CloudMove"
+  }
+}
+
+# Resource: Pool de Recursos: Data Services (ns-data-services)
+resource "aws_instance" "ns_data_services" {
+  ami           = "ami-0c55b159cbfafe1f0"
+  instance_type = "t3.micro"
+  subnet_id     = aws_subnet.public_subnet.id
+  tags = {
+    Name        = "pool-de-recursos:-data-services"
+    CMIR_Type   = "namespace"
+    CMIR_ID     = "ns-data-services"
+    ManagedBy   = "CloudMove"
+  }
+}
+
 # Resource: Sistema ERP & Servicios Centrales (erp-system)
 resource "aws_instance" "erp_system" {
   ami                         = "ami-0c55b159cbfafe1f0"
