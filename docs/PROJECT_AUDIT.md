@@ -225,15 +225,15 @@ flowchart TB
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **Frontend Shell** | Interfaz editorial limpia (Pimeweb), navegación, breadcrumbs y paneles. | IMPLEMENTADO | `App.jsx`, `AppShell.jsx`, `Header.jsx`, `Sidebar.jsx` | Estado de React, llamadas API | Renderizado DOM |
 | **Architecture Canvas** | Visualización interactiva con React Flow y auto-layout Dagre de arriba a abajo. | IMPLEMENTADO | `ArchitectureCanvas.jsx`, `ArchitectureNode.jsx`, `graphLayout.js` | Nodos y bordes del grafo | Eventos de selección y expansión |
-| **Resource Inspector** | Drawer lateral para consultar metadatos, niveles y dependencias del nodo activo. | ✅ IMPLEMENTADO | `ResourceInspector.jsx`, `DependenciesPanel.jsx` | Objeto de nodo seleccionado | UI interactiva y acciones |
-| **FastAPI Server** | Exposición de la API REST, configuración CORS, middleware de correlation-id. | ✅ IMPLEMENTADO | `backend/app/main.py`, `config.py` | Solicitudes HTTP | Respuestas JSON / Archivos |
-| **CMIR Schema** | Definición de Pydantic v2 para recursos, relaciones, proveedor y niveles. | ✅ IMPLEMENTADO | `backend/app/cmir/models.py`, `normalizer.py`, `validator.py` | JSON de inventario | Objeto `CMIR` tipado |
-| **Graph Builder** | Construcción de un objeto `networkx.DiGraph` con propiedades jerárquicas (0-8). | ✅ IMPLEMENTADO | `backend/app/graph/builder.py`, `hierarchy.py` | Objeto `CMIR` | Instancia `DiGraph` |
-| **Dependency Engine** | Recorrido del grafo para identificar dependencias requeridas (directas/transitivas) y compartidas. | ✅ IMPLEMENTADO | `backend/app/dependencies/resolver.py`, `validator.py` | `DiGraph`, lista de IDs | Objeto con desglose de dependencias |
-| **Target Adapters** | Mapeo de recursos neutrales a tipos específicos de AWS, Azure y Kubernetes. | ⚠️ PARCIAL | `backend/app/adapters/aws_adapter.py`, `azure_adapter.py`, `k8s_adapter.py` | Subgrafo CMIR | Recursos traducidos |
-| **IaC Generator** | Generación de bloques HCL para Terraform (AWS/Azure) y YAML para Kubernetes. | ⚠️ PARCIAL | `backend/app/generators/terraform.py` | Lista de recursos traducidos | Código HCL / YAML |
-| **Discovery Engine** | Escaneo automático de nubes (AWS/Azure APIs) y servidores localmente. | ❌ FALTANTE | Inexistente en `backend/app/` | Credenciales cloud | Inventario JSON dinámico |
-| **Puppet Engine** | Generación de manifiestos/recetas Puppet y monitoreo de deriva post-despliegue. | ❌ FALTANTE | Inexistente en `backend/app/` | Subgrafo CMIR | Recetas `.pp`, alertas de deriva |
+| **Resource Inspector** | Drawer lateral para consultar metadatos, niveles y dependencias del nodo activo. | IMPLEMENTADO | `ResourceInspector.jsx`, `DependenciesPanel.jsx` | Objeto de nodo seleccionado | UI interactiva y acciones |
+| **FastAPI Server** | Exposición de la API REST, configuración CORS, middleware de correlation-id. |  IMPLEMENTADO | `backend/app/main.py`, `config.py` | Solicitudes HTTP | Respuestas JSON / Archivos |
+| **CMIR Schema** | Definición de Pydantic v2 para recursos, relaciones, proveedor y niveles. |  IMPLEMENTADO | `backend/app/cmir/models.py`, `normalizer.py`, `validator.py` | JSON de inventario | Objeto `CMIR` tipado |
+| **Graph Builder** | Construcción de un objeto `networkx.DiGraph` con propiedades jerárquicas (0-8). | IMPLEMENTADO | `backend/app/graph/builder.py`, `hierarchy.py` | Objeto `CMIR` | Instancia `DiGraph` |
+| **Dependency Engine** | Recorrido del grafo para identificar dependencias requeridas (directas/transitivas) y compartidas. |  IMPLEMENTADO | `backend/app/dependencies/resolver.py`, `validator.py` | `DiGraph`, lista de IDs | Objeto con desglose de dependencias |
+| **Target Adapters** | Mapeo de recursos neutrales a tipos específicos de AWS, Azure y Kubernetes. |  PARCIAL | `backend/app/adapters/aws_adapter.py`, `azure_adapter.py`, `k8s_adapter.py` | Subgrafo CMIR | Recursos traducidos |
+| **IaC Generator** | Generación de bloques HCL para Terraform (AWS/Azure) y YAML para Kubernetes. |  PARCIAL | `backend/app/generators/terraform.py` | Lista de recursos traducidos | Código HCL / YAML |
+| **Discovery Engine** | Escaneo automático de nubes (AWS/Azure APIs) y servidores localmente. |  FALTANTE | Inexistente en `backend/app/` | Credenciales cloud | Inventario JSON dinámico |
+| **Puppet Engine** | Generación de manifiestos/recetas Puppet y monitoreo de deriva post-despliegue. |  FALTANTE | Inexistente en `backend/app/` | Subgrafo CMIR | Recetas `.pp`, alertas de deriva |
 
 ---
 
@@ -307,12 +307,12 @@ El modelo CMIR está implementado en `backend/app/cmir/models.py` utilizando Pyd
 
 | Capacidad | Estado | Ubicación | Evidencia |
 | :--- | :---: | :--- | :--- |
-| Modelo de recursos | ✅ | `backend/app/cmir/models.py:L18` | Clase `Resource` con campos de tipo, nivel y proveedor. |
-| Relaciones explícitas | ✅ | `backend/app/cmir/models.py:L31` | Clase `Relationship` con tipos semánticos (`depends_on`, `contains`). |
-| Modelo Provider-neutral | ✅ | `backend/app/cmir/normalizer.py` | Mapea tipos heterogéneos a taxonomía neutra. |
-| Serialización JSON/YAML | ✅ | `backend/app/cmir/models.py` | Métodos nativos `.model_dump()` y `.model_dump_json()`. |
-| Validación de Esquema | ✅ | `backend/app/cmir/validator.py` | Reglas de validación contra referencias huérfanas y duplicados. |
-| Versionado del Esquema | ⚠️ | `backend/app/cmir/models.py:L40` | Campo `version: "2.0"` presente, pero sin migración de esquemas previas. |
+| Modelo de recursos |  | `backend/app/cmir/models.py:L18` | Clase `Resource` con campos de tipo, nivel y proveedor. |
+| Relaciones explícitas |  | `backend/app/cmir/models.py:L31` | Clase `Relationship` con tipos semánticos (`depends_on`, `contains`). |
+| Modelo Provider-neutral |  | `backend/app/cmir/normalizer.py` | Mapea tipos heterogéneos a taxonomía neutra. |
+| Serialización JSON/YAML |  | `backend/app/cmir/models.py` | Métodos nativos `.model_dump()` y `.model_dump_json()`. |
+| Validación de Esquema |  | `backend/app/cmir/validator.py` | Reglas de validación contra referencias huérfanas y duplicados. |
+| Versionado del Esquema |  | `backend/app/cmir/models.py:L40` | Campo `version: "2.0"` presente, pero sin migración de esquemas previas. |
 
 ---
 
@@ -320,10 +320,10 @@ El modelo CMIR está implementado en `backend/app/cmir/models.py` utilizando Pyd
 
 | Aspecto | Estado Auditoría |
 | :--- | :--- |
-| **Existencia en Código** | ❌ **FALTANTE / NO IMPLEMENTADO** |
+| **Existencia en Código** |  **FALTANTE / NO IMPLEMENTADO** |
 | **Comportamiento Actual** | El backend lee archivos de inventario JSON estáticos desde `inventory/` (ej. `onprem-enterprise-example.json`). |
-| **Escaneo Cloud (AWS / Azure)** | ❌ No existen llamadas a SDKs oficiales (`boto3`, `azure-mgmt-*`). |
-| **Escaneo On-Premise Agentless** | ❌ No existen conectores SSH, SNMP ni agentes para Ubuntu/PostgreSQL. |
+| **Escaneo Cloud (AWS / Azure)** |  No existen llamadas a SDKs oficiales (`boto3`, `azure-mgmt-*`). |
+| **Escaneo On-Premise Agentless** |  No existen conectores SSH, SNMP ni agentes para Ubuntu/PostgreSQL. |
 | **Pruebas y Evidencia** | No existen pruebas de integración con servicios externos de descubrimiento. |
 
 ---
@@ -384,10 +384,10 @@ El flujo de preparación de migración se orquesta a través del endpoint `POST 
 
 | Proveedor Destino | Adaptador | Estado | Capacidades Actuales |
 | :--- | :--- | :---: | :--- |
-| **AWS** | `AWSAdapter` (`backend/app/adapters/aws_adapter.py`) | ✅ | Mapea recursos a `aws_vpc`, `aws_subnet`, `aws_instance`, `aws_s3_bucket`. |
-| **Azure** | `AzureAdapter` (`backend/app/adapters/azure_adapter.py`) | ✅ | Mapea recursos a `azurerm_resource_group`, `azurerm_virtual_network`, `azurerm_linux_virtual_machine`. |
-| **Kubernetes** | `KubernetesAdapter` (`backend/app/adapters/k8s_adapter.py`) | ✅ | Mapea cargas de trabajo a `Deployment`, `Service`, `PersistentVolumeClaim`. |
-| **EKS ↔ AKS Specifics** | Mapeo especializado (IRSA↔Workload Identity, ALB↔AGIC) | ⚠️ **PARCIAL** | Mapeos estructurales básicos presentes; falta transformación avanzada de manifiestos anotados. |
+| **AWS** | `AWSAdapter` (`backend/app/adapters/aws_adapter.py`) |  | Mapea recursos a `aws_vpc`, `aws_subnet`, `aws_instance`, `aws_s3_bucket`. |
+| **Azure** | `AzureAdapter` (`backend/app/adapters/azure_adapter.py`) |  | Mapea recursos a `azurerm_resource_group`, `azurerm_virtual_network`, `azurerm_linux_virtual_machine`. |
+| **Kubernetes** | `KubernetesAdapter` (`backend/app/adapters/k8s_adapter.py`) |  | Mapea cargas de trabajo a `Deployment`, `Service`, `PersistentVolumeClaim`. |
+| **EKS ↔ AKS Specifics** | Mapeo especializado (IRSA↔Workload Identity, ALB↔AGIC) |  **PARCIAL** | Mapeos estructurales básicos presentes; falta transformación avanzada de manifiestos anotados. |
 
 ---
 
@@ -405,7 +405,7 @@ El generador de Terraform reside en `backend/app/generators/terraform.py`.
 
 | Aspecto | Estado Auditoría |
 | :--- | :--- |
-| **Existencia en Código** | ❌ **FALTANTE / NO IMPLEMENTADO** |
+| **Existencia en Código** |  **FALTANTE / NO IMPLEMENTADO** |
 | **Recetas / Manifiestos `.pp`** | No existe ningún generador de código Puppet en `backend/app/generators/`. |
 | **Control de Deriva (Drift Detection)** | No existen agentes, controladores ni lógica para verificar deriva de configuración en $\le 15$ minutos (RQ-03). |
 
@@ -415,20 +415,20 @@ El generador de Terraform reside en `backend/app/generators/terraform.py`.
 
 | Endpoint | Método | Función | Entrada (Body / Query) | Salida | Estado |
 | :--- | :---: | :--- | :--- | :--- | :---: |
-| `/` | `GET` | Información del servicio y versión. | Ninguna | JSON metadatos | ✅ |
-| `/health` | `GET` | Estado de salud y verificación de inventario. | Ninguna | JSON estado | ✅ |
-| `/inventory` | `GET` | (Legacy) Obtiene inventario sin normalizar. | Ninguna | JSON inventario | ✅ |
-| `/cmir` | `GET` | (Legacy) Obtiene modelo CMIR normalizado. | Ninguna | JSON CMIR | ✅ |
-| `/graph` | `GET` | (Legacy) Obtiene nodos y bordes para el grafo. | Ninguna | JSON nodes/edges | ✅ |
-| `/dependencies` | `GET/POST` | (Legacy) Resuelve dependencias de selección. | `resources: []` | JSON dependencias | ✅ |
-| `/generate` | `POST` | (Legacy) Genera Terraform para AWS. | `resources: []` | JSON + código HCL | ✅ |
-| `/api/v1/architecture/cmir` | `GET` | Obtiene el modelo CMIR normalizado v2. | Ninguna | JSON CMIR v2 | ✅ |
-| `/api/v1/architecture/graph` | `GET` | Vista del grafo con filtros jerárquicos y foco. | `parent_id`, `level`, `focus`, `provider` | JSON filtrado + breadcrumbs | ✅ |
-| `/api/v1/architecture/breadcrumbs/{id}` | `GET` | Obtiene la ruta de breadcrumbs para un nodo. | `node_id` (path) | JSON breadcrumbs | ✅ |
-| `/api/v1/architecture/children/{id}` | `GET` | Obtiene los hijos inmediatos de un nodo. | `node_id` (path) | JSON children | ✅ |
-| `/api/v1/migration/dependencies` | `POST` | Analiza alcance y dependencias de migración. | `resources: []` | JSON desglose dependencias | ✅ |
-| `/api/v1/migration/validate` | `POST` | Valida viabilidad de subgrafo para migrar. | `resources: []`, `target_provider` | JSON reporte validación | ✅ |
-| `/api/v1/migration/generate` | `POST` | Genera IaC (AWS/Azure/K8s) para el subgrafo. | `resources: []`, `target_provider` | JSON + código IaC | ✅ |
+| `/` | `GET` | Información del servicio y versión. | Ninguna | JSON metadatos |  |
+| `/health` | `GET` | Estado de salud y verificación de inventario. | Ninguna | JSON estado |  |
+| `/inventory` | `GET` | (Legacy) Obtiene inventario sin normalizar. | Ninguna | JSON inventario |  |
+| `/cmir` | `GET` | (Legacy) Obtiene modelo CMIR normalizado. | Ninguna | JSON CMIR |  |
+| `/graph` | `GET` | (Legacy) Obtiene nodos y bordes para el grafo. | Ninguna | JSON nodes/edges |  |
+| `/dependencies` | `GET/POST` | (Legacy) Resuelve dependencias de selección. | `resources: []` | JSON dependencias |  |
+| `/generate` | `POST` | (Legacy) Genera Terraform para AWS. | `resources: []` | JSON + código HCL |  |
+| `/api/v1/architecture/cmir` | `GET` | Obtiene el modelo CMIR normalizado v2. | Ninguna | JSON CMIR v2 |  |
+| `/api/v1/architecture/graph` | `GET` | Vista del grafo con filtros jerárquicos y foco. | `parent_id`, `level`, `focus`, `provider` | JSON filtrado + breadcrumbs |  |
+| `/api/v1/architecture/breadcrumbs/{id}` | `GET` | Obtiene la ruta de breadcrumbs para un nodo. | `node_id` (path) | JSON breadcrumbs |  |
+| `/api/v1/architecture/children/{id}` | `GET` | Obtiene los hijos inmediatos de un nodo. | `node_id` (path) | JSON children |  |
+| `/api/v1/migration/dependencies` | `POST` | Analiza alcance y dependencias de migración. | `resources: []` | JSON desglose dependencias |  |
+| `/api/v1/migration/validate` | `POST` | Valida viabilidad de subgrafo para migrar. | `resources: []`, `target_provider` | JSON reporte validación |  |
+| `/api/v1/migration/generate` | `POST` | Genera IaC (AWS/Azure/K8s) para el subgrafo. | `resources: []`, `target_provider` | JSON + código IaC |  |
 
 ---
 
@@ -467,10 +467,10 @@ El proyecto cuenta con una suite de pruebas automatizadas en `backend/tests/` ej
 
 | Área de Prueba | Archivo de Test | Casos Cubiertos | Estado |
 | :--- | :--- | :--- | :---: |
-| **CMIR Model & Normalizer** | `backend/tests/test_cmir.py` | Normalización de JSON, esquema Pydantic, campos requeridos. | ✅ PASS (2/2) |
-| **Dependency Engine** | `backend/tests/test_dependencies.py` | Resolución de dependencias directas y transitivas en grafo. | ✅ PASS (1/1) |
-| **Graph Builder** | `backend/tests/test_graph.py` | Construcción de DiGraph NetworkX, niveles jerárquicos. | ✅ PASS (1/1) |
-| **IaC Generator** | `backend/tests/test_iac.py` | Generación de bloques HCL Terraform válidos para AWS. | ✅ PASS (1/1) |
+| **CMIR Model & Normalizer** | `backend/tests/test_cmir.py` | Normalización de JSON, esquema Pydantic, campos requeridos. |  PASS (2/2) |
+| **Dependency Engine** | `backend/tests/test_dependencies.py` | Resolución de dependencias directas y transitivas en grafo. |  PASS (1/1) |
+| **Graph Builder** | `backend/tests/test_graph.py` | Construcción de DiGraph NetworkX, niveles jerárquicos. |  PASS (1/1) |
+| **IaC Generator** | `backend/tests/test_iac.py` | Generación de bloques HCL Terraform válidos para AWS. |  PASS (1/1) |
 
 **Ejecución de Pruebas**: `5 passed in 0.17s`.
 
@@ -480,10 +480,10 @@ El proyecto cuenta con una suite de pruebas automatizadas en `backend/tests/` ej
 
 | ID | Requisito / Escenario | Atributo | Métrica / Umbral Sprint 0 | Estado Código Actual | Brecha Encontrada |
 | :--- | :--- | :--- | :--- | :---: | :--- |
-| **RQ-01** | Identificación de dependencias externas en selección de subgrafo. | Correctitud Funcional | $\ge 90\%$ dependencias identificadas sobre prueba. | ✅ **CUMPLIDO** | Algoritmo BFS/DFS en NetworkX resuelve 100% de dependencias explícitas/transitivas del inventario. |
-| **RQ-02** | Portabilidad EKS $\leftrightarrow$ AKS sin edición manual de manifiestos. | Portabilidad | $\ge 80\%$ recursos traducidos (EBS, IRSA, ALB). | ⚠️ **PARCIAL** | KubernetesAdapter genera manifiestos K8s genéricos; falta traductor especializado IRSA/ALB. |
-| **RQ-03** | Detección de deriva de configuración mediante Puppet. | Mantenibilidad / Control Estado | Tiempo de detección $\le 15$ minutos post-cambio. | ❌ **NO CUMPLIDO** | Módulo Puppet no implementado en la solución actual. |
-| **RQ-04** | Tiempo de descubrimiento y normalización de infraestructura. | Rendimiento | $\le 10$ minutos para entorno de ~30 recursos. | ⚠️ **PARCIAL** | Normalización en memoria toma $< 0.1$s, pero el Discovery automático no existe (JSONs estáticos). |
+| **RQ-01** | Identificación de dependencias externas en selección de subgrafo. | Correctitud Funcional | $\ge 90\%$ dependencias identificadas sobre prueba. |  **CUMPLIDO** | Algoritmo BFS/DFS en NetworkX resuelve 100% de dependencias explícitas/transitivas del inventario. |
+| **RQ-02** | Portabilidad EKS $\leftrightarrow$ AKS sin edición manual de manifiestos. | Portabilidad | $\ge 80\%$ recursos traducidos (EBS, IRSA, ALB). |  **PARCIAL** | KubernetesAdapter genera manifiestos K8s genéricos; falta traductor especializado IRSA/ALB. |
+| **RQ-03** | Detección de deriva de configuración mediante Puppet. | Mantenibilidad / Control Estado | Tiempo de detección $\le 15$ minutos post-cambio. |  **NO CUMPLIDO** | Módulo Puppet no implementado en la solución actual. |
+| **RQ-04** | Tiempo de descubrimiento y normalización de infraestructura. | Rendimiento | $\le 10$ minutos para entorno de ~30 recursos. |  **PARCIAL** | Normalización en memoria toma $< 0.1$s, pero el Discovery automático no existe (JSONs estáticos). |
 
 ---
 
@@ -491,14 +491,14 @@ El proyecto cuenta con una suite de pruebas automatizadas en `backend/tests/` ej
 
 | Requisito Sprint 0 | Componente | Archivo de Código | Endpoint API | Test Automatizado | Estado |
 | :--- | :--- | :--- | :--- | :--- | :---: |
-| Modelo CMIR Neutral | CMIR Engine | `backend/app/cmir/models.py` | `GET /api/v1/architecture/cmir` | `test_cmir.py` | ✅ |
-| Visualización del Grafo | Graph Engine / UI | `backend/app/graph/builder.py`, `ArchitectureCanvas.jsx` | `GET /api/v1/architecture/graph` | `test_graph.py` | ✅ |
-| Resolución Dependencias | Dependency Engine | `backend/app/dependencies/resolver.py` | `POST /api/v1/migration/dependencies` | `test_dependencies.py` | ✅ |
-| Selección de Subgrafos | Subgraph Selector | `backend/app/graph/hierarchy.py`, `App.jsx` | `POST /api/v1/migration/dependencies` | `test_dependencies.py` | ✅ |
-| Generación Terraform | IaC Generator | `backend/app/generators/terraform.py` | `POST /api/v1/migration/generate` | `test_iac.py` | ✅ |
-| Discovery Engine | Discovery Scanner | Inexistente | Inexistente | Inexistente | ❌ |
-| Recetas Puppet / Drift | State Controller | Inexistente | Inexistente | Inexistente | ❌ |
-| Traducción IRSA↔Workload | Target Adapter K8s | `backend/app/adapters/k8s_adapter.py` | `POST /api/v1/migration/generate` | Inexistente | ⚠️ |
+| Modelo CMIR Neutral | CMIR Engine | `backend/app/cmir/models.py` | `GET /api/v1/architecture/cmir` | `test_cmir.py` |  |
+| Visualización del Grafo | Graph Engine / UI | `backend/app/graph/builder.py`, `ArchitectureCanvas.jsx` | `GET /api/v1/architecture/graph` | `test_graph.py` |  |
+| Resolución Dependencias | Dependency Engine | `backend/app/dependencies/resolver.py` | `POST /api/v1/migration/dependencies` | `test_dependencies.py` |  |
+| Selección de Subgrafos | Subgraph Selector | `backend/app/graph/hierarchy.py`, `App.jsx` | `POST /api/v1/migration/dependencies` | `test_dependencies.py` |  |
+| Generación Terraform | IaC Generator | `backend/app/generators/terraform.py` | `POST /api/v1/migration/generate` | `test_iac.py` |  |
+| Discovery Engine | Discovery Scanner | Inexistente | Inexistente | Inexistente |  |
+| Recetas Puppet / Drift | State Controller | Inexistente | Inexistente | Inexistente |  |
+| Traducción IRSA↔Workload | Target Adapter K8s | `backend/app/adapters/k8s_adapter.py` | `POST /api/v1/migration/generate` | Inexistente |  |
 
 ---
 

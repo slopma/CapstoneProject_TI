@@ -536,9 +536,9 @@ Ubicado en `backend/app/adapters/k8s_adapter.py`, traduce cargas de trabajo a ma
 
 | Concepto AWS / EKS | Concepto Azure / AKS | Estado en Código Actual | Brecha / Trabajo Faltante |
 | :--- | :--- | :---: | :--- |
-| **Almacenamiento (EBS CSI)** | `Azure Disk / Azure Files` | ⚠️ **PARCIAL** | `KubernetesAdapter` genera `PersistentVolumeClaim` genérico; falta especificación explícita de `storageClassName`. |
-| **Identidad (IRSA - IAM Roles)** | `Workload Identity (Azure AD)` | ❌ **NO IMPLEMENTADO** | No existe transformación automática de anotaciones `eks.amazonaws.com/role-arn` a `azure.workload.identity/client-id`. |
-| **Ingress (ALB Ingress)** | `AGIC (App Gateway Ingress)` | ❌ **NO IMPLEMENTADO** | No se traducen anotaciones específicas de Ingress Controller entre AWS ALB y Azure AGIC. |
+| **Almacenamiento (EBS CSI)** | `Azure Disk / Azure Files` | **PARCIAL** | `KubernetesAdapter` genera `PersistentVolumeClaim` genérico; falta especificación explícita de `storageClassName`. |
+| **Identidad (IRSA - IAM Roles)** | `Workload Identity (Azure AD)` | **NO IMPLEMENTADO** | No existe transformación automática de anotaciones `eks.amazonaws.com/role-arn` a `azure.workload.identity/client-id`. |
+| **Ingress (ALB Ingress)** | `AGIC (App Gateway Ingress)` | **NO IMPLEMENTADO** | No se traducen anotaciones específicas de Ingress Controller entre AWS ALB y Azure AGIC. |
 
 ---
 
@@ -704,22 +704,22 @@ Ubicado en `backend/app/generators/terraform.py`, emite el código ejecutable:
 
 | Componente | Estado Auditoría | Evidencia en Código |
 | :--- | :---: | :--- |
-| **Modelo CMIR** | ✅ **IMPLEMENTADO** | `backend/app/cmir/models.py` (Pydantic v2 schemas). |
-| **Normalizador** | ✅ **IMPLEMENTADO** | `backend/app/cmir/normalizer.py` & `builder.py`. |
-| **Validador CMIR** | ✅ **IMPLEMENTADO** | `backend/app/cmir/validator.py`. |
-| **Motor NetworkX** | ✅ **IMPLEMENTADO** | `backend/app/graph/builder.py`. |
-| **Dependency Resolver** | ✅ **IMPLEMENTADO** | `backend/app/dependencies/resolver.py`. |
-| **Frontend Canvas UI** | ✅ **IMPLEMENTADO** | `frontend/src/components/architecture/ArchitectureCanvas.jsx`. |
-| **Auto-Layout Dagre** | ✅ **IMPLEMENTADO** | `frontend/src/utils/graphLayout.js`. |
-| **Adaptador AWS** | ✅ **IMPLEMENTADO** | `backend/app/adapters/aws_adapter.py`. |
-| **Adaptador Azure** | ✅ **IMPLEMENTADO** | `backend/app/adapters/azure_adapter.py`. |
-| **Adaptador Kubernetes** | ✅ **IMPLEMENTADO** | `backend/app/adapters/k8s_adapter.py`. |
-| **Generador Terraform AWS** | ✅ **IMPLEMENTADO** | `backend/app/generators/terraform.py:L4`. |
-| **Generador Terraform Azure**| ✅ **IMPLEMENTADO** | `backend/app/generators/terraform.py:L293`. |
-| **Generador YAML K8s** | ✅ **IMPLEMENTADO** | `backend/app/generators/terraform.py:L335`. |
-| **Traducción IRSA / ALB** | ⚠️ **PARCIAL** | Mapeos genéricos K8s; faltan anotaciones EKS↔AKS explícitas. |
-| **Discovery Engine** | ❌ **NO IMPLEMENTADO** | Fuera de foco en esta fase; se utilizan inventarios JSON. |
-| **Puppet Generator & Drift** | ❌ **NO IMPLEMENTADO** | Sin código de emisión de manifiestos `.pp` ni agentes de deriva. |
+| **Modelo CMIR** | **IMPLEMENTADO** | `backend/app/cmir/models.py` (Pydantic v2 schemas). |
+| **Normalizador** | **IMPLEMENTADO** | `backend/app/cmir/normalizer.py` & `builder.py`. |
+| **Validador CMIR** | **IMPLEMENTADO** | `backend/app/cmir/validator.py`. |
+| **Motor NetworkX** | **IMPLEMENTADO** | `backend/app/graph/builder.py`. |
+| **Dependency Resolver** | **IMPLEMENTADO** | `backend/app/dependencies/resolver.py`. |
+| **Frontend Canvas UI** | **IMPLEMENTADO** | `frontend/src/components/architecture/ArchitectureCanvas.jsx`. |
+| **Auto-Layout Dagre** | **IMPLEMENTADO** | `frontend/src/utils/graphLayout.js`. |
+| **Adaptador AWS** | **IMPLEMENTADO** | `backend/app/adapters/aws_adapter.py`. |
+| **Adaptador Azure** | **IMPLEMENTADO** | `backend/app/adapters/azure_adapter.py`. |
+| **Adaptador Kubernetes** | **IMPLEMENTADO** | `backend/app/adapters/k8s_adapter.py`. |
+| **Generador Terraform AWS** | **IMPLEMENTADO** | `backend/app/generators/terraform.py:L4`. |
+| **Generador Terraform Azure**| **IMPLEMENTADO** | `backend/app/generators/terraform.py:L293`. |
+| **Generador YAML K8s** | **IMPLEMENTADO** | `backend/app/generators/terraform.py:L335`. |
+| **Traducción IRSA / ALB** | **PARCIAL** | Mapeos genéricos K8s; faltan anotaciones EKS↔AKS explícitas. |
+| **Discovery Engine** | **NO IMPLEMENTADO** | Fuera de foco en esta fase; se utilizan inventarios JSON. |
+| **Puppet Generator & Drift** | **NO IMPLEMENTADO** | Sin código de emisión de manifiestos `.pp` ni agentes de deriva. |
 
 ---
 
@@ -824,15 +824,15 @@ flowchart TD
 
 | Componente | Archivo de Código | Entrada | Proceso Interno | Salida | Estado |
 | :--- | :--- | :--- | :--- | :--- | :---: |
-| **CMIR Models** | `backend/app/cmir/models.py` | Atributos de nodo/relación | Tipado Pydantic v2 y serialización JSON. | Clases `CMIRNode`, `CMIR` | ✅ |
-| **Normalizer** | `backend/app/cmir/normalizer.py` | Dict inventario | Inferencia de niveles y jerarquía parent_id. | Instancia `CMIR` | ✅ |
-| **Validator** | `backend/app/cmir/validator.py` | Instancia `CMIR` | Verificación de IDs duplicados y huérfanos. | Dict `{valid, errors}` | ✅ |
-| **Graph Builder** | `backend/app/graph/builder.py` | Instancia `CMIR` | Construcción de red dirigida NetworkX. | `networkx.DiGraph` | ✅ |
-| **Hierarchy** | `backend/app/graph/hierarchy.py` | `DiGraph`, filtros | Filtrado por nivel, foco y breadcrumbs. | Dict nodos/edges filtrados | ✅ |
-| **Dep Resolver** | `backend/app/dependencies/resolver.py` | `DiGraph`, IDs | Recorrido BFS/DFS de dependencias. | Dict `all_included` | ✅ |
-| **AWS Adapter** | `backend/app/adapters/aws_adapter.py` | Sub-CMIR | Mapeo a tipos HashiCorp AWS. | List[Dict] target AWS | ✅ |
-| **Azure Adapter** | `backend/app/adapters/azure_adapter.py` | Sub-CMIR | Mapeo a tipos HashiCorp AzureRM. | List[Dict] target Azure | ✅ |
-| **K8s Adapter** | `backend/app/adapters/k8s_adapter.py` | Sub-CMIR | Mapeo a Kinds nativos de Kubernetes. | List[Dict] target K8s | ✅ |
-| **IaC Generator**| `backend/app/generators/terraform.py` | List[Dict] target | Emisión de sintaxis HCL / YAML. | Código fuente `.tf` / `.yaml` | ✅ |
-| **FastAPI API** | `backend/app/api/routers/` | Solicitudes HTTP | Coordinación de controladores REST v2. | Respuestas JSON / HCL | ✅ |
-| **React Canvas** | `frontend/src/components/architecture/` | API JSON | Layout Dagre + renderizado React Flow. | Interfaz interactiva | ✅ |
+| **CMIR Models** | `backend/app/cmir/models.py` | Atributos de nodo/relación | Tipado Pydantic v2 y serialización JSON. | Clases `CMIRNode`, `CMIR` | |
+| **Normalizer** | `backend/app/cmir/normalizer.py` | Dict inventario | Inferencia de niveles y jerarquía parent_id. | Instancia `CMIR` |  |
+| **Validator** | `backend/app/cmir/validator.py` | Instancia `CMIR` | Verificación de IDs duplicados y huérfanos. | Dict `{valid, errors}` |  |
+| **Graph Builder** | `backend/app/graph/builder.py` | Instancia `CMIR` | Construcción de red dirigida NetworkX. | `networkx.DiGraph` |  |
+| **Hierarchy** | `backend/app/graph/hierarchy.py` | `DiGraph`, filtros | Filtrado por nivel, foco y breadcrumbs. | Dict nodos/edges filtrados |  |
+| **Dep Resolver** | `backend/app/dependencies/resolver.py` | `DiGraph`, IDs | Recorrido BFS/DFS de dependencias. | Dict `all_included` |  |
+| **AWS Adapter** | `backend/app/adapters/aws_adapter.py` | Sub-CMIR | Mapeo a tipos HashiCorp AWS. | List[Dict] target AWS |  |
+| **Azure Adapter** | `backend/app/adapters/azure_adapter.py` | Sub-CMIR | Mapeo a tipos HashiCorp AzureRM. | List[Dict] target Azure | |
+| **K8s Adapter** | `backend/app/adapters/k8s_adapter.py` | Sub-CMIR | Mapeo a Kinds nativos de Kubernetes. | List[Dict] target K8s |  |
+| **IaC Generator**| `backend/app/generators/terraform.py` | List[Dict] target | Emisión de sintaxis HCL / YAML. | Código fuente `.tf` / `.yaml` |  |
+| **FastAPI API** | `backend/app/api/routers/` | Solicitudes HTTP | Coordinación de controladores REST v2. | Respuestas JSON / HCL |  |
+| **React Canvas** | `frontend/src/components/architecture/` | API JSON | Layout Dagre + renderizado React Flow. | Interfaz interactiva |  |
