@@ -57,16 +57,16 @@ El documento de definición de proyecto (Sprint 0) establece los siguientes par�
 La auditoría sobre la base de código actual arroja el siguiente diagnóstico de madurez:
 
 ```
-[✅ IMPLEMENTADO]         CMIR Model & Normalizer (Pydantic v2)
-[✅ IMPLEMENTADO]         Hierarchical NetworkX Graph Builder (Niveles 0 a 8)
-[✅ IMPLEMENTADO]         Dependency Resolution Engine (Directas, transitivas, compartidas, opcionales)
-[✅ IMPLEMENTADO]         Frontend App (React 19, `@xyflow/react`, Dagre Top-Down Layout, Pimeweb Light UI)
-[✅ IMPLEMENTADO]         Backend API (FastAPI v2.0, endpoints /api/v1/architecture y /api/v1/migration)
-[✅ IMPLEMENTADO]         Terraform Generator (AWS EC2/VPC/S3, Azure VM/VNet, K8s Manifests)
-[⚠️ PARCIAL]              Target Adapters (AWS, Azure, K8s adapters estructurados pero con mapeo simplificado)
-[⚠️ PARCIAL]              EKS ↔ AKS Specific Translation (Mapeos básicos presentes; IRSA/ALB faltantes)
-[❌ NO IMPLEMENTADO]      Discovery Engine (Scan automático via APIs/agentes inexistente; usa JSONs)
-[❌ NO IMPLEMENTADO]      Puppet Configuration Engine (Sin recetas Puppet, sin agentes, sin detección de deriva)
+[ IMPLEMENTADO]         CMIR Model & Normalizer (Pydantic v2)
+[ IMPLEMENTADO]         Hierarchical NetworkX Graph Builder (Niveles 0 a 8)
+[ IMPLEMENTADO]         Dependency Resolution Engine (Directas, transitivas, compartidas, opcionales)
+[ IMPLEMENTADO]         Frontend App (React 19, `@xyflow/react`, Dagre Top-Down Layout, Pimeweb Light UI)
+[ IMPLEMENTADO]         Backend API (FastAPI v2.0, endpoints /api/v1/architecture y /api/v1/migration)
+[ IMPLEMENTADO]         Terraform Generator (AWS EC2/VPC/S3, Azure VM/VNet, K8s Manifests)
+[ PARCIAL]              Target Adapters (AWS, Azure, K8s adapters estructurados pero con mapeo simplificado)
+[ PARCIAL]              EKS ↔ AKS Specific Translation (Mapeos básicos presentes; IRSA/ALB faltantes)
+[ NO IMPLEMENTADO]      Discovery Engine (Scan automático via APIs/agentes inexistente; usa JSONs)
+[ NO IMPLEMENTADO]      Puppet Configuration Engine (Sin recetas Puppet, sin agentes, sin detección de deriva)
 ```
 
 ---
@@ -223,8 +223,8 @@ flowchart TB
 
 | Componente | Responsabilidad | Estado | Archivos Principales | Entradas | Salidas |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Frontend Shell** | Interfaz editorial limpia (Pimeweb), navegación, breadcrumbs y paneles. | ✅ IMPLEMENTADO | `App.jsx`, `AppShell.jsx`, `Header.jsx`, `Sidebar.jsx` | Estado de React, llamadas API | Renderizado DOM |
-| **Architecture Canvas** | Visualización interactiva con React Flow y auto-layout Dagre de arriba a abajo. | ✅ IMPLEMENTADO | `ArchitectureCanvas.jsx`, `ArchitectureNode.jsx`, `graphLayout.js` | Nodos y bordes del grafo | Eventos de selección y expansión |
+| **Frontend Shell** | Interfaz editorial limpia (Pimeweb), navegación, breadcrumbs y paneles. | IMPLEMENTADO | `App.jsx`, `AppShell.jsx`, `Header.jsx`, `Sidebar.jsx` | Estado de React, llamadas API | Renderizado DOM |
+| **Architecture Canvas** | Visualización interactiva con React Flow y auto-layout Dagre de arriba a abajo. | IMPLEMENTADO | `ArchitectureCanvas.jsx`, `ArchitectureNode.jsx`, `graphLayout.js` | Nodos y bordes del grafo | Eventos de selección y expansión |
 | **Resource Inspector** | Drawer lateral para consultar metadatos, niveles y dependencias del nodo activo. | ✅ IMPLEMENTADO | `ResourceInspector.jsx`, `DependenciesPanel.jsx` | Objeto de nodo seleccionado | UI interactiva y acciones |
 | **FastAPI Server** | Exposición de la API REST, configuración CORS, middleware de correlation-id. | ✅ IMPLEMENTADO | `backend/app/main.py`, `config.py` | Solicitudes HTTP | Respuestas JSON / Archivos |
 | **CMIR Schema** | Definición de Pydantic v2 para recursos, relaciones, proveedor y niveles. | ✅ IMPLEMENTADO | `backend/app/cmir/models.py`, `normalizer.py`, `validator.py` | JSON de inventario | Objeto `CMIR` tipado |
