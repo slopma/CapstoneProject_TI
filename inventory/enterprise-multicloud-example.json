@@ -1,0 +1,234 @@
+{
+  "architecture": {
+    "name": "enterprise-multicloud-platform",
+    "provider": "multi-cloud",
+    "version": "2.0"
+  },
+  "resources": [
+    {
+      "id": "aws-cloud",
+      "name": "AWS Production Cloud",
+      "type": "provider",
+      "level": 1,
+      "provider": "aws",
+      "location": "Global",
+      "environment": "production"
+    },
+    {
+      "id": "us-east-1",
+      "name": "Region us-east-1 (N. Virginia)",
+      "type": "region",
+      "level": 2,
+      "parent_id": "aws-cloud",
+      "provider": "aws",
+      "location": "us-east-1"
+    },
+    {
+      "id": "vpc-main",
+      "name": "VPC Core Production (10.0.0.0/16)",
+      "type": "vpc",
+      "level": 3,
+      "parent_id": "us-east-1",
+      "provider": "aws",
+      "location": "us-east-1"
+    },
+    {
+      "id": "subnet-public",
+      "name": "Subnet Public Ingress (10.0.1.0/24)",
+      "type": "subnet",
+      "level": 3,
+      "parent_id": "vpc-main",
+      "provider": "aws"
+    },
+    {
+      "id": "subnet-private-app",
+      "name": "Subnet Private App Workloads (10.0.2.0/24)",
+      "type": "subnet",
+      "level": 3,
+      "parent_id": "vpc-main",
+      "provider": "aws"
+    },
+    {
+      "id": "subnet-private-data",
+      "name": "Subnet Private Data (10.0.3.0/24)",
+      "type": "subnet",
+      "level": 3,
+      "parent_id": "vpc-main",
+      "provider": "aws"
+    },
+    {
+      "id": "sg-backend",
+      "name": "Security Group - Backend Microservices",
+      "type": "security_group",
+      "level": 3,
+      "parent_id": "vpc-main",
+      "provider": "aws"
+    },
+    {
+      "id": "eks-prod-cluster",
+      "name": "EKS Kubernetes Production Cluster",
+      "type": "kubernetes_cluster",
+      "level": 4,
+      "parent_id": "vpc-main",
+      "provider": "aws",
+      "engine": "1.30"
+    },
+    {
+      "id": "ns-backend",
+      "name": "Namespace: prod-backend",
+      "type": "kubernetes_namespace",
+      "level": 5,
+      "parent_id": "eks-prod-cluster",
+      "provider": "aws"
+    },
+    {
+      "id": "ns-frontend",
+      "name": "Namespace: prod-frontend",
+      "type": "kubernetes_namespace",
+      "level": 5,
+      "parent_id": "eks-prod-cluster",
+      "provider": "aws"
+    },
+    {
+      "id": "payment-platform",
+      "name": "Payment & Checkout Platform",
+      "type": "application",
+      "level": 6,
+      "parent_id": "ns-backend",
+      "provider": "aws"
+    },
+    {
+      "id": "payment-api",
+      "name": "Payment API Gateway Service",
+      "type": "service",
+      "level": 7,
+      "parent_id": "payment-platform",
+      "provider": "aws",
+      "platform": "Node.js / Express"
+    },
+    {
+      "id": "auth-service",
+      "name": "Authentication & IAM Service",
+      "type": "service",
+      "level": 7,
+      "parent_id": "payment-platform",
+      "provider": "aws",
+      "platform": "Python / FastAPI"
+    },
+    {
+      "id": "billing-worker",
+      "name": "Async Billing Background Worker",
+      "type": "workload",
+      "level": 7,
+      "parent_id": "payment-platform",
+      "provider": "aws",
+      "platform": "Go"
+    },
+    {
+      "id": "frontend-ui",
+      "name": "Customer Web Portal Frontend",
+      "type": "application",
+      "level": 6,
+      "parent_id": "ns-frontend",
+      "provider": "aws",
+      "platform": "React / Vite"
+    },
+    {
+      "id": "payment-db",
+      "name": "PostgreSQL Primary Cluster",
+      "type": "database",
+      "level": 8,
+      "parent_id": "subnet-private-data",
+      "provider": "aws",
+      "engine": "postgresql-16",
+      "is_shared": true,
+      "security": {
+        "encryption_at_rest": true,
+        "private_only": true
+      }
+    },
+    {
+      "id": "auth-redis",
+      "name": "Redis Distributed Cache Cluster",
+      "type": "cache",
+      "level": 8,
+      "parent_id": "subnet-private-data",
+      "provider": "aws",
+      "engine": "redis-7",
+      "is_shared": false
+    },
+    {
+      "id": "s3-payment-vault",
+      "name": "S3 Encrypted Audit Vault",
+      "type": "storage",
+      "level": 8,
+      "parent_id": "us-east-1",
+      "provider": "aws"
+    },
+    {
+      "id": "sqs-audit-queue",
+      "name": "SQS Async Audit Event Queue",
+      "type": "queue",
+      "level": 8,
+      "parent_id": "vpc-main",
+      "provider": "aws"
+    }
+  ],
+  "relationships": [
+    {
+      "source": "frontend-ui",
+      "target": "payment-api",
+      "type": "depends_on"
+    },
+    {
+      "source": "payment-api",
+      "target": "auth-service",
+      "type": "depends_on"
+    },
+    {
+      "source": "payment-api",
+      "target": "payment-db",
+      "type": "depends_on"
+    },
+    {
+      "source": "payment-api",
+      "target": "auth-redis",
+      "type": "depends_on"
+    },
+    {
+      "source": "auth-service",
+      "target": "payment-db",
+      "type": "depends_on"
+    },
+    {
+      "source": "auth-service",
+      "target": "auth-redis",
+      "type": "depends_on"
+    },
+    {
+      "source": "billing-worker",
+      "target": "sqs-audit-queue",
+      "type": "depends_on"
+    },
+    {
+      "source": "billing-worker",
+      "target": "payment-db",
+      "type": "depends_on"
+    },
+    {
+      "source": "payment-api",
+      "target": "s3-payment-vault",
+      "type": "depends_on"
+    },
+    {
+      "source": "payment-api",
+      "target": "sg-backend",
+      "type": "member_of"
+    },
+    {
+      "source": "auth-service",
+      "target": "sg-backend",
+      "type": "member_of"
+    }
+  ]
+}

@@ -1,0 +1,197 @@
+{
+  "architecture": {
+    "name": "onpremise-datacenter-enterprise",
+    "provider": "on-premise",
+    "version": "2.0"
+  },
+  "resources": [
+    {
+      "id": "onprem-dc",
+      "name": "Datacenter On-Premise Principal",
+      "type": "datacenter",
+      "level": 1,
+      "provider": "on-premise",
+      "location": "Sede Central - Datacenter A",
+      "environment": "production"
+    },
+    {
+      "id": "rack-infra",
+      "name": "Rack A1 - Infraestructura Física",
+      "type": "datacenter",
+      "level": 2,
+      "parent_id": "onprem-dc",
+      "provider": "on-premise",
+      "location": "Sala de Servidores 1"
+    },
+    {
+      "id": "vlan-prod",
+      "name": "Red VLAN Producción (192.168.10.0/24)",
+      "type": "network",
+      "level": 3,
+      "parent_id": "rack-infra",
+      "provider": "on-premise"
+    },
+    {
+      "id": "subnet-internal",
+      "name": "Subred Interna Servidores (192.168.10.100/28)",
+      "type": "subnet",
+      "level": 3,
+      "parent_id": "vlan-prod",
+      "provider": "on-premise"
+    },
+    {
+      "id": "firewall-dmz",
+      "name": "Firewall Perimetral & DMZ",
+      "type": "security_boundary",
+      "level": 3,
+      "parent_id": "vlan-prod",
+      "provider": "on-premise"
+    },
+    {
+      "id": "vmware-cluster",
+      "name": "Cluster Virtualización VMware ESXi",
+      "type": "cluster",
+      "level": 4,
+      "parent_id": "vlan-prod",
+      "provider": "on-premise"
+    },
+    {
+      "id": "ns-core-apps",
+      "name": "Pool de Recursos: Core Applications",
+      "type": "namespace",
+      "level": 5,
+      "parent_id": "vmware-cluster",
+      "provider": "on-premise"
+    },
+    {
+      "id": "ns-data-services",
+      "name": "Pool de Recursos: Data Services",
+      "type": "namespace",
+      "level": 5,
+      "parent_id": "vmware-cluster",
+      "provider": "on-premise"
+    },
+    {
+      "id": "erp-system",
+      "name": "Sistema ERP & Servicios Centrales",
+      "type": "application",
+      "level": 6,
+      "parent_id": "ns-core-apps",
+      "provider": "on-premise"
+    },
+    {
+      "id": "backend-api-vm",
+      "name": "VM Servidor Backend API (Ubuntu Linux)",
+      "type": "compute",
+      "level": 7,
+      "parent_id": "erp-system",
+      "provider": "on-premise",
+      "platform": "Ubuntu 22.04 LTS"
+    },
+    {
+      "id": "auth-jwt-srv",
+      "name": "Servicio Autenticación JWT",
+      "type": "service",
+      "level": 7,
+      "parent_id": "erp-system",
+      "provider": "on-premise",
+      "platform": "Node.js / Express"
+    },
+    {
+      "id": "batch-worker-vm",
+      "name": "VM Procesamiento Batch",
+      "type": "workload",
+      "level": 7,
+      "parent_id": "erp-system",
+      "provider": "on-premise",
+      "platform": "Python Worker"
+    },
+    {
+      "id": "postgres-db",
+      "name": "Servidor Base de Datos PostgreSQL",
+      "type": "database",
+      "level": 8,
+      "parent_id": "ns-data-services",
+      "provider": "on-premise",
+      "engine": "postgresql-15",
+      "is_shared": true,
+      "security": {
+        "private_only": true,
+        "encryption_at_rest": true
+      }
+    },
+    {
+      "id": "redis-cache",
+      "name": "Servidor Caché Redis On-Prem",
+      "type": "cache",
+      "level": 8,
+      "parent_id": "ns-data-services",
+      "provider": "on-premise",
+      "engine": "redis-7",
+      "is_shared": false
+    },
+    {
+      "id": "nfs-storage",
+      "name": "Almacenamiento SAN/NFS Compartido",
+      "type": "storage",
+      "level": 8,
+      "parent_id": "rack-infra",
+      "provider": "on-premise"
+    },
+    {
+      "id": "rabbitmq-broker",
+      "name": "Message Broker RabbitMQ",
+      "type": "queue",
+      "level": 8,
+      "parent_id": "ns-data-services",
+      "provider": "on-premise"
+    }
+  ],
+  "relationships": [
+    {
+      "source": "backend-api-vm",
+      "target": "auth-jwt-srv",
+      "type": "depends_on"
+    },
+    {
+      "source": "backend-api-vm",
+      "target": "postgres-db",
+      "type": "depends_on"
+    },
+    {
+      "source": "backend-api-vm",
+      "target": "redis-cache",
+      "type": "depends_on"
+    },
+    {
+      "source": "auth-jwt-srv",
+      "target": "postgres-db",
+      "type": "depends_on"
+    },
+    {
+      "source": "auth-jwt-srv",
+      "target": "redis-cache",
+      "type": "depends_on"
+    },
+    {
+      "source": "batch-worker-vm",
+      "target": "rabbitmq-broker",
+      "type": "depends_on"
+    },
+    {
+      "source": "batch-worker-vm",
+      "target": "postgres-db",
+      "type": "depends_on"
+    },
+    {
+      "source": "backend-api-vm",
+      "target": "nfs-storage",
+      "type": "depends_on"
+    },
+    {
+      "source": "backend-api-vm",
+      "target": "firewall-dmz",
+      "type": "member_of"
+    }
+  ]
+}
