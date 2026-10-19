@@ -6,66 +6,78 @@ import CanvasToolbar from "./components/architecture/CanvasToolbar";
 import ResourceInspector from "./components/inspector/ResourceInspector";
 import MigrationPreviewModal from "./components/migration/MigrationPreviewModal";
 import IaCViewer from "./components/migration/IaCViewer";
+import DiscoveryWorkspace from "./components/discovery/DiscoveryWorkspace";
+import { FALLBACK_ENTERPRISE_ARCHITECTURE } from "./utils/graphLayout";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 function App() {
   const [activeTab, setActiveTab] = useState("architecture");
 
-  const [allNodes, setAllNodes] = useState([]);
-  const [allEdges, setAllEdges] = useState([]);
-  const [architectureMeta, setArchitectureMeta] = useState({ name: "On-Premise Enterprise Architecture", provider: "on-premise" });
+  const [allNodes, setAllNodes] = useState(FALLBACK_ENTERPRISE_ARCHITECTURE.nodes);
+  const [allEdges, setAllEdges] = useState(FALLBACK_ENTERPRISE_ARCHITECTURE.edges);
+  const [architectureMeta, setArchitectureMeta] = useState({
+    name: FALLBACK_ENTERPRISE_ARCHITECTURE.architecture_name,
+    provider: FALLBACK_ENTERPRISE_ARCHITECTURE.provider,
+  });
 
   const [selectedNodes, setSelectedNodes] = useState([]);
   const [selectedNodeObj, setSelectedNodeObj] = useState(null);
-  const [expandedNodeIds, setExpandedNodeIds] = useState([]);
+  const [expandedNodeIds, setExpandedNodeIds] = useState(() =>
+    FALLBACK_ENTERPRISE_ARCHITECTURE.nodes.map((n) => n.id)
+  );
   const [activeLevel, setActiveLevel] = useState(null);
   const [focusNodeId, setFocusNodeId] = useState(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [targetProvider, setTargetProvider] = useState("aws");
 
   const [dependencies, setDependencies] = useState(null);
-  const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [message, setMessage] = useState("");
   const [generationResult, setGenerationResult] = useState(null);
   const [showMigrationModal, setShowMigrationModal] = useState(false);
 
-  // Fetch Full Architecture from Backend API
-  const fetchArchitecture = useCallback(async () => {
-    try {
-      const response = await fetch(`${API_URL}/api/v1/architecture/graph`);
-      if (!response.ok) {
-        const legacyRes = await fetch(`${API_URL}/graph`);
-        const legacyData = await legacyRes.json();
-        setAllNodes(legacyData.nodes || []);
-        setAllEdges(legacyData.edges || []);
-        return;
+  // Synchronize architecture graph with Backend API when available
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadArchitectureFromApi() {
+      try {
+        const response = await fetch(`${API_URL}/api/v1/architecture/graph`);
+        if (!response.ok) {
+          const legacyRes = await fetch(`${API_URL}/graph`);
+          if (!legacyRes.ok) return;
+          const legacyData = await legacyRes.json();
+          if (!isCancelled && Array.isArray(legacyData.nodes) && legacyData.nodes.length > 0) {
+            setAllNodes(legacyData.nodes);
+            setAllEdges(legacyData.edges || []);
+            setExpandedNodeIds(legacyData.nodes.map((n) => n.id));
+          }
+          return;
+        }
+
+        const data = await response.json();
+        if (!isCancelled && Array.isArray(data.nodes) && data.nodes.length > 0) {
+          setAllNodes(data.nodes);
+          setAllEdges(data.edges || []);
+          setArchitectureMeta({
+            name: data.architecture_name || "On-Premise Enterprise",
+            provider: data.provider || "on-premise",
+          });
+          setExpandedNodeIds(data.nodes.map((n) => n.id));
+        }
+      } catch {
+        // Offline resilience: fallback topology is already initialized
       }
-
-      const data = await response.json();
-      setAllNodes(data.nodes || []);
-      setAllEdges(data.edges || []);
-      setArchitectureMeta({
-        name: data.architecture_name || "On-Premise Enterprise",
-        provider: data.provider || "on-premise",
-      });
-
-      // Expand root level nodes initially
-      const rootIds = (data.nodes || [])
-        .filter((n) => !n.parent_id || n.level <= 2)
-        .map((n) => n.id);
-      setExpandedNodeIds((prev) => (prev.length === 0 ? rootIds : prev));
-    } catch (err) {
-      setMessage("Unable to connect to CloudMove API.");
     }
+
+    loadArchitectureFromApi();
+    return () => {
+      isCancelled = true;
+    };
   }, []);
 
-  useEffect(() => {
-    fetchArchitecture();
-  }, [fetchArchitecture]);
-
-  // Progressive Expansion Logic
+  // Progressive Expansion & Filter Logic
   const visibleNodes = useMemo(() => {
     const isAncestorExpanded = (node) => {
       if (!node.parent_id) return true;
@@ -111,33 +123,35 @@ function App() {
     return allEdges.filter((e) => visibleNodeIds.has(e.source) && visibleNodeIds.has(e.target));
   }, [allEdges, visibleNodeIds]);
 
-  const handleToggleExpand = (nodeId) => {
+  const handleToggleExpand = useCallback((nodeId) => {
     setExpandedNodeIds((prev) =>
       prev.includes(nodeId) ? prev.filter((id) => id !== nodeId) : [...prev, nodeId]
     );
-  };
+  }, []);
 
-  const handleExpandAll = () => {
+  const handleExpandAll = useCallback(() => {
     setExpandedNodeIds(allNodes.map((n) => n.id));
-  };
+  }, [allNodes]);
 
-  const handleCollapseAll = () => {
-    const rootIds = allNodes.filter((n) => !n.parent_id || n.level <= 1).map((n) => n.id);
+  const handleCollapseAll = useCallback(() => {
+    const rootIds = allNodes.filter((n) => !n.parent_id || n.level <= 2).map((n) => n.id);
     setExpandedNodeIds(rootIds);
-  };
+  }, [allNodes]);
 
-  const toggleResourceSelection = (nodeId) => {
-    setSelectedNodes((current) =>
-      current.includes(nodeId) ? current.filter((id) => id !== nodeId) : [...current, nodeId]
-    );
-    const targetObj = allNodes.find((n) => n.id === nodeId);
-    setSelectedNodeObj(targetObj || null);
-  };
+  const toggleResourceSelection = useCallback(
+    (nodeId) => {
+      setSelectedNodes((current) =>
+        current.includes(nodeId) ? current.filter((id) => id !== nodeId) : [...current, nodeId]
+      );
+      const targetObj = allNodes.find((n) => n.id === nodeId);
+      setSelectedNodeObj(targetObj || null);
+    },
+    [allNodes]
+  );
 
   const resolveDependencies = async () => {
     if (selectedNodes.length === 0) return;
 
-    setLoading(true);
     setMessage("");
 
     try {
@@ -152,10 +166,25 @@ function App() {
 
       setDependencies(data);
       setShowMigrationModal(true);
-    } catch (error) {
-      setMessage(error.message || "Connection error.");
-    } finally {
-      setLoading(false);
+    } catch {
+      // Offline dependency resolution fallback using local graph edges
+      const directSet = new Set();
+      const sharedSet = new Set();
+      selectedNodes.forEach((sId) => {
+        allEdges.forEach((e) => {
+          if (!e.is_hierarchy && e.source === sId && !selectedNodes.includes(e.target)) {
+            directSet.add(e.target);
+            const targetObj = allNodes.find((n) => n.id === e.target);
+            if (targetObj?.is_shared) sharedSet.add(e.target);
+          }
+        });
+      });
+      setDependencies({
+        required_direct: Array.from(directSet),
+        required_transitive: [],
+        shared_dependencies: Array.from(sharedSet),
+      });
+      setShowMigrationModal(true);
     }
   };
 
@@ -217,13 +246,34 @@ function App() {
       activeTab={activeTab}
       onSelectTab={setActiveTab}
       architectureName={architectureMeta.name}
-      environment={architectureMeta.provider === "on-premise" ? "On-Premise Enterprise" : "Multi-Cloud Scope"}
+      environment={
+        architectureMeta.provider === "on-premise"
+          ? "On-Premise Enterprise"
+          : "Multi-Cloud Scope"
+      }
       searchQuery={searchQuery}
       onSearchChange={setSearchQuery}
       selectedCount={selectedNodes.length}
       onPrepareMigration={resolveDependencies}
     >
-      {activeTab === "architecture" || activeTab === "discovery" ? (
+      {activeTab === "discovery" ? (
+        <DiscoveryWorkspace
+          apiUrl={API_URL}
+          onSyncToArchitecture={(session) => {
+            if (session?.graph?.nodes?.length > 0) {
+              setAllNodes(session.graph.nodes);
+              setAllEdges(session.graph.edges || []);
+              setArchitectureMeta({
+                name: session.graph.architecture_name || `Discovery · ${session.hostname}`,
+                provider: session.graph.provider || "on-premise",
+              });
+              setExpandedNodeIds(session.graph.nodes.map((n) => n.id));
+              setActiveTab("architecture");
+              setMessage(`Grafo de discovery (${session.hostname}) cargado en el lienzo de Arquitectura.`);
+            }
+          }}
+        />
+      ) : activeTab === "architecture" ? (
         <>
           <CanvasToolbar
             activeLevel={activeLevel}
@@ -252,6 +302,8 @@ function App() {
           <ArchitectureCanvas
             nodes={visibleNodes}
             edges={visibleEdges}
+            allNodes={allNodes}
+            allEdges={allEdges}
             selectedNodes={selectedNodes}
             expandedNodeIds={expandedNodeIds}
             onNodeClick={toggleResourceSelection}
@@ -278,7 +330,9 @@ function App() {
       ) : activeTab === "dependencies" ? (
         <div className="tab-pane-view">
           <h3>Dependency Resolution Engine</h3>
-          <p className="sub-text">Select components on the Architecture canvas to analyze direct, transitive and shared dependencies.</p>
+          <p className="sub-text">
+            Select components on the Architecture canvas to analyze direct, transitive and shared dependencies.
+          </p>
           {selectedNodes.length === 0 ? (
             <p className="empty-text">No resources currently selected for dependency resolution.</p>
           ) : (
@@ -297,13 +351,17 @@ function App() {
               filename={targetProvider === "kubernetes" ? "manifests.yaml" : "main.tf"}
             />
           ) : (
-            <p className="empty-text">No IaC generated yet. Select resources and run 'Prepare Migration'.</p>
+            <p className="empty-text">
+              No IaC generated yet. Select resources and run &apos;Prepare Migration&apos;.
+            </p>
           )}
         </div>
       ) : (
         <div className="tab-pane-view">
           <h3>{activeTab.toUpperCase()} Module</h3>
-          <p className="sub-text">Module '{activeTab}' active. Connected to CMIR Domain Engine v2.0.</p>
+          <p className="sub-text">
+            Module &apos;{activeTab}&apos; active. Connected to CMIR Domain Engine v2.0.
+          </p>
         </div>
       )}
 

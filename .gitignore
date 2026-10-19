@@ -13,3 +13,14 @@ generated/aws/plan-evidence.txt
 __pycache__/
 .pytest_cache/
 .venv/
+
+# User discovery inventories & local session artifacts (Privacy & Data Quality)
+docs/cloudmove-osquery-inventory.json
+*osquery-inventory*.json
+backend/data/discovery_sessions/
+cloudmove-parsed/
+*.bak
+.codex/
+.cursor/
+.gemini/
+.grok/

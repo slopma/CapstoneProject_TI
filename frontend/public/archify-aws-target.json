@@ -1,0 +1,182 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Integración JSON Osquery → CMIR v2 → Terraform AWS (rabbitmq-kali)",
+    "locale": "es",
+    "output": ".archify/architecture-aws-target-20261019-160600/aws-target.html",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "producers",
+      "type": "external",
+      "label": "Clientes y Admin",
+      "sublabel": "SSH :22 / API :11434",
+      "pos": [36, 210],
+      "size": [156, 62]
+    },
+    {
+      "id": "igw_ssm",
+      "type": "cloud",
+      "label": "aws_internet_gateway",
+      "sublabel": "GW 10.78.51.85 → IGW",
+      "pos": [290, 70],
+      "size": [156, 62]
+    },
+    {
+      "id": "sg_ingress",
+      "type": "security",
+      "label": "aws_security_group",
+      "sublabel": "listening_ports :22/:11434",
+      "pos": [290, 210],
+      "size": [156, 62]
+    },
+    {
+      "id": "rds_pg",
+      "type": "database",
+      "label": "aws_db_instance",
+      "sublabel": "PostgreSQL 17 Multi-AZ",
+      "pos": [555, 70],
+      "size": [168, 62]
+    },
+    {
+      "id": "ec2_host",
+      "type": "backend",
+      "label": "aws_instance (EC2)",
+      "sublabel": "c6i.2xlarge / t3.xlarge",
+      "pos": [555, 210],
+      "size": [168, 62]
+    },
+    {
+      "id": "ebs_gp3",
+      "type": "database",
+      "label": "aws_ebs_volume (gp3)",
+      "sublabel": "nvme0n1 477 GiB (39G usado)",
+      "pos": [555, 350],
+      "size": [168, 62]
+    },
+    {
+      "id": "mq_broker",
+      "type": "messagebus",
+      "label": "aws_mq_broker",
+      "sublabel": "RabbitMQ 3.13 Privado",
+      "pos": [835, 210],
+      "size": [168, 62]
+    },
+    {
+      "id": "cloudwatch",
+      "type": "cloud",
+      "label": "Amazon CloudWatch",
+      "sublabel": "Logs systemd y Docker",
+      "pos": [835, 70],
+      "size": [168, 62]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1)",
+      "wraps": [
+        "igw_ssm",
+        "sg_ingress",
+        "rds_pg",
+        "ec2_host",
+        "ebs_gp3",
+        "mq_broker",
+        "cloudwatch"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "security-group",
+      "label": "aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)",
+      "wraps": [
+        "rds_pg",
+        "ec2_host",
+        "ebs_gp3",
+        "mq_broker",
+        "cloudwatch"
+      ],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    {
+      "from": "producers",
+      "to": "sg_ingress",
+      "label": "TCP :22/:11434",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "from": "igw_ssm",
+      "to": "sg_ingress",
+      "label": "Ruta VPC",
+      "route": "straight"
+    },
+    {
+      "from": "sg_ingress",
+      "to": "ec2_host",
+      "label": "Flujo SG",
+      "variant": "security",
+      "route": "straight"
+    },
+    {
+      "from": "ec2_host",
+      "to": "rds_pg",
+      "label": "SQL :5432",
+      "variant": "security",
+      "route": "straight"
+    },
+    {
+      "from": "ec2_host",
+      "to": "ebs_gp3",
+      "label": "nvme0n1 gp3",
+      "route": "straight"
+    },
+    {
+      "from": "ec2_host",
+      "to": "mq_broker",
+      "label": "AMQP :5672",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "from": "mq_broker",
+      "to": "cloudwatch",
+      "label": "Métricas",
+      "variant": "dashed",
+      "route": "straight"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "1. JSON Osquery → CMIR → EC2 & EBS",
+      "items": [
+        "CPU i7-1255U (10C/16T) + 15.35 GiB RAM → aws_instance c6i.2xlarge (o t3.xlarge right-sized)",
+        "Disco físico /dev/nvme0n1 (476.94 GiB, 39.04 GiB usados en /) → aws_ebs_volume gp3",
+        "Separación estricta entre disco padre nvme0n1 y particiones p1, p2, p3"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "2. Red y Puertos → VPC & Security Group",
+      "items": [
+        "Interfaz wlan0 (10.78.51.148/24) + GW 10.78.51.85 → aws_vpc + aws_subnet privada",
+        "listening_ports (sshd :22, ollama :11434, avahi :5353) → reglas ingress en aws_security_group",
+        "Puente docker0 (172.17.0.1/16) documentado para cargas de contenedores"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "3. Estrategia Replatform vs. Rehost",
+      "items": [
+        "Modo Replatform: genera aws_db_instance (PostgreSQL) y aws_mq_broker (RabbitMQ)",
+        "Modo Rehost: conserva todos los servicios dentro de aws_instance + aws_ebs_volume",
+        "Exportable a provider.tf, variables.tf, main.tf y outputs.tf en 1 clic"
+      ]
+    }
+  ]
+}

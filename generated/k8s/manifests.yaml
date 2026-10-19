@@ -1,75 +1,8 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: datacenter-on-premise-principal
-  labels:
-    app: datacenter-on-premise-principal
-    managed-by: cloudmove
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: datacenter-on-premise-principal
-  template:
-    metadata:
-      labels:
-        app: datacenter-on-premise-principal
-    spec:
-      containers:
-      - name: datacenter-on-premise-principal
-        image: nginx:alpine
-        ports:
-        - containerPort: 80
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: datacenter-on-premise-principal-svc
-spec:
-  selector:
-    app: datacenter-on-premise-principal
-  ports:
-  - port: 80
-    targetPort: 80
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: rack-a1---infraestructura-física
-  labels:
-    app: rack-a1---infraestructura-física
-    managed-by: cloudmove
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: rack-a1---infraestructura-física
-  template:
-    metadata:
-      labels:
-        app: rack-a1---infraestructura-física
-    spec:
-      containers:
-      - name: rack-a1---infraestructura-física
-        image: nginx:alpine
-        ports:
-        - containerPort: 80
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: rack-a1---infraestructura-física-svc
-spec:
-  selector:
-    app: rack-a1---infraestructura-física
-  ports:
-  - port: 80
-    targetPort: 80
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
   name: red-vlan-producción-(192.168.10.0/24)
+  namespace: default
   labels:
     app: red-vlan-producción-(192.168.10.0/24)
     managed-by: cloudmove
@@ -93,6 +26,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: red-vlan-producción-(192.168.10.0/24)-svc
+  namespace: default
 spec:
   selector:
     app: red-vlan-producción-(192.168.10.0/24)
@@ -104,6 +38,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: subred-interna-servidores-(192.168.10.100/28)
+  namespace: default
   labels:
     app: subred-interna-servidores-(192.168.10.100/28)
     managed-by: cloudmove
@@ -127,6 +62,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: subred-interna-servidores-(192.168.10.100/28)-svc
+  namespace: default
 spec:
   selector:
     app: subred-interna-servidores-(192.168.10.100/28)
@@ -138,6 +74,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: firewall-perimetral-&-dmz
+  namespace: default
   labels:
     app: firewall-perimetral-&-dmz
     managed-by: cloudmove
@@ -161,6 +98,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: firewall-perimetral-&-dmz-svc
+  namespace: default
 spec:
   selector:
     app: firewall-perimetral-&-dmz
@@ -172,6 +110,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: cluster-virtualización-vmware-esxi
+  namespace: default
   labels:
     app: cluster-virtualización-vmware-esxi
     managed-by: cloudmove
@@ -195,6 +134,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: cluster-virtualización-vmware-esxi-svc
+  namespace: default
 spec:
   selector:
     app: cluster-virtualización-vmware-esxi
@@ -202,78 +142,25 @@ spec:
   - port: 80
     targetPort: 80
 ---
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: v1
+kind: Namespace
 metadata:
   name: pool-de-recursos:-core-applications
   labels:
-    app: pool-de-recursos:-core-applications
     managed-by: cloudmove
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: pool-de-recursos:-core-applications
-  template:
-    metadata:
-      labels:
-        app: pool-de-recursos:-core-applications
-    spec:
-      containers:
-      - name: pool-de-recursos:-core-applications
-        image: nginx:alpine
-        ports:
-        - containerPort: 80
 ---
 apiVersion: v1
-kind: Service
-metadata:
-  name: pool-de-recursos:-core-applications-svc
-spec:
-  selector:
-    app: pool-de-recursos:-core-applications
-  ports:
-  - port: 80
-    targetPort: 80
----
-apiVersion: apps/v1
-kind: Deployment
+kind: Namespace
 metadata:
   name: pool-de-recursos:-data-services
   labels:
-    app: pool-de-recursos:-data-services
     managed-by: cloudmove
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: pool-de-recursos:-data-services
-  template:
-    metadata:
-      labels:
-        app: pool-de-recursos:-data-services
-    spec:
-      containers:
-      - name: pool-de-recursos:-data-services
-        image: nginx:alpine
-        ports:
-        - containerPort: 80
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: pool-de-recursos:-data-services-svc
-spec:
-  selector:
-    app: pool-de-recursos:-data-services
-  ports:
-  - port: 80
-    targetPort: 80
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sistema-erp-&-servicios-centrales
+  namespace: default
   labels:
     app: sistema-erp-&-servicios-centrales
     managed-by: cloudmove
@@ -297,6 +184,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: sistema-erp-&-servicios-centrales-svc
+  namespace: default
 spec:
   selector:
     app: sistema-erp-&-servicios-centrales
@@ -308,6 +196,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: vm-servidor-backend-api-(ubuntu-linux)
+  namespace: default
   labels:
     app: vm-servidor-backend-api-(ubuntu-linux)
     managed-by: cloudmove
@@ -331,6 +220,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: vm-servidor-backend-api-(ubuntu-linux)-svc
+  namespace: default
 spec:
   selector:
     app: vm-servidor-backend-api-(ubuntu-linux)
@@ -342,6 +232,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: servicio-autenticación-jwt
+  namespace: default
   labels:
     app: servicio-autenticación-jwt
     managed-by: cloudmove
@@ -365,6 +256,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: servicio-autenticación-jwt-svc
+  namespace: default
 spec:
   selector:
     app: servicio-autenticación-jwt
@@ -376,6 +268,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: vm-procesamiento-batch
+  namespace: default
   labels:
     app: vm-procesamiento-batch
     managed-by: cloudmove
@@ -399,6 +292,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: vm-procesamiento-batch-svc
+  namespace: default
 spec:
   selector:
     app: vm-procesamiento-batch
@@ -407,13 +301,15 @@ spec:
     targetPort: 80
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: servidor-base-de-datos-postgresql
+  namespace: default
   labels:
     app: servidor-base-de-datos-postgresql
     managed-by: cloudmove
 spec:
+  serviceName: servidor-base-de-datos-postgresql-headless
   replicas: 1
   selector:
     matchLabels:
@@ -425,29 +321,20 @@ spec:
     spec:
       containers:
       - name: servidor-base-de-datos-postgresql
-        image: nginx:alpine
+        image: servidor-base-de-datos-postgresql:latest
         ports:
         - containerPort: 80
 ---
-apiVersion: v1
-kind: Service
-metadata:
-  name: servidor-base-de-datos-postgresql-svc
-spec:
-  selector:
-    app: servidor-base-de-datos-postgresql
-  ports:
-  - port: 80
-    targetPort: 80
----
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: servidor-caché-redis-on-prem
+  namespace: default
   labels:
     app: servidor-caché-redis-on-prem
     managed-by: cloudmove
 spec:
+  serviceName: servidor-caché-redis-on-prem-headless
   replicas: 1
   selector:
     matchLabels:
@@ -459,59 +346,27 @@ spec:
     spec:
       containers:
       - name: servidor-caché-redis-on-prem
-        image: nginx:alpine
+        image: servidor-caché-redis-on-prem:latest
         ports:
         - containerPort: 80
 ---
 apiVersion: v1
-kind: Service
+kind: PersistentVolumeClaim
 metadata:
-  name: servidor-caché-redis-on-prem-svc
+  name: almacenamiento-san/nfs-compartido-pvc
+  namespace: default
 spec:
-  selector:
-    app: servidor-caché-redis-on-prem
-  ports:
-  - port: 80
-    targetPort: 80
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: almacenamiento-san/nfs-compartido
-  labels:
-    app: almacenamiento-san/nfs-compartido
-    managed-by: cloudmove
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: almacenamiento-san/nfs-compartido
-  template:
-    metadata:
-      labels:
-        app: almacenamiento-san/nfs-compartido
-    spec:
-      containers:
-      - name: almacenamiento-san/nfs-compartido
-        image: nginx:alpine
-        ports:
-        - containerPort: 80
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: almacenamiento-san/nfs-compartido-svc
-spec:
-  selector:
-    app: almacenamiento-san/nfs-compartido
-  ports:
-  - port: 80
-    targetPort: 80
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: message-broker-rabbitmq
+  namespace: default
   labels:
     app: message-broker-rabbitmq
     managed-by: cloudmove
@@ -535,6 +390,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: message-broker-rabbitmq-svc
+  namespace: default
 spec:
   selector:
     app: message-broker-rabbitmq

@@ -11,12 +11,21 @@ from app.dependencies.resolver import resolve_dependencies
 from app.translators.aws import translate_cmir_to_aws
 from app.generators.terraform import generate_aws_terraform
 from app.config import AWS_OUTPUT_PATH, CORS_ORIGINS, INVENTORY_PATH, LOG_LEVEL
-from app.api.routers import architecture, migration
+from app.api.routers import architecture, migration, discovery
+
+class _CorrelationIdFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "correlation_id"):
+            record.correlation_id = "-"
+        return True
+
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
     format="%(asctime)s [%(levelname)s] [ReqID: %(correlation_id)s] %(message)s",
 )
+for _handler in logging.root.handlers:
+    _handler.addFilter(_CorrelationIdFilter())
 logger = logging.getLogger("cloudmove")
 
 app = FastAPI(
@@ -46,6 +55,8 @@ async def add_correlation_id(request: Request, call_next):
 # Include Routers
 app.include_router(architecture.router)
 app.include_router(migration.router)
+app.include_router(discovery.router)
+
 
 
 def load_inventory():

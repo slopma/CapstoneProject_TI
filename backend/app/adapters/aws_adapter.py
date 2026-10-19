@@ -12,20 +12,26 @@ AWS_RESOURCE_MAP = {
     "database": "aws_db_instance",
     "cache": "aws_elasticache_cluster",
     "storage": "aws_s3_bucket",
+    "san_storage": "aws_ebs_volume",
+    "volume": "aws_ebs_volume",
     "bucket": "aws_s3_bucket",
     "network": "aws_vpc",
     "vpc": "aws_vpc",
     "subnet": "aws_subnet",
+    "vlan": "aws_subnet",
     "security_boundary": "aws_security_group",
     "security_group": "aws_security_group",
+    "firewall": "aws_security_group",
     "cluster": "aws_eks_cluster",
     "kubernetes_cluster": "aws_eks_cluster",
     "kubernetes_namespace": "aws_eks_node_group",
     "namespace": "aws_eks_node_group",
     "load_balancer": "aws_lb",
+    "ingress": "aws_lb",
     "queue": "aws_sqs_queue",
     "topic": "aws_sns_topic",
     "identity": "aws_iam_role",
+    "role": "aws_iam_role",
     "secret": "aws_secretsmanager_secret",
 }
 
@@ -36,7 +42,8 @@ class AWSAdapter(BaseProviderAdapter):
         return "aws"
 
     def translate_node(self, node: CMIRNode) -> Dict[str, Any]:
-        target_type = AWS_RESOURCE_MAP.get(node.type.lower(), "aws_instance")
+        node_type_lower = node.type.lower()
+        target_type = AWS_RESOURCE_MAP.get(node_type_lower, "aws_instance")
 
         safe_name = node.name.lower().replace(" ", "-").replace("_", "-")
         safe_id = node.id.lower().replace("-", "_").replace(".", "_")
@@ -52,10 +59,11 @@ class AWSAdapter(BaseProviderAdapter):
             "platform": node.platform,
             "location": node.location or "us-east-1",
             "environment": node.environment or "production",
-            "security": node.security,
-            "network": node.network,
-            "metadata": node.metadata,
+            "security": node.security or {},
+            "network": node.network or {},
+            "metadata": node.metadata or {},
         }
 
     def translate_cmir(self, cmir: CMIR) -> List[Dict[str, Any]]:
         return [self.translate_node(node) for node in cmir.resources]
+

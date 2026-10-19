@@ -2,15 +2,15 @@ import React from "react";
 
 function Breadcrumbs({ breadcrumbs, onNavigate, onReset, onBack }) {
   return (
-    <nav className="enterprise-breadcrumbs" aria-label="Architecture navigation path">
+    <nav className="enterprise-breadcrumbs" aria-label="Ruta de navegación de arquitectura">
       {breadcrumbs && breadcrumbs.length > 1 && (
         <button
           type="button"
           className="back-btn-sm"
           onClick={onBack}
-          title="Regresar al nivel anterior"
+          title="Regresar al contenedor superior"
         >
-          &larr; Back
+          &larr; Nivel anterior
         </button>
       )}
 
@@ -19,27 +19,27 @@ function Breadcrumbs({ breadcrumbs, onNavigate, onReset, onBack }) {
         className="breadcrumb-node root-node"
         onClick={onReset}
       >
-        Root Architecture
+        Arquitectura raíz
       </button>
 
-      {breadcrumbs && breadcrumbs.map((item, idx) => {
-        const isLast = idx === breadcrumbs.length - 1;
-        return (
-          <React.Fragment key={item.id}>
-            <span className="breadcrumb-sep">&gt;</span>
-            <button
-              type="button"
-              className={`breadcrumb-node ${isLast ? "active" : ""}`}
-              onClick={() => onNavigate(item.id)}
-              disabled={isLast}
-              title={item.name}
-            >
-              <span className="level-tag">L{item.level ?? 0}</span>
-              <span className="node-title">{item.name}</span>
-            </button>
-          </React.Fragment>
-        );
-      })}
+      {breadcrumbs &&
+        breadcrumbs.map((item, idx) => {
+          const isLast = idx === breadcrumbs.length - 1;
+          return (
+            <React.Fragment key={item.id}>
+              <span className="breadcrumb-sep" aria-hidden="true">/</span>
+              <button
+                type="button"
+                className={`breadcrumb-node ${isLast ? "active" : ""}`}
+                onClick={() => onNavigate(item.id)}
+                disabled={isLast}
+                title={item.name}
+              >
+                <span className="node-title">{item.name}</span>
+              </button>
+            </React.Fragment>
+          );
+        })}
     </nav>
   );
 }

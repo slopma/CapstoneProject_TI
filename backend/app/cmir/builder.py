@@ -29,7 +29,28 @@ TYPE_LEVEL_MAP = {
     "topic": 8,
     "identity": 8,
     "secret": 8,
+    # Discovery & Host-level semantic types (CMIR v2 compatible)
+    "host": 1,
+    "discovery_group": 2,
+    "network_interface": 3,
+    "route": 3,
+    "gateway": 3,
+    "os": 4,
+    "firmware": 4,
+    "hardware_component": 5,
+    "cpu": 5,
+    "memory": 5,
+    "block_device": 5,
+    "partition": 6,
+    "filesystem": 6,
+    "package_group": 6,
+    "systemd_service": 7,
+    "kernel_module": 7,
+    "process": 7,
+    "listening_port": 8,
+    "remote_endpoint": 8,
 }
+
 
 
 def build_hierarchical_cmir(

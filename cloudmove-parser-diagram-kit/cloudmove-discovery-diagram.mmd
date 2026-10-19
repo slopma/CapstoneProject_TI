@@ -1,0 +1,22 @@
+flowchart TB
+  H["rabbitmq-kali<br/>Kali GNU/Linux 2026.3<br/>IdeaPad Gaming 3 15IAH7<br/>CPU 10 physical / 16 logical · RAM 15.35 GiB"]
+  HW["Hardware<br/>12th Gen Intel(R) Core(TM) i7-12650H<br/>/dev/nvme0n1: 476.9 GiB (estimate)<br/>Root /: 452.0 GiB total"]
+  NET["Primary network<br/>wlan0: 10.10.37.219/23<br/>Subnet: 10.10.36.0/23<br/>Gateway: 10.10.36.1"]
+  SW["Runtime / software<br/>358 processes · 4,297 installed Debian packages<br/>379 systemd units · 227 kernel modules"]
+  LISTEN["Listening services<br/>2 SSH listener(s) on TCP/22; see report for full list<br/>Socket snapshot: 980 records"]
+  PEERS["Remote endpoints observed<br/>9 public remote IPs; 9 TCP/443 endpoints<br/>Processes observed: firefox-esr, code, agy, codex<br/>Not confirmed dependencies"]
+  NOTE["Caveat<br/>Single laptop snapshot; not rack-wide discovery<br/>Network edges are observed sockets, not confirmed dependencies"]
+  H --> HW
+  H --> NET
+  H --> SW
+  H --> LISTEN
+  NET -. observed connections .-> PEERS
+  PEERS -. interpret cautiously .-> NOTE
+  classDef host fill:#173b67,color:#fff,stroke:#173b67,stroke-width:2px;
+  classDef hardware fill:#e8f2ff,stroke:#7ba9e5,color:#14243a;
+  classDef network fill:#e4f7ef,stroke:#75c7a1,color:#14243a;
+  classDef warn fill:#fff0ef,stroke:#e99b94,color:#14243a;
+  class H host;
+  class HW,SW hardware;
+  class NET,LISTEN network;
+  class PEERS,NOTE warn;

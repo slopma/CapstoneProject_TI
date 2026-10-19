@@ -10,7 +10,13 @@ from app.dependencies.validator import validate_migration_subgraph
 from app.adapters.aws_adapter import AWSAdapter
 from app.adapters.azure_adapter import AzureAdapter
 from app.adapters.k8s_adapter import KubernetesAdapter
-from app.generators.terraform import generate_aws_terraform, generate_azure_terraform, generate_k8s_manifests
+from app.generators.terraform import (
+    generate_aws_terraform,
+    generate_azure_terraform,
+    generate_k8s_manifests,
+    generate_aws_terraform_files,
+    generate_azure_terraform_files,
+)
 from app.config import INVENTORY_PATH, AWS_OUTPUT_PATH, AZURE_OUTPUT_PATH, K8S_OUTPUT_PATH
 
 router = APIRouter(prefix="/api/v1/migration", tags=["Migration Engine"])
@@ -105,27 +111,31 @@ def generate_migration_iac(request: SelectionRequest):
             }
         }
 
+    files_map = {}
     if target == "aws":
         adapter = AWSAdapter()
         translated_resources = adapter.translate_cmir(sub_cmir)
-        code = generate_aws_terraform(translated_resources)
+        files_map = generate_aws_terraform_files(translated_resources)
         output_path = AWS_OUTPUT_PATH
+        code = files_map["main.tf"]
     elif target == "azure":
         adapter = AzureAdapter()
         translated_resources = adapter.translate_cmir(sub_cmir)
-        code = generate_azure_terraform(translated_resources)
+        files_map = generate_azure_terraform_files(translated_resources)
         output_path = AZURE_OUTPUT_PATH
+        code = files_map["main.tf"]
     elif target in ("k8s", "kubernetes"):
         adapter = KubernetesAdapter()
         translated_resources = adapter.translate_cmir(sub_cmir)
         code = generate_k8s_manifests(translated_resources)
+        files_map = {"manifests.yaml": code}
         output_path = K8S_OUTPUT_PATH
     else:
         raise HTTPException(status_code=400, detail=f"Proveedor de destino '{target}' no soportado.")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w") as f:
-        f.write(code)
+    for fname, fcontent in files_map.items():
+        (output_path.parent / fname).write_text(fcontent)
 
     return {
         "status": "generated",
@@ -141,5 +151,7 @@ def generate_migration_iac(request: SelectionRequest):
         "resources_generated": [res.id for res in selected_nodes],
         "output_path": str(output_path),
         "validation": validation,
+        "files": files_map,
         "iac_code": code,
     }
+

@@ -26,10 +26,9 @@ function MigrationPreviewModal({
       <div className="enterprise-modal-card" onClick={(e) => e.stopPropagation()}>
         <header className="modal-top-header">
           <div className="modal-title-meta">
-            <span className="modal-scope-tag">MIGRATION SCOPE PREVIEW</span>
             <h2 className="modal-heading">Granular Subgraph Migration & Target Translation</h2>
           </div>
-          <button type="button" className="modal-close-x" onClick={onClose}>
+          <button type="button" className="modal-close-x" onClick={onClose} aria-label="Cerrar modal">
             &times;
           </button>
         </header>
@@ -111,6 +110,7 @@ function MigrationPreviewModal({
               </div>
               <IaCViewer
                 code={generationResult.iac_code || generationResult.terraform}
+                files={generationResult.files}
                 language={targetProvider === "kubernetes" ? "yaml" : "hcl"}
                 filename={filenameMap[targetProvider] || "main.tf"}
               />

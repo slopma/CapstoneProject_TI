@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "f720a1e2-4c42-4215-8ba5-acc6ed4c6282",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/home/lacastrilp/Documentos/Semestre 2026-2/CapstoneProject_TI/.archify/architecture-aws-target-20261019-160600/candidate.json",
+  "output": "/home/lacastrilp/Documentos/Semestre 2026-2/CapstoneProject_TI/.archify/architecture-aws-target-20261019-160600/aws-target.html",
+  "specification": {
+    "sha256": "b6c493bc8be29d2e3c6f5b97c1cd28fab931f14c69032f114564c901ce99a1e1",
+    "bytes": 4638
+  },
+  "artifact": {
+    "sha256": "b514856179c86fbbedaf5b1b6667246c5202e02fb03bcad0167a812eb68b4e04",
+    "bytes": 823914
+  }
+}

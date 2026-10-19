@@ -11,18 +11,16 @@ function MigrationPreviewModal({
   const directDeps = dependencies?.required_direct || [];
   const transitiveDeps = dependencies?.required_transitive || [];
   const sharedDeps = dependencies?.shared_dependencies || [];
-  const optionalDeps = dependencies?.optional_dependencies || [];
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-container" onClick={(e) => e.stopPropagation()}>
         <header className="modal-header">
           <div>
-            <span className="step-pill">Migration Scope Preview</span>
             <h2>Vista Previa de la Migración Granular</h2>
           </div>
-          <button type="button" className="close-panel-btn" onClick={onClose}>
-            ✕
+          <button type="button" className="close-panel-btn" onClick={onClose} aria-label="Cerrar modal">
+            &times;
           </button>
         </header>
 

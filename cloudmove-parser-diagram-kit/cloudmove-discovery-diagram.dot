@@ -1,0 +1,35 @@
+digraph CloudMoveDiscovery {
+  graph [rankdir=LR, bgcolor="#f7f9fc", pad="0.28", nodesep="0.52", ranksep="0.75", splines=polyline, fontname="DejaVu Sans", labelloc="t", label="CLOUDMOVE · OSQUERY DISCOVERY MAP", fontsize=22, fontcolor="#16243a", compound=true];
+  node [shape=box, style="rounded,filled", fontname="DejaVu Sans", fontsize=10, margin="0.17,0.12", color="#c6d0df", fontcolor="#14243a", fillcolor="#ffffff", penwidth=1.2];
+  edge [fontname="DejaVu Sans", fontsize=9, color="#64748b", fontcolor="#475569", arrowsize=0.7, penwidth=1.2];
+  host [label="rabbitmq-kali\nKali GNU/Linux 2026.3 · x86_64\nosquery osqueryi version 5.23.1\nCollected: 2026-10-19T17:45:34+00:00\nSingle-host discovery", fillcolor="#173b67", fontcolor="#ffffff", color="#173b67", penwidth=2.0, fontsize=12];
+  hardware [label="Hardware\nLENOVO · IdeaPad Gaming 3 15IAH7\nCPU: 12th Gen Intel(R) Core(TM) i7-12650H\n10 physical / 16 logical cores\nRAM: 15.35 GiB", fillcolor="#e8f2ff", color="#7ba9e5"];
+  storage [label="Storage snapshot\n/dev/nvme0n1: 476.9 GiB (estimate)\nRoot /: 452.0 GiB total; 240.8 GiB available (estimate)", fillcolor="#e8f2ff", color="#7ba9e5"];
+  runtime [label="Software / runtime inventory\nProcesses: 358\nInstalled Debian packages: 4,297\nsystemd units: 379 · kernel modules: 227\nSocket records queried: 980", fillcolor="#f0eafe", color="#b39be8"];
+  services [label="Listening services (snapshot)\nsshd · TCP/22 (all interfaces)\navahi-daemon · UDP/5353 (all interfaces)\nollama · TCP/11434 (loopback)\nagy · TCP/33535 (loopback)\ncode · TCP/33843 (loopback)\nagy · TCP/37559 (loopback)", fillcolor="#fff4dd", color="#e7bd63"];
+  network [label="Primary interface: wlan0\n10.10.37.219/23\nSubnet: 10.10.36.0/23\nDefault gateway: 10.10.36.1", fillcolor="#e4f7ef", color="#75c7a1"];
+  docker [label="Docker bridge: docker0\n172.17.0.1/16", fillcolor="#e4f7ef", color="#75c7a1"];
+  loopback [label="Loopback
+127.0.0.1 / ::1
+Local-only listeners are not LAN services", fillcolor="#e4f7ef", color="#75c7a1"];
+  peers [label="Remote peers observed (snapshot)\n9 public IP(s); 9 unique TCP/443 endpoint(s)\nProcesses seen: firefox-esr, code, agy, codex\nNot proof of application dependencies", fillcolor="#fff0ef", color="#e99b94"];
+  dhcp [label="DHCP peer observed\n10.10.36.2:67/UDP", fillcolor="#fff4dd", color="#e7bd63"];
+  gateway [label="Default gateway
+10.10.36.1", fillcolor="#eef2f6", color="#aab6c6"];
+  notes [label="Validation notes\n16/16 queries successful; 0 query errors\nThis asset is identified as a laptop, not a rack server.\nNetwork edges are observed sockets, not confirmed dependencies.", fillcolor="#fff0ef", color="#e99b94"];
+  host -> hardware [label="identity / CPU / RAM"];
+  host -> storage [label="block devices / mounts"];
+  host -> runtime [label="software / processes"];
+  host -> network [label="interface / route"];
+  host -> services [label="listening sockets"];
+  network -> gateway [label="default route"];
+  network -> docker [label="local bridge"];
+  network -> loopback [label="local interface"];
+  network -> peers [label="outbound sockets observed", style=dashed, color="#c45151"];
+  network -> dhcp [label="UDP/67 peer", style=dashed];
+  runtime -> services [label="PID → process", style=dotted];
+  peers -> notes [style=dotted, arrowhead=none, label="interpret cautiously"];
+  {rank=same; hardware; storage;}
+  {rank=same; runtime; services;}
+  {rank=same; peers; dhcp; gateway; docker; loopback;}
+}

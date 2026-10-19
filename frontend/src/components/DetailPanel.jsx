@@ -22,16 +22,13 @@ function DetailPanel({ node, allNodes, edges, onClose, onSelectNode, targetProvi
   return (
     <aside className="detail-panel">
       <header className="panel-header">
-        <div className="panel-title-group">
-          <span className="level-badge">LEVEL {node.level ?? 0}</span>
-          <span className="type-badge">{node.type}</span>
-          {node.is_shared && <span className="shared-badge">COMPARTIDO</span>}
-        </div>
         <h2>{node.name}</h2>
-        <p className="node-id">ID: <code>{node.id}</code></p>
+        <p className="node-id">
+          <span>{node.type}</span> · ID: <code>{node.id}</code>
+        </p>
 
-        <button type="button" className="close-panel-btn" onClick={onClose} title="Cerrar panel">
-          ✕
+        <button type="button" className="close-panel-btn" onClick={onClose} title="Cerrar panel" aria-label="Cerrar panel">
+          &times;
         </button>
       </header>
 
