@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { getApiBase } from "../../utils/apiClient";
+import { getApiBase, buildUrl } from "../../utils/apiClient";
 
 const AGENT_URL = "http://127.0.0.1:8765";
 
@@ -35,7 +35,7 @@ export default function CloudMoveDiscovery({
     const candidates = Array.from(new Set([apiBaseUrl, getApiBase(), ""].filter((c) => c !== undefined && c !== null)));
     for (const candidate of candidates) {
       try {
-        const url = candidate ? `${candidate.replace(/\/+$/, "")}/api/v1/discovery/osquery-catalog` : "/api/v1/discovery/osquery-catalog";
+        const url = buildUrl(candidate, "/api/v1/discovery/osquery-catalog");
         const res = await fetch(url);
         if (res.ok) {
           const data = await res.json();
@@ -99,7 +99,7 @@ export default function CloudMoveDiscovery({
             const candidates = Array.from(new Set([apiBaseUrl, getApiBase(), ""].filter((c) => c !== undefined && c !== null)));
             for (const base of candidates) {
               try {
-                const url = base ? `${base.replace(/\/+$/, "")}/api/v1/discovery/import` : "/api/v1/discovery/import";
+                const url = buildUrl(base, "/api/v1/discovery/import");
                 const importRes = await fetch(url, {
                   method: "POST",
                   headers: {
@@ -145,22 +145,29 @@ export default function CloudMoveDiscovery({
       );
 
       let bridgeRes = null;
+      let lastBridgeErr = null;
       const candidates = Array.from(new Set([apiBaseUrl, getApiBase(), ""].filter((c) => c !== undefined && c !== null)));
       for (const base of candidates) {
         try {
-          const url = base ? `${base.replace(/\/+$/, "")}/api/v1/discovery/collect-device` : "/api/v1/discovery/collect-device";
+          const url = buildUrl(base, "/api/v1/discovery/collect-device");
           const r = await fetch(url, {
             method: "POST",
           });
+          if (r.status === 502 || r.status === 504) {
+            bridgeRes = r;
+            continue;
+          }
           bridgeRes = r;
-          break;
-        } catch {
-          // try next
+          if (r.ok) {
+            break;
+          }
+        } catch (err) {
+          lastBridgeErr = err;
         }
       }
 
       if (!bridgeRes) {
-        throw new TypeError("Failed to fetch");
+        throw lastBridgeErr || new TypeError("Failed to fetch");
       }
 
       const sessionJson = await bridgeRes.json().catch(() => ({}));
@@ -223,8 +230,9 @@ export default function CloudMoveDiscovery({
       }
 
       if (lastResult?.session_id) {
+        const exportUrl = buildUrl(apiBaseUrl, `/api/v1/discovery/sessions/${lastResult.session_id}/export?format=json`);
         window.open(
-          `${apiBaseUrl}/api/v1/discovery/sessions/${lastResult.session_id}/export?format=json`,
+          exportUrl,
           "_blank",
           "noopener,noreferrer"
         );

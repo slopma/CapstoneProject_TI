@@ -21,11 +21,16 @@ export function getApiBase() {
 }
 
 export function buildUrl(base, path) {
-  const cleanPath = path.startsWith("/") ? path : `/${path}`;
+  const cleanPath = path ? (path.startsWith("/") ? path : `/${path}`) : "";
   if (!base) return cleanPath;
   const cleanBase = base.replace(/\/+$/, "");
-  if (cleanBase.endsWith("/api") && cleanPath.startsWith("/api/")) {
-    return `${cleanBase}${cleanPath.substring(4)}`;
+  if (cleanBase.endsWith("/api")) {
+    if (cleanPath === "/api" || cleanPath === "/api/") {
+      return cleanBase;
+    }
+    if (cleanPath.startsWith("/api/")) {
+      return `${cleanBase}${cleanPath.substring(4)}`;
+    }
   }
   return `${cleanBase}${cleanPath}`;
 }

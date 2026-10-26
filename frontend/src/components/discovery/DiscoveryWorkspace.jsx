@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { getApiBase } from "../../utils/apiClient";
+import { getApiBase, buildUrl } from "../../utils/apiClient";
 import DiscoveryDiagramCanvas from "./DiscoveryDiagramCanvas";
 import CloudMoveDiscovery from "./CloudMoveDiscovery";
 import DataCenterCampaignPanel from "./DataCenterCampaignPanel";
@@ -142,8 +142,7 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
 
       for (const base of candidates) {
         try {
-          const cleanPath = path.startsWith("/") ? path : `/${path}`;
-          const targetUrl = base ? `${base.replace(/\/+$/, "")}${cleanPath}` : cleanPath;
+          const targetUrl = buildUrl(base, path);
           const res = await fetch(targetUrl, options);
           // Vite proxy returns 502/504 or 500 empty when target is ECONNREFUSED
           if (res.status === 502 || res.status === 504) {
@@ -266,7 +265,7 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
   };
 
   const handleDownloadCollectorScript = () => {
-    const url = `${resolvedApiBase}/api/v1/discovery/collector-script`;
+    const url = buildUrl(resolvedApiBase, "/api/v1/discovery/collector-script");
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
@@ -330,7 +329,7 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
 
   const handleExport = (fmt) => {
     if (!sessionData?.session_id) return;
-    const url = `${resolvedApiBase}/api/v1/discovery/sessions/${sessionData.session_id}/export?format=${fmt}`;
+    const url = buildUrl(resolvedApiBase, `/api/v1/discovery/sessions/${sessionData.session_id}/export?format=${fmt}`);
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
