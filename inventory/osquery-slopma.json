@@ -1,0 +1,682 @@
+{
+  "architecture_name": "osquery Host (slopma)",
+  "provider": "on-premise",
+  "metadata": {
+    "source": "cloudmove.discovery.v1",
+    "hostname": "slopma",
+    "os": "Kali GNU/Linux Rolling 2026.3",
+    "discovered_resources_count": 26,
+    "discovered_relationships_count": 31,
+    "collector": "cloudmove_osquery_export.py"
+  },
+  "resources": [
+    {
+      "id": "scope-onprem-slopma",
+      "name": "On-Premise Infrastructure (slopma)",
+      "type": "provider",
+      "level": 1,
+      "parent_id": null,
+      "specs": {
+        "provider": "on-premise",
+        "discovery_method": "cloudmove.discovery.v1",
+        "host_os": "Kali GNU/Linux Rolling 2026.3"
+      },
+      "metadata": {
+        "collector": "cloudmove_osquery_export.py",
+        "collected_at": "2026-10-19T21:36:17+00:00",
+        "hardware_vendor": "Generic",
+        "hardware_model": "x86_64"
+      },
+      "is_shared": false
+    },
+    {
+      "id": "net-slopma",
+      "name": "LAN Subnet (10.10.38.42)",
+      "type": "network",
+      "level": 2,
+      "parent_id": "scope-onprem-slopma",
+      "specs": {
+        "cidr_block": "10.10.38.42/24",
+        "interface_count": 6
+      },
+      "metadata": {
+        "discovered_interfaces": 6
+      },
+      "is_shared": false
+    },
+    {
+      "id": "host-slopma",
+      "name": "Host Server: slopma",
+      "type": "compute",
+      "level": 3,
+      "parent_id": "net-slopma",
+      "specs": {
+        "instance_type": "onprem-4vCPU-9GB",
+        "cpu_cores": 4,
+        "memory_gb": 9.6,
+        "os": "Kali GNU/Linux Rolling",
+        "ip_address": "10.10.38.42"
+      },
+      "metadata": {
+        "hardware_vendor": "Generic",
+        "hardware_model": "x86_64",
+        "cpu_type": "x86_64",
+        "uuid": null
+      },
+      "is_shared": false
+    },
+    {
+      "id": "vol-slopma-1",
+      "name": "Storage Volume (/)",
+      "type": "storage",
+      "level": 4,
+      "parent_id": "host-slopma",
+      "specs": {
+        "mount_point": "/",
+        "filesystem": "ext4",
+        "device": "/dev/sda1"
+      },
+      "metadata": {
+        "device": "/dev/sda1"
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-kdeconnectd-45612",
+      "name": "Kdeconnectd Service (Port 45612)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 45612,
+        "protocol": "udp",
+        "bind_address": "0.0.0.0:45612",
+        "process_name": "kdeconnectd",
+        "process_path": "/usr/bin/kdeconnectd",
+        "pid": 2640
+      },
+      "metadata": {
+        "process_name": "kdeconnectd",
+        "listening_port": 45612
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-kdeconnectd-5353",
+      "name": "Kdeconnectd Service (Port 5353)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 5353,
+        "protocol": "udp",
+        "bind_address": "0.0.0.0:5353",
+        "process_name": "kdeconnectd",
+        "process_path": "/usr/bin/kdeconnectd",
+        "pid": 2640
+      },
+      "metadata": {
+        "process_name": "kdeconnectd",
+        "listening_port": 5353
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-kdeconnectd-48565",
+      "name": "Kdeconnectd Service (Port 48565)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 48565,
+        "protocol": "udp",
+        "bind_address": "0.0.0.0:48565",
+        "process_name": "kdeconnectd",
+        "process_path": "/usr/bin/kdeconnectd",
+        "pid": 2640
+      },
+      "metadata": {
+        "process_name": "kdeconnectd",
+        "listening_port": 48565
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-kdeconnectd-41568",
+      "name": "Kdeconnectd Service (Port 41568)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 41568,
+        "protocol": "udp",
+        "bind_address": "0.0.0.0:41568",
+        "process_name": "kdeconnectd",
+        "process_path": "/usr/bin/kdeconnectd",
+        "pid": 2640
+      },
+      "metadata": {
+        "process_name": "kdeconnectd",
+        "listening_port": 41568
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-kdeconnectd-34702",
+      "name": "Kdeconnectd Service (Port 34702)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 34702,
+        "protocol": "udp",
+        "bind_address": "0.0.0.0:34702",
+        "process_name": "kdeconnectd",
+        "process_path": "/usr/bin/kdeconnectd",
+        "pid": 2640
+      },
+      "metadata": {
+        "process_name": "kdeconnectd",
+        "listening_port": 34702
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-kdeconnectd-44276",
+      "name": "Kdeconnectd Service (Port 44276)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 44276,
+        "protocol": "udp",
+        "bind_address": "0.0.0.0:44276",
+        "process_name": "kdeconnectd",
+        "process_path": "/usr/bin/kdeconnectd",
+        "pid": 2640
+      },
+      "metadata": {
+        "process_name": "kdeconnectd",
+        "listening_port": 44276
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-kdeconnectd-45087",
+      "name": "Kdeconnectd Service (Port 45087)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 45087,
+        "protocol": "udp",
+        "bind_address": "0.0.0.0:45087",
+        "process_name": "kdeconnectd",
+        "process_path": "/usr/bin/kdeconnectd",
+        "pid": 2640
+      },
+      "metadata": {
+        "process_name": "kdeconnectd",
+        "listening_port": 45087
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-kdeconnectd-58403",
+      "name": "Kdeconnectd Service (Port 58403)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 58403,
+        "protocol": "udp",
+        "bind_address": "*:58403",
+        "process_name": "kdeconnectd",
+        "process_path": "/usr/bin/kdeconnectd",
+        "pid": 2640
+      },
+      "metadata": {
+        "process_name": "kdeconnectd",
+        "listening_port": 58403
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-kdeconnectd-1716",
+      "name": "Kdeconnectd Service (Port 1716)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 1716,
+        "protocol": "udp",
+        "bind_address": "*:1716",
+        "process_name": "kdeconnectd",
+        "process_path": "/usr/bin/kdeconnectd",
+        "pid": 2640
+      },
+      "metadata": {
+        "process_name": "kdeconnectd",
+        "listening_port": 1716
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-kdeconnectd-34579",
+      "name": "Kdeconnectd Service (Port 34579)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 34579,
+        "protocol": "udp",
+        "bind_address": "*:34579",
+        "process_name": "kdeconnectd",
+        "process_path": "/usr/bin/kdeconnectd",
+        "pid": 2640
+      },
+      "metadata": {
+        "process_name": "kdeconnectd",
+        "listening_port": 34579
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-kdeconnectd-60865",
+      "name": "Kdeconnectd Service (Port 60865)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 60865,
+        "protocol": "udp",
+        "bind_address": "*:60865",
+        "process_name": "kdeconnectd",
+        "process_path": "/usr/bin/kdeconnectd",
+        "pid": 2640
+      },
+      "metadata": {
+        "process_name": "kdeconnectd",
+        "listening_port": 60865
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-service-5542",
+      "name": "Service Service (Port 5542)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 5542,
+        "protocol": "tcp",
+        "bind_address": "0.0.0.0:5542",
+        "process_name": "service",
+        "process_path": "/usr/bin/service",
+        "pid": 1000
+      },
+      "metadata": {
+        "process_name": "service",
+        "listening_port": 5542
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-antigravity-ide-43915",
+      "name": "Antigravity-ide Service (Port 43915)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 43915,
+        "protocol": "tcp",
+        "bind_address": "127.0.0.1:43915",
+        "process_name": "antigravity-ide",
+        "process_path": "/usr/bin/antigravity-ide",
+        "pid": 89864
+      },
+      "metadata": {
+        "process_name": "antigravity-ide",
+        "listening_port": 43915
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-language_server-40157",
+      "name": "Language_server Service (Port 40157)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 40157,
+        "protocol": "tcp",
+        "bind_address": "127.0.0.1:40157",
+        "process_name": "language_server",
+        "process_path": "/usr/bin/language_server",
+        "pid": 90083
+      },
+      "metadata": {
+        "process_name": "language_server",
+        "listening_port": 40157
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-language_server-40649",
+      "name": "Language_server Service (Port 40649)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 40649,
+        "protocol": "tcp",
+        "bind_address": "127.0.0.1:40649",
+        "process_name": "language_server",
+        "process_path": "/usr/bin/language_server",
+        "pid": 90083
+      },
+      "metadata": {
+        "process_name": "language_server",
+        "listening_port": 40649
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-python3-8000",
+      "name": "Python3 Service (Port 8000)",
+      "type": "service",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 8000,
+        "protocol": "tcp",
+        "bind_address": "127.0.0.1:8000",
+        "process_name": "python3",
+        "process_path": "/usr/bin/python3",
+        "pid": 199455
+      },
+      "metadata": {
+        "process_name": "python3",
+        "listening_port": 8000
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-antigravity-ide-39903",
+      "name": "Antigravity-ide Service (Port 39903)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 39903,
+        "protocol": "tcp",
+        "bind_address": "127.0.0.1:39903",
+        "process_name": "antigravity-ide",
+        "process_path": "/usr/bin/antigravity-ide",
+        "pid": 89864
+      },
+      "metadata": {
+        "process_name": "antigravity-ide",
+        "listening_port": 39903
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-language_server-38257",
+      "name": "Language_server Service (Port 38257)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 38257,
+        "protocol": "tcp",
+        "bind_address": "127.0.0.1:38257",
+        "process_name": "language_server",
+        "process_path": "/usr/bin/language_server",
+        "pid": 190128
+      },
+      "metadata": {
+        "process_name": "language_server",
+        "listening_port": 38257
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-language_server-46675",
+      "name": "Language_server Service (Port 46675)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 46675,
+        "protocol": "tcp",
+        "bind_address": "127.0.0.1:46675",
+        "process_name": "language_server",
+        "process_path": "/usr/bin/language_server",
+        "pid": 190128
+      },
+      "metadata": {
+        "process_name": "language_server",
+        "listening_port": 46675
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-language_server-45981",
+      "name": "Language_server Service (Port 45981)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 45981,
+        "protocol": "tcp",
+        "bind_address": "127.0.0.1:45981",
+        "process_name": "language_server",
+        "process_path": "/usr/bin/language_server",
+        "pid": 190128
+      },
+      "metadata": {
+        "process_name": "language_server",
+        "listening_port": 45981
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-antigravity-ide-37843",
+      "name": "Antigravity-ide Service (Port 37843)",
+      "type": "workload",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 37843,
+        "protocol": "tcp",
+        "bind_address": "127.0.0.1:37843",
+        "process_name": "antigravity-ide",
+        "process_path": "/usr/bin/antigravity-ide",
+        "pid": 90130
+      },
+      "metadata": {
+        "process_name": "antigravity-ide",
+        "listening_port": 37843
+      },
+      "is_shared": false
+    },
+    {
+      "id": "svc-mainthread-5173",
+      "name": "Mainthread Service (Port 5173)",
+      "type": "service",
+      "level": 5,
+      "parent_id": "host-slopma",
+      "specs": {
+        "port": 5173,
+        "protocol": "tcp",
+        "bind_address": "[::1]:5173",
+        "process_name": "MainThread",
+        "process_path": "/usr/bin/MainThread",
+        "pid": 142762
+      },
+      "metadata": {
+        "process_name": "MainThread",
+        "listening_port": 5173
+      },
+      "is_shared": false
+    }
+  ],
+  "relationships": [
+    {
+      "source": "scope-onprem-slopma",
+      "target": "net-slopma",
+      "type": "contains"
+    },
+    {
+      "source": "net-slopma",
+      "target": "host-slopma",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "vol-slopma-1",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-kdeconnectd-45612",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-kdeconnectd-5353",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-kdeconnectd-48565",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-kdeconnectd-41568",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-kdeconnectd-34702",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-kdeconnectd-44276",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-kdeconnectd-45087",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-kdeconnectd-58403",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-kdeconnectd-1716",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-kdeconnectd-34579",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-kdeconnectd-60865",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-service-5542",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-antigravity-ide-43915",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-language_server-40157",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-language_server-40649",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-python3-8000",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-antigravity-ide-39903",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-language_server-38257",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-language_server-46675",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-language_server-45981",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-antigravity-ide-37843",
+      "type": "contains"
+    },
+    {
+      "source": "host-slopma",
+      "target": "svc-mainthread-5173",
+      "type": "contains"
+    },
+    {
+      "source": "svc-service-5542",
+      "target": "svc-antigravity-ide-43915",
+      "type": "depends_on"
+    },
+    {
+      "source": "svc-service-5542",
+      "target": "svc-language_server-45981",
+      "type": "depends_on"
+    },
+    {
+      "source": "svc-service-5542",
+      "target": "svc-language_server-40157",
+      "type": "depends_on"
+    },
+    {
+      "source": "svc-service-5542",
+      "target": "svc-antigravity-ide-37843",
+      "type": "depends_on"
+    },
+    {
+      "source": "svc-service-5542",
+      "target": "svc-language_server-38257",
+      "type": "depends_on"
+    },
+    {
+      "source": "svc-service-5542",
+      "target": "svc-mainthread-5173",
+      "type": "depends_on"
+    }
+  ]
+}

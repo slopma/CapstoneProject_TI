@@ -259,7 +259,7 @@ variable "ami_id" {
         main_lines.append(f'# Migrated Resource: {r.get("name")} ({r.get("id")})')
 
         if r_type == "aws_instance":
-            ami_expr = 'var.ami_id != "" ? var.ami_id : "ami-0c55b159cbfafe1f0"'
+            ami_expr = 'var.ami_id != "" ? var.ami_id : "ami-04b938437b69a2c9c"'
             for other_r in resources:
                 if other_r.get("type") in ("aws_ami", "machine_image") or other_r.get("cmir_type") in ("machine_image", "vm_image"):
                     other_id = other_r.get("safe_id", other_r.get("id").replace("-", "_"))
@@ -411,7 +411,7 @@ variable "ami_id" {
         elif r_type not in ("aws_vpc", "aws_subnet", "aws_security_group", "aws_security_group_rule", "aws_ami_data_source"):
             main_lines.extend([
                 f'resource "aws_instance" "{r_id}" {{',
-                '  ami           = "ami-0c55b159cbfafe1f0"',
+                '  ami           = "ami-04b938437b69a2c9c"',
                 '  instance_type = "t3.micro"',
                 '  subnet_id     = aws_subnet.public_subnet.id',
                 '  tags = {',

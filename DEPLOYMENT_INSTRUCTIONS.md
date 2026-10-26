@@ -1,160 +1,156 @@
-# Guia Paso a Paso: Despliegue y Montaje de Sistema Operativo e Imagen de VM en AWS EC2
-**Servidor Origen:** Migración SO Host en Vivo (rabbitmq-kali-live-os) → AWS | **ID de Migracion:** mig-vm_-aws-93b6b2
-**Sistema Operativo:** Kali GNU/Linux Rolling (Kernel: `7.1.5+kali-amd64`, `x86_64`)
-**Arranque / Particionado:** `UEFI` (`GPT`) | **Disco Principal:** `/dev/nvme0n1` (476.94 GiB prov, 233.66 GiB usados)
-**Usuarios Descubiertos:** root, www-data, mysql, redis, postgres, lacastrilp, rabbitmq | **Paquetes Inventariados:** 4324
-**Region Destino:** AWS `us-east-1`
+# Guia Paso a Paso: Despliegue y Configuracion de Aplicacion en AWS (ECS Fargate / RDS)
+**Carga de Trabajo:** Migración CocoaApp → AWS | **ID de Migracion:** mig-app-aws-f0b1f6
+**Repositorio GitHub:** `https://github.com/empresa/migraci-n-cocoaapp-aws` (Rama: `main`, Commit: `latest`)
+**Entorno de Ejecucion:** Python (backend) + TypeScript/React (frontend) (FastAPI (Backend API) + React (Vite SPA) (Frontend)) | **Puerto:** `80` | **Region Destino:** AWS `us-east-1`
+**Modo Arquitectonico:** Contenedores en AWS Fargate con Red Aislada VPC y Base de Datos Gestionada (PostgreSQL 15)
 
 ---
 
-### Paso 1: Descargar la Copia del SO y los Artefactos de Migracion
-Tienes a tu disposicion descargas directas desde la interfaz de CloudMove o mediante la API:
-1. **Descargar Paquete Completo de Despliegue (.ZIP):**
-   Incluye Terraform (`main.tf`, `variables.tf`), `deploy_to_aws.sh`, `create_full_raw_disk_clone.sh`, `restore_system_image.sh`, manifiestos de paquetes/usuarios y la copia comprimida del SO.
-   ```bash
-   CLOUDMOVE_API_URL="${CLOUDMOVE_API_URL:-http://localhost:8000}"
-curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/mig-vm_-aws-93b6b2/bundle.zip"
-   unzip bundle.zip -d ./cloudmove_os_migration
-   cd ./cloudmove_os_migration
-   ```
-2. **Descargar Copia del Sistema Operativo Directamente (.tar.gz):**
-   Contiene todos los ficheros de `/etc`, tabla de particiones, cuentas de usuarios locales, servicios de systemd y script de restauracion in-guest:
-   ```bash
-   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/mig-vm_-aws-93b6b2/system-image"
-   ```
-3. **Descargar Imagen de Disco QCOW2 (si fue generada en Staging):**
-   ```bash
-   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/mig-vm_-aws-93b6b2/disk-image"
-   ```
-
-### Paso 2: Subida de la Imagen / Transmision de Bloques hacia Amazon S3
-Para subir la imagen del disco hacia AWS dispones de dos modalidades segun tus recursos locales:
-- **Opcion A: Streaming directo bit a bit a S3 en caliente (Sin agotar almacenamiento local)**
-  Transmite la particion del sistema operativo en vivo directamente hacia tu bucket S3:
-  ```bash
-  sudo chmod +x create_full_raw_disk_clone.sh
-  sudo ./create_full_raw_disk_clone.sh s3
-  ```
-- **Opcion B: Subir la imagen de disco (.qcow2 / .raw / .vmdk) descargada**
-  ```bash
-  S3_BUCKET="cloudmove-vm-import-migraci-n-so-host-en-vivo-rabbitmq-kali-live-os-aws-us-east-1"
-  aws s3 mb "s3://$S3_BUCKET" --region us-east-1 || true
-  aws s3 cp migraci-n-so-host-en-vivo-rabbitmq-kali-live-os-aws.qcow2 "s3://$S3_BUCKET/migraci-n-so-host-en-vivo-rabbitmq-kali-live-os-aws.qcow2"
-  ```
-
-### Paso 3: Registro e Importacion de la Imagen en el Hipervisor AWS (Creacion de AMI)
-1. Configurar el rol IAM requerido por el servicio de importacion (`vmimport`):
+### Paso 1: Descargar el Paquete de Despliegue y Clonar el Repositorio
+Para desplegar el codigo analizado de forma identica:
+1. Clonar el repositorio y posicionarse en el commit analizado:
 ```bash
-cat << 'EOF' > /tmp/vmimport-trust.json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": { "Service": "vmie.amazonaws.com" },
-      "Action": "sts:AssumeRole",
-      "Condition": { "StringEquals": { "sts:Externalid": "vmimport" } }
-    }
-  ]
-}
-EOF
-aws iam create-role --role-name vmimport --assume-role-policy-document file:///tmp/vmimport-trust.json || true
+git clone https://github.com/empresa/migraci-n-cocoaapp-aws migraci-n-cocoaapp-aws
+cd migraci-n-cocoaapp-aws
+git checkout HEAD
 ```
-2. Lanzar la tarea de conversion a AMI en AWS:
+2. Descargar los artefactos generados por CloudMove (Terraform, Dockerfile optimizado y configuraciones):
 ```bash
-cat << EOF > /tmp/containers.json
-[
-  {
-    "Description": "Copia de SO Migración SO Host en Vivo (rabbitmq-kali-live-os) → AWS",
-    "Format": "qcow2",
-    "UserBucket": {
-      "S3Bucket": "$S3_BUCKET",
-      "S3Key": "migraci-n-so-host-en-vivo-rabbitmq-kali-live-os-aws.qcow2"
-    }
-  }
-]
-EOF
-
-IMPORT_TASK_ID=$(aws ec2 import-image \
-    --description "Migración SO Host en Vivo (rabbitmq-kali-live-os) → AWS OS Migration" \
-    --disk-containers file:///tmp/containers.json \
-    --boot-mode uefi \
-    --region us-east-1 \
-    --query "ImportTaskId" --output text)
-
-echo "Tarea de importacion iniciada: $IMPORT_TASK_ID. Esperando finalizacion..."
-while true; do
-    STATUS=$(aws ec2 describe-import-image-tasks --import-task-ids "$IMPORT_TASK_ID" --region us-east-1 --query "ImportImageTasks[0].Status" --output text)
-    PROGRESS=$(aws ec2 describe-import-image-tasks --import-task-ids "$IMPORT_TASK_ID" --region us-east-1 --query "ImportImageTasks[0].Progress" --output text 2>/dev/null || echo "0")
-    echo "  Progreso de importacion AMI: $STATUS ($PROGRESS%)"
-    if [ "$STATUS" = "completed" ]; then
-        AMI_ID=$(aws ec2 describe-import-image-tasks --import-task-ids "$IMPORT_TASK_ID" --region us-east-1 --query "ImportImageTasks[0].ImageId" --output text)
-        echo "AMI registrada satisfactoriamente: $AMI_ID"
-        break
-    elif [ "$STATUS" = "deleted" ]; then
-        echo "Error en la importacion de la imagen en AWS."
-        exit 1
-    fi
-    sleep 20
-done
+CLOUDMOVE_API_URL="${CLOUDMOVE_API_URL:-http://localhost:8000}"
+curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/mig-app-aws-f0b1f6/bundle.zip"
+unzip -o bundle.zip
 ```
-*(Nota: Si ejecutas `./deploy_to_aws.sh` del paquete, todo este paso se ejecuta automaticamente).*
+Archivos incluidos en el paquete:
+- `main.tf`, `variables.tf`, `outputs.tf`, `provider.tf`: Modulos de Terraform para aprovisionar VPC, Subredes publicas/privadas, Security Groups, Cluster ECS Fargate y Base de Datos RDS (PostgreSQL).
+- `Dockerfile` y `docker-compose.yml`: Definicion de contenedor optimizada para Python (backend) + TypeScript/React (frontend) (FastAPI (Backend API) + React (Vite SPA) (Frontend)) ejecutando `["nginx", "-g", "daemon off;"]`.
+- `DEPLOYMENT_INSTRUCTIONS.md`: Este manual tecnico de referencia.
 
-### Paso 4: Montaje y Aprovisionamiento de la Instancia EC2 con Terraform
-Con la AMI generada (`$AMI_ID`), ejecuta Terraform para crear la VPC, subred publica, Security Groups e instanciar la maquina virtual:
+### Paso 2: Instalacion de Dependencias y Validacion Local del Proyecto
+Instala las dependencias detectadas para verificar la integridad del codigo fuente antes de la construccion del contenedor:
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Paso 3: Autenticacion en AWS y Configuracion del CLI
+Verifica que tu cuenta de AWS este activa y configurada:
+```bash
+aws configure set default.region us-east-1
+aws sts get-caller-identity
+```
+
+### Paso 4: Compilacion y Publicacion de la Imagen en Amazon ECR
+1. Crear el repositorio en Amazon ECR (si no existe):
+```bash
+aws ecr create-repository --repository-name migraci-n-cocoaapp-aws --region us-east-1 || true
+```
+2. Autenticar Docker local con el registro privado de ECR:
+```bash
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com
+```
+3. Compilar la imagen Docker local con el tag exacto del commit y subirla al repositorio:
+```bash
+docker build -t migraci-n-cocoaapp-aws:latest .
+docker tag migraci-n-cocoaapp-aws:latest $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/migraci-n-cocoaapp-aws:latest
+docker tag migraci-n-cocoaapp-aws:latest $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/migraci-n-cocoaapp-aws:latest
+docker push $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/migraci-n-cocoaapp-aws:latest
+docker push $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/migraci-n-cocoaapp-aws:latest
+```
+
+### Paso 5: Aprovisionamiento de Infraestructura con Terraform
+Aprovisiona la red VPC, los grupos de seguridad, el balanceador ALB, la base de datos gestionada (PostgreSQL) y la tarea ECS:
 ```bash
 terraform init
-terraform plan -var="ami_id=$AMI_ID"
-terraform apply -auto-approve -var="ami_id=$AMI_ID"
-```
-Esto aprovisiona:
-- Una instancia EC2 Nitro con el disco montado como volumen raiz `/dev/sda1` o `/dev/nvme0n1`.
-- IP Elastica publica vinculada.
-- Security Group con acceso SSH (puerto 22), puertos web (80/443) y puertos de las aplicaciones inventariadas.
-
-### Paso 5: Conexion Remota y Verificacion del Disco Montado
-1. Obten la IP publica asignada por Terraform:
-```bash
-INSTANCE_IP=$(terraform output -raw instance_public_ip 2>/dev/null || aws ec2 describe-instances --filters "Name=image-id,Values=$AMI_ID" --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
-echo "Servidor en la nube disponible en: $INSTANCE_IP"
-```
-2. Inicia sesion por SSH (utilizando el usuario configurado en cloud-init o el usuario del sistema migrado):
-```bash
-SSH_USER="${SSH_USER:-admin}"
-ssh -i ~/.ssh/id_rsa "$SSH_USER@$INSTANCE_IP"
-```
-3. Verifica la estructura del disco montado y expande la particion si el volumen EBS es mayor al tamano de origen:
-```bash
-lsblk -f
-sudo growpart /dev/nvme0n1 1 || sudo growpart /dev/xvda 1 || true
-sudo resize2fs /dev/nvme0n1p1 2>/dev/null || sudo xfs_growfs / 2>/dev/null || true
+terraform plan
+terraform apply -auto-approve
 ```
 
-### Paso 6: Restauracion de Configuraciones del SO In-Guest (Usuarios y Servicios)
-Transfiere la copia del sistema operativo (`system_image_snapshot_*.tar.gz`) a la nueva maquina virtual y ejecuta la restauracion:
+### Paso 6: Despliegue Efectivo del Servicio en la Nube (ECS Fargate)
+Fuerza la actualizacion del servicio ECS para que descargue la imagen publicada en ECR y levante las tareas:
 ```bash
-# Desde tu estacion local:
-SSH_USER="${SSH_USER:-admin}"
-scp -i ~/.ssh/id_rsa system_image_snapshot_*.tar.gz "$SSH_USER@$INSTANCE_IP:~/"
+CLUSTER_NAME=$(terraform output -raw ecs_cluster_name 2>/dev/null || echo "migraci-n-cocoaapp-aws-cluster")
+SERVICE_NAME=$(terraform output -raw ecs_service_name 2>/dev/null || echo "migraci-n-cocoaapp-aws-service")
 
-# En la sesion SSH de la maquina virtual:
-tar -xzf system_image_snapshot_*.tar.gz
-sudo chmod +x restore_system_image.sh
-sudo ./restore_system_image.sh
+aws ecs update-service \
+    --cluster "$CLUSTER_NAME" \
+    --service "$SERVICE_NAME" \
+    --force-new-deployment \
+    --region us-east-1
+
+echo "Esperando a que las tareas de ECS alcancen estado RUNNING y salud estable..."
+aws ecs wait services-stable --cluster "$CLUSTER_NAME" --services "$SERVICE_NAME" --region us-east-1
 ```
-¿Que realiza `restore_system_image.sh`?
-- Restaura los archivos de `/etc` preservando certificados, `/etc/hosts` y configuraciones personalizadas.
-- Recrea las cuentas de usuario locales descubiertas (root, www-data, mysql, redis, postgres, lacastrilp, rabbitmq) con sus mismos UID y shells.
-- Recarga demonios de systemd y activa los servicios criticos.
 
-### Paso 7: Validacion Operativa y Puesta en Marcha
-Verifica que los servicios del sistema operativo se encuentren activos:
+### Paso 7: Configuraciones Necesarias para Usar la Aplicacion
+
+#### 7.1 Variables de Entorno y Almacenamiento de Secretos
+Almacena las credenciales sensibles y de conexion en AWS Secrets Manager:
 ```bash
-# Validar servicios principales
-sudo systemctl status ssh
-sudo ss -tulpn
+cat << 'EOF' > .env.production
+PORT=80
+NODE_ENV=production
+DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/migraci-n-cocoaapp-aws_db
+SECRET_KEY=generate-a-secure-random-token-here
+ALLOWED_ORIGINS=*
+VITE_SUPABASE_URL=production-value-here
+VITE_SUPABASE_ANON_KEY=production-value-here
+VITE_SUPABASE_SERVICE_ROLE_KEY=production-value-here
+VITE_API_URL=production-value-here
+EOF
 
-# Validar cuentas de usuario restauradas
-cat /etc/passwd | grep -E "${SSH_USER:-admin}|root|postgres"
+aws secretsmanager create-secret \
+    --name "migraci-n-cocoaapp-aws/production" \
+    --description "Variables de entorno y secretos para Migración CocoaApp → AWS" \
+    --secret-string file://.env.production \
+    --region us-east-1 || \
+aws secretsmanager update-secret \
+    --secret-id "migraci-n-cocoaapp-aws/production" \
+    --secret-string file://.env.production \
+    --region us-east-1
 ```
-El servidor en la nube esta montado, activo y operando con la misma configuracion del entorno original.
+
+#### 7.2 Inicializacion y Ejecucion de Migraciones de Base de Datos
+Obten los datos de conexion de la base de datos RDS creada por Terraform:
+```bash
+DB_ENDPOINT=$(terraform output -raw db_endpoint 2>/dev/null || echo "rds-host:5432")
+echo "Base de datos disponible en: $DB_ENDPOINT"
+
+# Opcion A: Ejecutar migraciones mediante una tarea efimera en ECS Fargate (Recomendado)
+aws ecs run-task \
+    --cluster "$CLUSTER_NAME" \
+    --task-definition "migraci-n-cocoaapp-aws-task" \
+    --launch-type FARGATE \
+    --network-configuration "awsvpcConfiguration={subnets=[$(terraform output -raw private_subnet_id 2>/dev/null)],securityGroups=[$(terraform output -raw ecs_security_group_id 2>/dev/null)],assignPublicIp=ENABLED}" \
+    --overrides '{"containerOverrides": [{"name": "migraci-n-cocoaapp-aws", "command": ["alembic", "upgrade", "head"]}]}'
+
+# Opcion B: Ejecutar migraciones directamente con herramientas locales si tienes acceso por VPN o Bastion
+# alembic upgrade head
+```
+
+#### 7.3 Configuracion de Red, CORS y Grupos de Seguridad
+- **Trafico Web:** El balanceador Application Load Balancer (ALB) permite trafico de entrada en el puerto 80 (HTTP) y 443 (HTTPS) desde `0.0.0.0/0`, enrutando al puerto `80` del contenedor.
+- **Base de Datos:** El grupo de seguridad de RDS restringe las conexiones admitiendo unicamente paquetes provenientes del Security Group de ECS Fargate.
+- **CORS:** Si la aplicacion atiende peticiones de una aplicacion web externa, verifica que la variable `ALLOWED_ORIGINS` contenga el dominio del cliente.
+
+#### 7.4 Enlace Frontend <-> Backend
+Si cuentas con una aplicacion web separada (React, Vue, Angular o Mobile), configura la variable de entorno del cliente con el endpoint asignado:
+```bash
+SERVICE_ENDPOINT=$(terraform output -raw app_endpoint 2>/dev/null || terraform output -raw alb_dns_name)
+echo "Configurar en cliente frontend: VITE_API_BASE_URL=http://$SERVICE_ENDPOINT"
+```
+
+### Paso 8: Acceso Publico, Verificacion y Como Usar la Aplicacion
+1. **Consultar URL Publica:**
+```bash
+APP_URL=$(terraform output -raw app_endpoint 2>/dev/null || echo "http://$(terraform output -raw alb_dns_name)")
+echo "URL publica de la aplicacion: $APP_URL"
+```
+2. **Prueba de Salud del Servicio (Sonda en `/health`):**
+```bash
+curl -Iv "$APP_URL/health" || curl -Iv "$APP_URL/"
+```
+3. **Uso y Pruebas Operativas:**
+- Abre `$APP_URL` en tu navegador web.
+- Si expone una API REST (FastAPI/Express), accede a la documentacion interactiva en `$APP_URL/docs` o `$APP_URL/swagger`.
+- Realiza una peticion de prueba de login o consulta de registros de prueba contra la base de datos migrada.
