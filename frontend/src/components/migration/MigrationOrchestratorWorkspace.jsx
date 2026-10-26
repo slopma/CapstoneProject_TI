@@ -549,12 +549,23 @@ export default function MigrationOrchestratorWorkspace({
     document.body.removeChild(a);
   };
 
-  const handleDownloadDiskImage = () => {
+  const handleDownloadDiskImage = (format = "qcow2") => {
     if (!selectedJob) return;
-    const downloadUrl = `/api/v1/migration/jobs/${selectedJob.migration_id}/disk-image`;
+    const downloadUrl = `/api/v1/migration/jobs/${selectedJob.migration_id}/disk-image?format=${format}`;
     const a = document.createElement("a");
     a.href = downloadUrl;
-    a.download = `${selectedJob.name || "disk"}.qcow2`;
+    a.download = `${selectedJob.name || "disk"}.${format}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const handleDownloadHypervisorScript = (hypervisor = "virtualbox") => {
+    if (!selectedJob) return;
+    const downloadUrl = `/api/v1/migration/jobs/${selectedJob.migration_id}/hypervisor-script?hypervisor=${hypervisor}`;
+    const a = document.createElement("a");
+    a.href = downloadUrl;
+    a.download = `launch_${hypervisor}_${selectedJob.name || "vm"}.sh`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -2647,34 +2658,61 @@ export default function MigrationOrchestratorWorkspace({
                       {currentJob.use_case === "datacenter_campaign" && "Caso 3: Campaña de Datacenter — Migración por Oleadas (Waves), CDC de Bases de Datos y Replicación Continua"}
                     </div>
                   </div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
                     <button
                       type="button"
                       className="cm-btn primary sm"
                       onClick={handleDownloadZipBundle}
                       style={{ backgroundColor: "#047857", borderColor: "#065f46" }}
                     >
-                      Descargar Paquete Completo de Despliegue (.ZIP)
+                      Descargar Paquete Completo (.ZIP)
                     </button>
                     {currentJob.use_case === "vm_image" && (
                       <>
                         <button
                           type="button"
                           className="cm-btn sm"
-                          onClick={handleDownloadSystemImage}
-                          style={{ backgroundColor: "#1e3a8a", color: "#ffffff", borderColor: "#172554" }}
-                          title="Descargar snapshot comprimido del sistema operativo"
+                          onClick={() => handleDownloadDiskImage("vdi")}
+                          style={{ backgroundColor: "#1d4ed8", color: "#ffffff", borderColor: "#1e40af", fontWeight: 600 }}
+                          title="Descargar disco virtual listo para VirtualBox (.VDI)"
                         >
-                          Descargar Copia del SO (.tar.gz)
+                          Descargar VirtualBox (.VDI)
                         </button>
                         <button
                           type="button"
                           className="cm-btn sm"
-                          onClick={handleDownloadDiskImage}
-                          style={{ backgroundColor: "#0284c7", color: "#ffffff", borderColor: "#0369a1" }}
-                          title="Descargar imagen de disco QCOW2"
+                          onClick={() => handleDownloadDiskImage("vmdk")}
+                          style={{ backgroundColor: "#0f766e", color: "#ffffff", borderColor: "#115e59", fontWeight: 600 }}
+                          title="Descargar disco virtual listo para VMware (.VMDK)"
                         >
-                          Descargar Imagen QCOW2
+                          Descargar VMware (.VMDK)
+                        </button>
+                        <button
+                          type="button"
+                          className="cm-btn sm"
+                          onClick={() => handleDownloadDiskImage("qcow2")}
+                          style={{ backgroundColor: "#0284c7", color: "#ffffff", borderColor: "#0369a1", fontWeight: 600 }}
+                          title="Descargar disco virtual para QEMU / KVM / Proxmox (.QCOW2)"
+                        >
+                          Descargar QCOW2
+                        </button>
+                        <button
+                          type="button"
+                          className="cm-btn sm"
+                          onClick={handleDownloadSystemImage}
+                          style={{ backgroundColor: "#4338ca", color: "#ffffff", borderColor: "#3730a3", fontWeight: 600 }}
+                          title="Descargar copia del sistema operativo (/etc, usuarios, systemd)"
+                        >
+                          Descargar Copia SO (.tar.gz)
+                        </button>
+                        <button
+                          type="button"
+                          className="cm-btn sm"
+                          onClick={() => handleDownloadHypervisorScript("virtualbox")}
+                          style={{ backgroundColor: "#334155", color: "#ffffff", borderColor: "#1e293b", fontWeight: 600 }}
+                          title="Descargar script para crear y encender la VM automáticamente en VirtualBox con 1 comando"
+                        >
+                          Script VirtualBox
                         </button>
                       </>
                     )}
@@ -2712,301 +2750,374 @@ export default function MigrationOrchestratorWorkspace({
                 </div>
 
                 {/* CASO 1: APLICACIÓN DESDE GITHUB / CÓDIGO FUENTE */}
-                {currentJob.use_case === "app_source" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #2563eb" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#1e40af", marginBottom: 4 }}>
-                        Paso 1: Descargar el Paquete y Descomprimir
-                      </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
-                        Haz clic en <strong>Descargar Paquete Completo de Despliegue (.ZIP)</strong> o descarga los archivos generados en tu terminal:
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
-{`CLOUDMOVE_API_URL="\${CLOUDMOVE_API_URL:-${typeof window !== "undefined" ? window.location.origin : ""}}"
+                {currentJob.use_case === "app_source" && (() => {
+                  const srcEnv = currentJob.source_environment || {};
+                  const gitMeta = srcEnv.git_meta || {};
+                  const appRepoUrl = gitMeta.repository_url || srcEnv.github_url || `https://github.com/empresa/${currentJob.name || "app"}`;
+                  const appGitRef = gitMeta.ref || srcEnv.github_ref || "main";
+                  const appCommitSha = gitMeta.commit_sha || gitMeta.short_sha || "HEAD";
+                  const appShortSha = gitMeta.short_sha || (appCommitSha !== "HEAD" ? appCommitSha.substring(0, 8) : "latest");
+                  const appRuntime = srcEnv.language || (srcEnv.runtime && typeof srcEnv.runtime === "object" ? srcEnv.runtime.language : srcEnv.runtime) || "Aplicación Web";
+                  const appFramework = srcEnv.framework || (srcEnv.runtime && typeof srcEnv.runtime === "object" ? srcEnv.runtime.framework : "") || "Framework Contenerizado";
+                  const appPorts = srcEnv.exposed_ports || srcEnv.ports || [srcEnv.port || 8000];
+                  const appPrimaryPort = Array.isArray(appPorts) ? appPorts[0] : appPorts;
+                  const appStartCmds = srcEnv.start_commands || [appRuntime.toLowerCase().includes("python") ? `uvicorn main:app --port ${appPrimaryPort}` : "npm start"];
+                  const appPrimaryStartCmd = appStartCmds[0];
+                  const appHealthEps = srcEnv.health_endpoints || ["/health"];
+                  const appPrimaryHealthEp = appHealthEps[0];
+                  const appDb = srcEnv.database_requirements || srcEnv.database || {};
+                  const appDbEngine = (typeof appDb === "object" ? appDb.engine : appDb) || "PostgreSQL";
+                  const appDbVersion = (typeof appDb === "object" ? appDb.version : "") || "15";
+                  const appSlug = (currentJob.name || "app").toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+
+                  const rtLower = appRuntime.toLowerCase();
+                  const isPython = rtLower.includes("python") || rtLower.includes("py");
+                  const isNode = rtLower.includes("node") || rtLower.includes("javascript") || rtLower.includes("typescript");
+                  const isJava = rtLower.includes("java") || rtLower.includes("spring");
+                  const isGo = rtLower.includes("go") || rtLower.includes("golang");
+
+                  const depInstallCmd = isPython
+                    ? "python3 -m venv .venv && source .venv/bin/activate\npip install -r requirements.txt"
+                    : isNode
+                    ? "npm ci --production || npm install"
+                    : isJava
+                    ? "./mvnw clean package -DskipTests || gradle build"
+                    : isGo
+                    ? "go mod download && go build -o app ."
+                    : "docker build -t app:local .";
+
+                  const migrateCmd = isPython
+                    ? (appFramework.toLowerCase().includes("django") ? "python manage.py migrate" : "alembic upgrade head")
+                    : isNode
+                    ? "npx prisma migrate deploy || npm run migrate"
+                    : isJava
+                    ? "java -jar target/*.jar --migrate"
+                    : isGo
+                    ? "./app --migrate"
+                    : "npm run migrate || alembic upgrade head";
+
+                  return (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #2563eb" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "#1e40af", marginBottom: 4 }}>
+                          Paso 1: Clonar Repositorio en Commit Analizado y Descargar Paquete
+                        </div>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                          Clona el repositorio <strong>{appRepoUrl}</strong> en el commit exacto analizado (<code>{appShortSha}</code>) y extrae los artefactos generados por CloudMove:
+                        </p>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+{`git clone ${appRepoUrl} ${appSlug}
+cd ${appSlug}
+git checkout ${appCommitSha}
+
+CLOUDMOVE_API_URL="\${CLOUDMOVE_API_URL:-${typeof window !== "undefined" ? window.location.origin : ""}}"
 curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/${currentJob.migration_id}/bundle.zip"
-unzip bundle.zip -d ./app_cloud_deploy
-cd ./app_cloud_deploy`}
-                      </pre>
-                    </div>
-
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #0284c7" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#0369a1", marginBottom: 4 }}>
-                        Paso 2: Autenticación en la Nube ({currentJob.target_provider === "aws" ? "AWS CLI" : "Google Cloud SDK"})
+unzip -o bundle.zip`}
+                        </pre>
                       </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
-                        Verifica que tus credenciales activas posean permisos para gestionar infraestructura y contenedores:
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
-{currentJob.target_provider === "aws"
-  ? `aws configure set default.region us-east-1
-aws sts get-caller-identity`
-  : `gcloud auth login
-gcloud config set project $(gcloud config get-value project)
-gcloud services enable compute.googleapis.com artifactregistry.googleapis.com run.googleapis.com sqladmin.googleapis.com`}
-                      </pre>
-                    </div>
 
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #0891b2" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#0e7490", marginBottom: 4 }}>
-                        Paso 3: Compilación y Publicación del Contenedor ({currentJob.target_provider === "aws" ? "Amazon ECR" : "Google Artifact Registry"})
+                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #0284c7" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "#0369a1", marginBottom: 4 }}>
+                          Paso 2: Instalación de Dependencias y Validación Local ({appRuntime})
+                        </div>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                          Instala las dependencias detectadas para asegurar que el entorno de ejecución es reproducible:
+                        </p>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+{depInstallCmd}
+                        </pre>
                       </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
-                        Compila la imagen localmente con el Dockerfile generado y publícala en el registro privado de la nube:
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+
+                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #0891b2" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "#0e7490", marginBottom: 4 }}>
+                          Paso 3: Compilación y Publicación del Contenedor ({currentJob.target_provider === "aws" ? "Amazon ECR" : "Google Artifact Registry"})
+                        </div>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                          Compila la imagen Docker etiquetada con el commit analizado (<code>{appShortSha}</code>) y súbela al registro de contenedores de la nube:
+                        </p>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
 {currentJob.target_provider === "aws"
-  ? `# 1. Crear repositorio en ECR y autenticar Docker
+  ? `# 1. Autenticar Docker con Amazon ECR:
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-aws ecr create-repository --repository-name app-workload --region us-east-1 || true
+aws ecr create-repository --repository-name ${appSlug} --region us-east-1 || true
 aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com
 
-# 2. Compilar y publicar imagen
-docker build -t app-workload:latest .
-docker tag app-workload:latest $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/app-workload:latest
-docker push $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/app-workload:latest`
-  : `# 1. Crear repositorio en Artifact Registry y autenticar Docker
+# 2. Compilar imagen y subir a ECR:
+docker build -t ${appSlug}:${appShortSha} .
+docker tag ${appSlug}:${appShortSha} $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/${appSlug}:${appShortSha}
+docker tag ${appSlug}:${appShortSha} $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/${appSlug}:latest
+docker push $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/${appSlug}:${appShortSha}
+docker push $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/${appSlug}:latest`
+  : `# 1. Autenticar con Google Artifact Registry:
 GCP_PROJECT=$(gcloud config get-value project)
-gcloud artifacts repositories create app-workload-repo --repository-format=docker --location=us-central1 || true
+gcloud artifacts repositories create ${appSlug}-repo --repository-format=docker --location=us-central1 || true
 gcloud auth configure-docker us-central1-docker.pkg.dev
 
-# 2. Compilar y publicar imagen
-docker build -t us-central1-docker.pkg.dev/$GCP_PROJECT/app-workload-repo/app:latest .
-docker push us-central1-docker.pkg.dev/$GCP_PROJECT/app-workload-repo/app:latest`}
-                      </pre>
-                    </div>
-
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #059669" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#166534", marginBottom: 4 }}>
-                        Paso 4: Aprovisionamiento de Infraestructura con Terraform
+# 2. Compilar y publicar imagen:
+docker build -t us-central1-docker.pkg.dev/$GCP_PROJECT/${appSlug}-repo/${appSlug}:${appShortSha} .
+docker tag us-central1-docker.pkg.dev/$GCP_PROJECT/${appSlug}-repo/${appSlug}:${appShortSha} us-central1-docker.pkg.dev/$GCP_PROJECT/${appSlug}-repo/${appSlug}:latest
+docker push us-central1-docker.pkg.dev/$GCP_PROJECT/${appSlug}-repo/${appSlug}:${appShortSha}
+docker push us-central1-docker.pkg.dev/$GCP_PROJECT/${appSlug}-repo/${appSlug}:latest`}
+                        </pre>
                       </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
-                        Despliega la red aislada (VPC), subredes, grupos de seguridad, base de datos gestionada y balanceadores:
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+
+                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #059669" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "#166534", marginBottom: 4 }}>
+                          Paso 4: Aprovisionamiento de Infraestructura con Terraform ({currentJob.target_provider?.toUpperCase()})
+                        </div>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                          Despliega la red VPC, subredes, balanceador ALB, clúster {currentJob.target_provider === "aws" ? "ECS Fargate" : "Cloud Run"} y base de datos {appDbEngine} {appDbVersion}:
+                        </p>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
 {`terraform init
 terraform plan
 terraform apply -auto-approve`}
-                      </pre>
-                    </div>
-
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #d97706" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#b45309", marginBottom: 4 }}>
-                        Paso 5: Despliegue Efectivo de la Aplicación en la Nube ({currentJob.target_provider === "aws" ? "ECS Fargate" : "Google Cloud Run"})
+                        </pre>
                       </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
-                        Fuerza la ejecución del contenedor publicado en el servicio de cómputo en la nube:
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+
+                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #d97706" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "#b45309", marginBottom: 4 }}>
+                          Paso 5: Despliegue Efectivo de la Aplicación en la Nube
+                        </div>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                          Fuerza la ejecución del contenedor en el servicio de cómputo en la nube configurando el comando de arranque (<code>{appPrimaryStartCmd}</code>):
+                        </p>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
 {currentJob.target_provider === "aws"
-  ? `# Actualizar servicio ECS Fargate para descargar la nueva imagen y arrancar tareas
-aws ecs update-service \\
-    --cluster $(terraform output -raw ecs_cluster_name 2>/dev/null || echo "app-cluster") \\
-    --service $(terraform output -raw ecs_service_name 2>/dev/null || echo "app-service") \\
+  ? `aws ecs update-service \\
+    --cluster $(terraform output -raw ecs_cluster_name 2>/dev/null || echo "${appSlug}-cluster") \\
+    --service $(terraform output -raw ecs_service_name 2>/dev/null || echo "${appSlug}-service") \\
     --force-new-deployment --region us-east-1
 
-# Esperar a que las tareas alcancen estado RUNNING y salud estable:
 aws ecs wait services-stable \\
-    --cluster $(terraform output -raw ecs_cluster_name 2>/dev/null || echo "app-cluster") \\
-    --services $(terraform output -raw ecs_service_name 2>/dev/null || echo "app-service") --region us-east-1`
-  : `# Desplegar el contenedor en Google Cloud Run con acceso público
-GCP_PROJECT=$(gcloud config get-value project)
-gcloud run deploy app-workload \\
-    --image="us-central1-docker.pkg.dev/$GCP_PROJECT/app-workload-repo/app:latest" \\
-    --platform=managed --region=us-central1 --allow-unauthenticated`}
-                      </pre>
-                    </div>
+    --cluster $(terraform output -raw ecs_cluster_name 2>/dev/null || echo "${appSlug}-cluster") \\
+    --services $(terraform output -raw ecs_service_name 2>/dev/null || echo "${appSlug}-service") --region us-east-1`
+  : `GCP_PROJECT=$(gcloud config get-value project)
+gcloud run deploy ${appSlug} \\
+    --image="us-central1-docker.pkg.dev/$GCP_PROJECT/${appSlug}-repo/${appSlug}:${appShortSha}" \\
+    --platform=managed --region=us-central1 --allow-unauthenticated --port=${appPrimaryPort}`}
+                        </pre>
+                      </div>
 
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #4f46e5" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#4338ca", marginBottom: 4 }}>
-                        Paso 6: Configuraciones Necesarias para Usar la Aplicación (Setup Operativo Completo)
-                      </div>
-                      <div style={{ fontSize: 12.5, color: "#334155", lineHeight: 1.5, marginBottom: 8 }}>
-                        Para que la aplicación opere en producción, aplica las siguientes configuraciones obligatorias:
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 10, marginBottom: 10 }}>
-                        <div style={{ padding: 10, backgroundColor: "#f1f5f9", borderRadius: 4, border: "1px solid #cbd5e1" }}>
-                          <strong style={{ fontSize: 12, color: "#1e293b" }}>1. Secretos y Variables de Entorno</strong>
-                          <p style={{ margin: "4px 0 0 0", fontSize: 11.5, color: "#475569" }}>
-                            Almacena credenciales sensibles (<code>DATABASE_URL</code>, <code>SECRET_KEY</code>, <code>JWT_SECRET</code>, <code>PORT</code>) en {currentJob.target_provider === "aws" ? "AWS Secrets Manager" : "Google Secret Manager"}.
-                          </p>
+                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #4f46e5" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "#4338ca", marginBottom: 4 }}>
+                          Paso 6: Configuración de Variables de Entorno y Migraciones ({appDbEngine})
                         </div>
-                        <div style={{ padding: 10, backgroundColor: "#f1f5f9", borderRadius: 4, border: "1px solid #cbd5e1" }}>
-                          <strong style={{ fontSize: 12, color: "#1e293b" }}>2. Migraciones de Base de Datos</strong>
-                          <p style={{ margin: "4px 0 0 0", fontSize: 11.5, color: "#475569" }}>
-                            Ejecuta las migraciones de esquema (ej. <code>npm run migrate</code> o <code>alembic upgrade head</code>) contra la base de datos provisionada.
-                          </p>
-                        </div>
-                        <div style={{ padding: 10, backgroundColor: "#f1f5f9", borderRadius: 4, border: "1px solid #cbd5e1" }}>
-                          <strong style={{ fontSize: 12, color: "#1e293b" }}>3. Reglas de Red y CORS</strong>
-                          <p style={{ margin: "4px 0 0 0", fontSize: 11.5, color: "#475569" }}>
-                            Abre puertos 80/443 en el balanceador hacia internet. Mantén el puerto de base de datos aislado solo accesible desde el contenedor.
-                          </p>
-                        </div>
-                        <div style={{ padding: 10, backgroundColor: "#f1f5f9", borderRadius: 4, border: "1px solid #cbd5e1" }}>
-                          <strong style={{ fontSize: 12, color: "#1e293b" }}>4. Enlace Frontend &lt;-&gt; Backend</strong>
-                          <p style={{ margin: "4px 0 0 0", fontSize: 11.5, color: "#475569" }}>
-                            Configura en el cliente web la variable <code>VITE_API_BASE_URL</code> apuntando al endpoint generado por Terraform.
-                          </p>
-                        </div>
-                      </div>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                          Configura las variables de entorno detectadas y ejecuta las migraciones de base de datos en la nube:
+                        </p>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
 {currentJob.target_provider === "aws"
-  ? `# Configurar secretos en AWS Secrets Manager:
-aws secretsmanager create-secret --name "app/production" \\
-    --secret-string "{\\"DATABASE_URL\\":\\"$(terraform output -raw db_endpoint 2>/dev/null)\\",\\"PORT\\":\\"8000\\",\\"ALLOWED_ORIGINS\\":\\"*\\"}" \\
-    --region us-east-1 || true`
-  : `# Configurar secretos en Google Secret Manager:
-gcloud secrets create app-env --data-file=.env.production || true`}
-                      </pre>
-                    </div>
+  ? `# 1. Registrar secretos en AWS Secrets Manager:
+aws secretsmanager create-secret --name "${appSlug}/production" \\
+    --secret-string "{\\"DATABASE_URL\\":\\"$(terraform output -raw db_endpoint 2>/dev/null)\\",\\"PORT\\":\\"${appPrimaryPort}\\",\\"ALLOWED_ORIGINS\\":\\"*\\"}" \\
+    --region us-east-1 || true
 
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #7c3aed" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#6d28d9", marginBottom: 4 }}>
-                        Paso 7: Acceso Público, Verificación y Cómo Usar la Aplicación
+# 2. Ejecutar migraciones en ECS Fargate:
+aws ecs run-task --cluster "${appSlug}-cluster" --task-definition "${appSlug}-task" --launch-type FARGATE \\
+    --network-configuration "awsvpcConfiguration={{subnets=[$(terraform output -raw private_subnet_id 2>/dev/null)],securityGroups=[$(terraform output -raw ecs_security_group_id 2>/dev/null)],assignPublicIp=ENABLED}}" \\
+    --overrides '{"containerOverrides": [{"name": "${appSlug}", "command": ["sh", "-c", "${migrateCmd}"]}]}'`
+  : `# 1. Registrar secretos en Google Secret Manager:
+gcloud secrets create ${appSlug}-env --data-file=.env.production || true
+
+# 2. Ejecutar migraciones en Cloud Run Job:
+gcloud run jobs create ${appSlug}-migrate --image="us-central1-docker.pkg.dev/$GCP_PROJECT/${appSlug}-repo/${appSlug}:${appShortSha}" --region=us-central1 --command="sh,-c,${migrateCmd}" || true
+gcloud run jobs execute ${appSlug}-migrate --region=us-central1 --wait`}
+                        </pre>
                       </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
-                        Consulta la URL pública generada, comprueba el healthcheck HTTP y abre la aplicación en el navegador:
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
-{`# 1. Obtener URL pública asignada:
-APP_URL=$(terraform output -raw app_endpoint 2>/dev/null || terraform output -raw service_url 2>/dev/null || echo "http://localhost")
-echo "Aplicación activa en: $APP_URL"
 
-# 2. Prueba de salud HTTP:
-curl -Iv "$APP_URL/health" || curl -Iv "$APP_URL/"
+                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #7c3aed" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "#6d28d9", marginBottom: 4 }}>
+                          Paso 7: Enlace Frontend y Verificación Operativa (Sonda en {appPrimaryHealthEp})
+                        </div>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                          Comprueba la respuesta HTTP en la sonda de salud <code>{appPrimaryHealthEp}</code> y conecta la URL pública al cliente web:
+                        </p>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+{`APP_URL=$(terraform output -raw app_endpoint 2>/dev/null || terraform output -raw service_url 2>/dev/null || echo "http://localhost:${appPrimaryPort}")
+echo "Aplicación activa en la nube: $APP_URL"
 
-# 3. Cómo usar la aplicación:
-# - Abre $APP_URL en tu navegador web.
-# - Si expone una API REST, interactúa con la documentación Swagger en $APP_URL/docs.
-# - Conmuta el registro CNAME en tu DNS hacia este endpoint para asociar tu dominio corporativo.`}
-                      </pre>
+# Verificar sonda de salud detectada:
+curl -Iv "$APP_URL${appPrimaryHealthEp}" || curl -Iv "$APP_URL/"
+
+# Configuración para clientes frontend:
+echo "Configurar en cliente web: VITE_API_BASE_URL=$APP_URL"`}
+                        </pre>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* CASO 2: IMAGEN DE SISTEMA OPERATIVO / VM */}
-                {currentJob.use_case === "vm_image" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #2563eb" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#1e40af", marginBottom: 4 }}>
-                        Paso 1: Descargar la Copia del SO y los Artefactos de Migración
-                      </div>
-                      <p style={{ margin: "0 0 8px 0", fontSize: 12.5, color: "#475569" }}>
-                        Tienes disponibles descargas directas en 1 clic de la copia del sistema operativo (/etc, usuarios, systemd) y la imagen generada:
-                      </p>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-                        <button
-                          type="button"
-                          className="cm-btn sm"
-                          onClick={handleDownloadSystemImage}
-                          style={{ backgroundColor: "#1e3a8a", color: "#ffffff", borderColor: "#172554", fontWeight: 600 }}
-                        >
-                          Descargar Copia del SO (.tar.gz)
-                        </button>
-                        <button
-                          type="button"
-                          className="cm-btn sm"
-                          onClick={handleDownloadDiskImage}
-                          style={{ backgroundColor: "#0284c7", color: "#ffffff", borderColor: "#0369a1", fontWeight: 600 }}
-                        >
-                          Descargar Imagen QCOW2 (.qcow2)
-                        </button>
-                        <button
-                          type="button"
-                          className="cm-btn primary sm"
-                          onClick={handleDownloadZipBundle}
-                          style={{ backgroundColor: "#047857", borderColor: "#065f46" }}
-                        >
-                          Descargar Paquete Completo (.ZIP)
-                        </button>
-                      </div>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
-{`# O descarga directa vía curl desde tu terminal:
-CLOUDMOVE_API_URL="\${CLOUDMOVE_API_URL:-${typeof window !== "undefined" ? window.location.origin : ""}}"
-curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/${currentJob.migration_id}/bundle.zip"
-curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/${currentJob.migration_id}/system-image"
-unzip bundle.zip -d ./cloudmove_os_migration
-cd ./cloudmove_os_migration`}
-                      </pre>
-                    </div>
+                {currentJob.use_case === "vm_image" && (() => {
+                  const vmSrc = currentJob.source_environment || {};
+                  const vmOs = vmSrc.os || {};
+                  const vmDistro = vmOs.distro || "Linux";
+                  const vmKernel = vmOs.kernel || "Linux Kernel";
+                  const vmArch = vmOs.architecture || "x86_64";
+                  const vmBootMode = (vmSrc.boot_mode || "UEFI").toLowerCase();
+                  const vmPartScheme = vmSrc.partition_scheme || "GPT";
+                  const vmUsers = Array.isArray(vmSrc.local_users) ? vmSrc.local_users.join(", ") : (vmSrc.local_users || "root, lacastrilp");
+                  const vmDisks = vmSrc.disks || [{}];
+                  const vmPrimaryDisk = vmDisks[0]?.device || "/dev/nvme0n1";
+                  const vmDiskSize = vmDisks[0]?.size_gib || 50;
+                  const vmUsedGib = vmDisks[0]?.used_gib || vmSrc.total_used_gib || 15;
+                  const vmPkgs = vmSrc.installed_packages_summary?.total_count || 4324;
+                  const vmServicesList = vmSrc.services || ["ssh.service", "systemd-journald.service"];
+                  const vmServicesStr = Array.isArray(vmServicesList)
+                    ? (typeof vmServicesList[0] === "object" ? vmServicesList.slice(0, 5).map(s => s.name).join(", ") : vmServicesList.slice(0, 5).join(", "))
+                    : "ssh.service, systemd-journald.service";
+                  const vmSlug = (currentJob.name || "host").toLowerCase().replace(/[^a-z0-9_-]/g, "-");
 
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #0284c7" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#0369a1", marginBottom: 4 }}>
-                        Paso 2: Transmitir / Subir la Copia del SO hacia el Almacenamiento Cloud
+                  return (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #2563eb" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "#1e40af", marginBottom: 4 }}>
+                          Paso 1: Descargar la Copia del SO y Disco Listo para tu Hipervisor
+                        </div>
+                        <p style={{ margin: "0 0 8px 0", fontSize: 12.5, color: "#475569" }}>
+                          Servidor analizado: <strong>{currentJob.name}</strong> ({vmDistro}, Kernel: <code>{vmKernel}</code>, <code>{vmArch}</code>, Disco: <code>{vmPrimaryDisk}</code> de {vmDiskSize} GiB, {vmPkgs} paquetes).
+                          Descarga el formato exacto que necesites para tu virtualizador o para la nube:
+                        </p>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                          <button
+                            type="button"
+                            className="cm-btn sm"
+                            onClick={() => handleDownloadDiskImage("vdi")}
+                            style={{ backgroundColor: "#1d4ed8", color: "#ffffff", borderColor: "#1e40af", fontWeight: 600 }}
+                            title="Descargar disco virtual listo para VirtualBox (.VDI)"
+                          >
+                            Descargar para VirtualBox (.VDI)
+                          </button>
+                          <button
+                            type="button"
+                            className="cm-btn sm"
+                            onClick={() => handleDownloadDiskImage("vmdk")}
+                            style={{ backgroundColor: "#0f766e", color: "#ffffff", borderColor: "#115e59", fontWeight: 600 }}
+                            title="Descargar disco virtual listo para VMware (.VMDK)"
+                          >
+                            Descargar para VMware (.VMDK)
+                          </button>
+                          <button
+                            type="button"
+                            className="cm-btn sm"
+                            onClick={() => handleDownloadDiskImage("qcow2")}
+                            style={{ backgroundColor: "#0284c7", color: "#ffffff", borderColor: "#0369a1", fontWeight: 600 }}
+                            title="Descargar disco virtual para QEMU / KVM / Proxmox (.QCOW2)"
+                          >
+                            Descargar QCOW2 (.qcow2)
+                          </button>
+                          <button
+                            type="button"
+                            className="cm-btn sm"
+                            onClick={handleDownloadSystemImage}
+                            style={{ backgroundColor: "#4338ca", color: "#ffffff", borderColor: "#3730a3", fontWeight: 600 }}
+                            title="Descargar copia del sistema operativo (/etc, usuarios, systemd)"
+                          >
+                            Descargar Copia SO (.tar.gz)
+                          </button>
+                          <button
+                            type="button"
+                            className="cm-btn primary sm"
+                            onClick={handleDownloadZipBundle}
+                            style={{ backgroundColor: "#047857", borderColor: "#065f46" }}
+                          >
+                            Descargar Paquete Completo (.ZIP)
+                          </button>
+                        </div>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+{`# Descargas directas vía curl:
+CLOUDMOVE_API_URL="\${CLOUDMOVE_API_URL:-${typeof window !== "undefined" ? window.location.origin : ""}}"
+
+# Para VirtualBox:
+curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/${currentJob.migration_id}/disk-image?format=vdi"
+curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/${currentJob.migration_id}/hypervisor-script?hypervisor=virtualbox"
+
+# Para VMware:
+curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/${currentJob.migration_id}/disk-image?format=vmdk"
+
+# Copia de archivos y configuraciones del SO:
+curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/${currentJob.migration_id}/system-image"`}
+                        </pre>
                       </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
-                        Sube la imagen a la nube utilizando streaming directo sin saturar el almacenamiento local o sube la imagen descargada:
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+
+                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #0284c7" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "#0369a1", marginBottom: 4 }}>
+                          Paso 2: Transmitir / Subir la Copia del SO hacia el Almacenamiento Cloud
+                        </div>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                          Sube la imagen a la nube utilizando streaming directo sin saturar el almacenamiento local o sube la imagen descargada:
+                        </p>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
 {currentJob.target_provider === "aws"
   ? `# Opción A: Streaming directo bit a bit a S3 en caliente (Recomendado):
 sudo chmod +x create_full_raw_disk_clone.sh
 sudo ./create_full_raw_disk_clone.sh s3
 
-# Opción B: Subir la imagen QCOW2 descargada:
-aws s3 mb "s3://cloudmove-vm-import-${currentJob.name || "host"}-us-east-1" || true
-aws s3 cp *.qcow2 "s3://cloudmove-vm-import-${currentJob.name || "host"}-us-east-1/"`
+# Opción B: Subir la imagen virtual descargada:
+aws s3 mb "s3://cloudmove-vm-import-${vmSlug}-us-east-1" || true
+aws s3 cp *.qcow2 "s3://cloudmove-vm-import-${vmSlug}-us-east-1/"`
   : `# Opción A: Streaming directo bit a bit a Google Cloud Storage:
 sudo chmod +x create_full_raw_disk_clone.sh
 sudo ./create_full_raw_disk_clone.sh gcs
 
-# Opción B: Subir la imagen QCOW2 descargada:
+# Opción B: Subir la imagen virtual descargada:
 gcloud storage cp *.qcow2 "gs://cloudmove-vm-images-$(gcloud config get-value project)/"`}
-                      </pre>
-                    </div>
-
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #0891b2" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#0e7490", marginBottom: 4 }}>
-                        Paso 3: Registro e Importación de la Imagen en el Hipervisor Cloud (Creación de AMI / Custom Image)
+                        </pre>
                       </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
-                        Importa el archivo en el hipervisor de la nube para registrarlo como plantilla de arranque ({currentJob.target_provider === "aws" ? "AMI en AWS" : "Compute Image en GCP"}):
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+
+                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #0891b2" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "#0e7490", marginBottom: 4 }}>
+                          Paso 3: Registro e Importación de la Imagen en el Hipervisor Cloud (Creación de AMI / Custom Image)
+                        </div>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                          Importa el disco en el hipervisor cloud respetando el modo de arranque detectado (<code>{vmBootMode}</code>):
+                        </p>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
 {currentJob.target_provider === "aws"
-  ? `# Ejecutar importación de AMI en AWS:
-aws ec2 import-image --description "Migrated OS" --disk-containers file:///tmp/containers.json --boot-mode uefi --region us-east-1
+  ? `# Ejecutar importación de AMI en AWS con modo de arranque ${vmBootMode}:
+aws ec2 import-image --description "Migrated ${vmDistro}" --disk-containers file:///tmp/containers.json --boot-mode ${vmBootMode} --region us-east-1
 
 # O ejecuta el script automatizado que realiza el proceso completo:
 chmod +x deploy_to_aws.sh
 ./deploy_to_aws.sh`
   : `# Importar imagen en Google Compute Engine con soporte UEFI y VirtIO:
-gcloud compute images import migrated-os-image \\
-    --source-file="gs://cloudmove-vm-images-$(gcloud config get-value project)/${(currentJob.name || 'migrated-os').toLowerCase().replace(/[^a-z0-9_-]/g, '-')}.qcow2" \\
+gcloud compute images import ${vmSlug}-image \\
+    --source-file="gs://cloudmove-vm-images-$(gcloud config get-value project)/${vmSlug}.qcow2" \\
     --guest-os-features=UEFI_COMPATIBLE,GVNIC,VIRTIO_SCSI_MULTIQUEUE
 
 # O ejecuta el script automatizado:
 chmod +x deploy_to_gcp.sh
 ./deploy_to_gcp.sh`}
-                      </pre>
-                    </div>
-
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #059669" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#166534", marginBottom: 4 }}>
-                        Paso 4: Montaje y Aprovisionamiento de la VM con Terraform
+                        </pre>
                       </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
-                        Con el identificador de la AMI o Imagen, provisiona la instancia de cómputo, VPC, subredes e IP pública:
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+
+                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #059669" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "#166534", marginBottom: 4 }}>
+                          Paso 4: Montaje y Aprovisionamiento de la VM con Terraform
+                        </div>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                          Con el identificador de la AMI o Imagen, provisiona la instancia de cómputo, VPC, subredes e IP pública:
+                        </p>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
 {currentJob.target_provider === "aws"
   ? `terraform init
 terraform plan -var="ami_id=$AMI_ID"
 terraform apply -auto-approve -var="ami_id=$AMI_ID"`
   : `terraform init
-terraform plan -var="custom_image_name=migrated-os-image"
-terraform apply -auto-approve -var="custom_image_name=migrated-os-image"`}
-                      </pre>
-                    </div>
-
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #d97706" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#b45309", marginBottom: 4 }}>
-                        Paso 5: Conexión Remota SSH y Verificación/Expansión del Disco Montado
+terraform plan -var="custom_image_name=${vmSlug}-image"
+terraform apply -auto-approve -var="custom_image_name=${vmSlug}-image"`}
+                        </pre>
                       </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
-                        Inicia sesión por SSH en la nueva máquina virtual, verifica los puntos de montaje y expande la partición en caliente:
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+
+                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #d97706" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "#b45309", marginBottom: 4 }}>
+                          Paso 5: Conexión Remota SSH y Verificación/Expansión del Disco Montado
+                        </div>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                          Inicia sesión por SSH en la nueva máquina virtual, verifica los puntos de montaje y expande la partición en caliente:
+                        </p>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
 {`# 1. Conectar a la instancia en la nube:
 ssh -i ~/.ssh/id_rsa admin@$INSTANCE_PUBLIC_IP
 
@@ -3014,17 +3125,17 @@ ssh -i ~/.ssh/id_rsa admin@$INSTANCE_PUBLIC_IP
 lsblk -f
 sudo growpart /dev/nvme0n1 1 || sudo growpart /dev/xvda 1 || sudo growpart /dev/sda 1 || true
 sudo resize2fs /dev/nvme0n1p1 2>/dev/null || sudo xfs_growfs / 2>/dev/null || true`}
-                      </pre>
-                    </div>
-
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #4f46e5" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#4338ca", marginBottom: 4 }}>
-                        Paso 6: Restauración de Configuraciones del SO In-Guest (Usuarios y Servicios)
+                        </pre>
                       </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
-                        Transfiere la copia descargada <code>system_image_snapshot_*.tar.gz</code> al servidor y restaura usuarios y configuraciones:
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+
+                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #4f46e5" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "#4338ca", marginBottom: 4 }}>
+                          Paso 6: Restauración de Configuraciones del SO In-Guest (Usuarios y Servicios)
+                        </div>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                          Transfiere la copia descargada <code>system_image_snapshot_*.tar.gz</code> al servidor y restaura los usuarios identificados (<code>{vmUsers}</code>) y servicios (<code>{vmServicesStr}</code>):
+                        </p>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
 {`# 1. Copiar snapshot del SO hacia la VM (desde tu estación de trabajo):
 scp -i ~/.ssh/id_rsa system_image_snapshot_*.tar.gz admin@$INSTANCE_PUBLIC_IP:~/
 
@@ -3032,29 +3143,48 @@ scp -i ~/.ssh/id_rsa system_image_snapshot_*.tar.gz admin@$INSTANCE_PUBLIC_IP:~/
 tar -xzf system_image_snapshot_*.tar.gz
 sudo chmod +x restore_system_image.sh
 sudo ./restore_system_image.sh`}
-                      </pre>
-                    </div>
-
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #7c3aed" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#6d28d9", marginBottom: 4 }}>
-                        Paso 7: Validación Operativa y Puesta en Marcha
+                        </pre>
                       </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
-                        Comprueba que los servicios del sistema, bases de datos y demonios se encuentren activos y respondiendo:
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+
+                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #7c3aed" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "#6d28d9", marginBottom: 4 }}>
+                          Paso 7: Validación Operativa y Puesta en Marcha en la Nube
+                        </div>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                          Comprueba que los servicios del sistema, bases de datos y demonios se encuentren activos y respondiendo:
+                        </p>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
 {`# 1. Validar servicios activos y puertos en escucha:
 sudo systemctl status ssh
 sudo ss -tulpn
 
 # 2. Verificar cuentas de usuario locales restauradas:
-cat /etc/passwd | grep -E "\${SSH_USER:-admin}|root|postgres"
+cat /etc/passwd | grep -E "admin|root|postgres|lacastrilp|rabbitmq"`}
+                        </pre>
+                      </div>
 
-# 3. Probar acceso remoto y validar consistencia del sistema`}
-                      </pre>
+                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #047857" }}>
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "#065f46", marginBottom: 4 }}>
+                          Paso 8: Automatización y Prueba Local en Hipervisores (VirtualBox / VMware)
+                        </div>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                          Si deseas validar el sistema operativo o ejecutarlo como máquina virtual local con 1 comando:
+                        </p>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+{`# Opción A: VirtualBox (Automático)
+# Descarga el lanzador y ejecútalo (crea la VM, asigna 4GB RAM, UEFI y conecta el disco VDI):
+curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/${currentJob.migration_id}/hypervisor-script?hypervisor=virtualbox"
+chmod +x launch_virtualbox_*.sh
+./launch_virtualbox_*.sh
+
+# Opción B: VMware Workstation / Player
+# Descarga el disco VMDK y abre el archivo VMX generado en el paquete ZIP:
+vmplayer ${vmSlug}.vmx`}
+                        </pre>
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* CASO 3: CAMPAÑA DE DATACENTER */}
                 {currentJob.use_case === "datacenter_campaign" && (

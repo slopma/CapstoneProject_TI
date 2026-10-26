@@ -9,6 +9,7 @@ for deploying collected workloads to AWS and GCP across all three use cases:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from typing import Any, Dict, Optional
@@ -89,32 +90,72 @@ def _build_case_1_guide(
     src: Dict[str, Any],
     files: Dict[str, str],
 ) -> str:
-    env_vars = src.get("environment_variables", [])
-    rt = src.get("runtime")
-    if isinstance(rt, dict):
-        runtime = rt.get("language") or "Aplicacion Web"
-        framework = rt.get("framework") or src.get("framework") or "Framework Contenerizado"
+    git_meta = src.get("git_meta") or {}
+    repo_url = git_meta.get("repository_url") or src.get("github_url") or f"https://github.com/empresa/{slug_name}"
+    git_ref = git_meta.get("ref") or src.get("github_ref") or "main"
+    commit_sha = git_meta.get("commit_sha") or git_meta.get("short_sha") or "HEAD"
+    short_sha = git_meta.get("short_sha") or (commit_sha[:8] if commit_sha != "HEAD" else "latest")
+    commit_msg = git_meta.get("commit_message") or "Release productivo"
+
+    # Runtime & Framework detectados
+    raw_lang = src.get("language") or src.get("runtime")
+    if isinstance(raw_lang, dict):
+        runtime = raw_lang.get("language") or "Aplicacion Web"
+        framework = raw_lang.get("framework") or src.get("framework") or "Framework Contenerizado"
     else:
-        runtime = str(rt) if rt else "Aplicacion Web"
+        runtime = str(raw_lang) if raw_lang else "Aplicacion Web"
         framework = src.get("framework") or "Framework Contenerizado"
 
-    detected_port = src.get("port") or 8000
-    if isinstance(detected_port, list) and detected_port:
-        detected_port = detected_port[0]
+    # Puertos expuestos detectados
+    raw_ports = src.get("exposed_ports") or src.get("ports") or [src.get("port") or 8000]
+    if isinstance(raw_ports, int):
+        raw_ports = [raw_ports]
+    detected_port = raw_ports[0] if raw_ports else 8000
 
-    detected_db = src.get("database") or "PostgreSQL"
+    # Comando de inicio y sondas de salud
+    start_cmds = src.get("start_commands") or [f"uvicorn main:app --host 0.0.0.0 --port {detected_port}" if "python" in runtime.lower() else "npm start"]
+    primary_start_cmd = start_cmds[0]
+    health_eps = src.get("health_endpoints") or ["/health"]
+    primary_health_ep = health_eps[0]
+
+    # Base de datos detectada
+    detected_db = src.get("database_requirements") or src.get("database") or "PostgreSQL"
     if isinstance(detected_db, dict):
-        detected_db = detected_db.get("engine") or "PostgreSQL"
+        db_engine = detected_db.get("engine") or "PostgreSQL"
+        db_version = detected_db.get("version") or "15"
+    else:
+        db_engine = str(detected_db) if detected_db else "PostgreSQL"
+        db_version = "15"
 
+    # Dependencias e instalación según runtime
+    rt_lower = runtime.lower()
+    if "python" in rt_lower or "py" in rt_lower:
+        dep_install_cmd = "python3 -m venv .venv && source .venv/bin/activate\npip install -r requirements.txt"
+        migrate_cmd = "alembic upgrade head" if ("fastapi" in framework.lower() or "flask" in framework.lower()) else "python manage.py migrate"
+    elif "node" in rt_lower or "javascript" in rt_lower or "typescript" in rt_lower:
+        dep_install_cmd = "npm ci --production || npm install"
+        migrate_cmd = "npx prisma migrate deploy || npm run migrate"
+    elif "java" in rt_lower or "spring" in rt_lower:
+        dep_install_cmd = "./mvnw clean package -DskipTests || gradle build"
+        migrate_cmd = "java -jar target/*.jar --migrate"
+    elif "go" in rt_lower or "golang" in rt_lower:
+        dep_install_cmd = "go mod download && go build -o app ."
+        migrate_cmd = "./app --migrate"
+    else:
+        dep_install_cmd = "docker build -t app:local ."
+        migrate_cmd = "npm run migrate || alembic upgrade head"
+
+    # Variables de entorno saneadas
+    env_vars = src.get("environment_variables", [])
     env_example_lines = [
         f"PORT={detected_port}",
         "NODE_ENV=production",
-        "DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}",
+        f"DATABASE_URL={db_engine.lower()}://${{DB_USER}}:${{DB_PASSWORD}}@${{DB_HOST}}:${{DB_PORT}}/{slug_name}_db",
         "SECRET_KEY=generate-a-secure-random-token-here",
         "ALLOWED_ORIGINS=*",
     ]
     if env_vars:
-        for ev in env_vars[:6]:
+        for ev in env_vars[:12]:
             var_name = ev.get("name") if isinstance(ev, dict) else str(ev)
             if var_name not in ("PORT", "DATABASE_URL", "NODE_ENV", "SECRET_KEY", "ALLOWED_ORIGINS"):
                 env_example_lines.append(f"{var_name}=production-value-here")
@@ -124,33 +165,45 @@ def _build_case_1_guide(
     if provider_clean == "aws":
         return f"""# Guia Paso a Paso: Despliegue y Configuracion de Aplicacion en AWS (ECS Fargate / RDS)
 **Carga de Trabajo:** {job_name} | **ID de Migracion:** {migration_id}
-**Entorno de Ejecucion:** {runtime} ({framework}) | **Region Destino:** AWS `{region}`
-**Modo Arquitectonico:** Contenedores en AWS Fargate con Red Aislada VPC y Base de Datos Gestionada ({detected_db})
+**Repositorio GitHub:** `{repo_url}` (Rama: `{git_ref}`, Commit: `{short_sha}`)
+**Entorno de Ejecucion:** {runtime} ({framework}) | **Puerto:** `{detected_port}` | **Region Destino:** AWS `{region}`
+**Modo Arquitectonico:** Contenedores en AWS Fargate con Red Aislada VPC y Base de Datos Gestionada ({db_engine} {db_version})
 
 ---
 
-### Paso 1: Descargar el Paquete de Despliegue (.ZIP)
-Descarga el paquete completo generado desde CloudMove o utiliza `curl`:
+### Paso 1: Descargar el Paquete de Despliegue y Clonar el Repositorio
+Para desplegar el codigo analizado de forma identica:
+1. Clonar el repositorio y posicionarse en el commit analizado:
 ```bash
-# Descarga directa del paquete zip generado
+git clone {repo_url} {slug_name}
+cd {slug_name}
+git checkout {commit_sha}
+```
+2. Descargar los artefactos generados por CloudMove (Terraform, Dockerfile optimizado y configuraciones):
+```bash
 CLOUDMOVE_API_URL="${{CLOUDMOVE_API_URL:-{DEFAULT_API_URL}}}"
 curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/bundle.zip"
-unzip bundle.zip -d ./cloudmove_app_deploy
-cd ./cloudmove_app_deploy
+unzip -o bundle.zip
 ```
 Archivos incluidos en el paquete:
-- `main.tf`, `variables.tf`, `outputs.tf`, `provider.tf`: Modulos de Terraform para aprovisionar VPC, Subredes publicas/privadas, Security Groups, Cluster ECS Fargate y Base de Datos RDS.
-- `Dockerfile` y `docker-compose.yml`: Definicion de contenedor optimizada para {runtime}.
-- `DEPLOYMENT_INSTRUCTIONS.md`: Este manual operativo de despliegue.
+- `main.tf`, `variables.tf`, `outputs.tf`, `provider.tf`: Modulos de Terraform para aprovisionar VPC, Subredes publicas/privadas, Security Groups, Cluster ECS Fargate y Base de Datos RDS ({db_engine}).
+- `Dockerfile` y `docker-compose.yml`: Definicion de contenedor optimizada para {runtime} ({framework}) ejecutando `{primary_start_cmd}`.
+- `DEPLOYMENT_INSTRUCTIONS.md`: Este manual tecnico de referencia.
 
-### Paso 2: Autenticacion en AWS y Configuracion del CLI
+### Paso 2: Instalacion de Dependencias y Validacion Local del Proyecto
+Instala las dependencias detectadas para verificar la integridad del codigo fuente antes de la construccion del contenedor:
+```bash
+{dep_install_cmd}
+```
+
+### Paso 3: Autenticacion en AWS y Configuracion del CLI
 Verifica que tu cuenta de AWS este activa y configurada:
 ```bash
 aws configure set default.region {region}
 aws sts get-caller-identity
 ```
 
-### Paso 3: Compilacion y Publicacion de la Imagen en Amazon ECR
+### Paso 4: Compilacion y Publicacion de la Imagen en Amazon ECR
 1. Crear el repositorio en Amazon ECR (si no existe):
 ```bash
 aws ecr create-repository --repository-name {slug_name} --region {region} || true
@@ -160,22 +213,24 @@ aws ecr create-repository --repository-name {slug_name} --region {region} || tru
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.{region}.amazonaws.com
 ```
-3. Compilar la imagen Docker local y subirla al repositorio:
+3. Compilar la imagen Docker local con el tag exacto del commit y subirla al repositorio:
 ```bash
-docker build -t {slug_name}:latest .
-docker tag {slug_name}:latest $AWS_ACCOUNT_ID.dkr.ecr.{region}.amazonaws.com/{slug_name}:latest
+docker build -t {slug_name}:{short_sha} .
+docker tag {slug_name}:{short_sha} $AWS_ACCOUNT_ID.dkr.ecr.{region}.amazonaws.com/{slug_name}:{short_sha}
+docker tag {slug_name}:{short_sha} $AWS_ACCOUNT_ID.dkr.ecr.{region}.amazonaws.com/{slug_name}:latest
+docker push $AWS_ACCOUNT_ID.dkr.ecr.{region}.amazonaws.com/{slug_name}:{short_sha}
 docker push $AWS_ACCOUNT_ID.dkr.ecr.{region}.amazonaws.com/{slug_name}:latest
 ```
 
-### Paso 4: Aprovisionamiento de Infraestructura con Terraform
-Aprovisiona la red VPC, los grupos de seguridad, el balanceador ALB, la base de datos gestionada y la tarea ECS:
+### Paso 5: Aprovisionamiento de Infraestructura con Terraform
+Aprovisiona la red VPC, los grupos de seguridad, el balanceador ALB, la base de datos gestionada ({db_engine}) y la tarea ECS:
 ```bash
 terraform init
 terraform plan
 terraform apply -auto-approve
 ```
 
-### Paso 5: Despliegue Efectivo del Servicio en la Nube (ECS Fargate)
+### Paso 6: Despliegue Efectivo del Servicio en la Nube (ECS Fargate)
 Fuerza la actualizacion del servicio ECS para que descargue la imagen publicada en ECR y levante las tareas:
 ```bash
 CLUSTER_NAME=$(terraform output -raw ecs_cluster_name 2>/dev/null || echo "{slug_name}-cluster")
@@ -191,9 +246,9 @@ echo "Esperando a que las tareas de ECS alcancen estado RUNNING y salud estable.
 aws ecs wait services-stable --cluster "$CLUSTER_NAME" --services "$SERVICE_NAME" --region {region}
 ```
 
-### Paso 6: Configuraciones Necesarias para Usar la Aplicacion
+### Paso 7: Configuraciones Necesarias para Usar la Aplicacion
 
-#### 6.1 Variables de Entorno y Almacenamiento de Secretos
+#### 7.1 Variables de Entorno y Almacenamiento de Secretos
 Almacena las credenciales sensibles y de conexion en AWS Secrets Manager:
 ```bash
 cat << 'EOF' > .env.production
@@ -211,7 +266,7 @@ aws secretsmanager update-secret \\
     --region {region}
 ```
 
-#### 6.2 Inicializacion y Ejecucion de Migraciones de Base de Datos
+#### 7.2 Inicializacion y Ejecucion de Migraciones de Base de Datos
 Obten los datos de conexion de la base de datos RDS creada por Terraform:
 ```bash
 DB_ENDPOINT=$(terraform output -raw db_endpoint 2>/dev/null || echo "rds-host:5432")
@@ -223,68 +278,76 @@ aws ecs run-task \\
     --task-definition "{slug_name}-task" \\
     --launch-type FARGATE \\
     --network-configuration "awsvpcConfiguration={{subnets=[$(terraform output -raw private_subnet_id 2>/dev/null)],securityGroups=[$(terraform output -raw ecs_security_group_id 2>/dev/null)],assignPublicIp=ENABLED}}" \\
-    --overrides '{{"containerOverrides": [{{"name": "{slug_name}", "command": ["npm", "run", "migrate"]}}]}}'
+    --overrides '{{"containerOverrides": [{{"name": "{slug_name}", "command": {json.dumps(migrate_cmd.split())}}}]}}'
 
 # Opcion B: Ejecutar migraciones directamente con herramientas locales si tienes acceso por VPN o Bastion
-# python manage.py migrate  /  alembic upgrade head  /  npx prisma migrate deploy
+# {migrate_cmd}
 ```
 
-#### 6.3 Configuracion de Red, CORS y Grupos de Seguridad
-- **Trafico Web:** El balanceador Application Load Balancer (ALB) permite trafico de entrada en el puerto 80 (HTTP) y 443 (HTTPS) desde `0.0.0.0/0`.
-- **Base de Datos:** El grupo de seguridad de RDS restringe las conexiones en el puerto 5432/3306 admitiendo unicamente paquetes provenientes del Security Group de ECS Fargate.
+#### 7.3 Configuracion de Red, CORS y Grupos de Seguridad
+- **Trafico Web:** El balanceador Application Load Balancer (ALB) permite trafico de entrada en el puerto 80 (HTTP) y 443 (HTTPS) desde `0.0.0.0/0`, enrutando al puerto `{detected_port}` del contenedor.
+- **Base de Datos:** El grupo de seguridad de RDS restringe las conexiones admitiendo unicamente paquetes provenientes del Security Group de ECS Fargate.
 - **CORS:** Si la aplicacion atiende peticiones de una aplicacion web externa, verifica que la variable `ALLOWED_ORIGINS` contenga el dominio del cliente.
 
-#### 6.4 Enlace Frontend <-> Backend
+#### 7.4 Enlace Frontend <-> Backend
 Si cuentas con una aplicacion web separada (React, Vue, Angular o Mobile), configura la variable de entorno del cliente con el endpoint asignado:
 ```bash
 SERVICE_ENDPOINT=$(terraform output -raw app_endpoint 2>/dev/null || terraform output -raw alb_dns_name)
 echo "Configurar en cliente frontend: VITE_API_BASE_URL=http://$SERVICE_ENDPOINT"
 ```
 
-### Paso 7: Acceso Publico, Verificacion y Como Usar la Aplicacion
+### Paso 8: Acceso Publico, Verificacion y Como Usar la Aplicacion
 1. **Consultar URL Publica:**
 ```bash
 APP_URL=$(terraform output -raw app_endpoint 2>/dev/null || echo "http://$(terraform output -raw alb_dns_name)")
 echo "URL publica de la aplicacion: $APP_URL"
 ```
-2. **Prueba de Salud del Servicio:**
+2. **Prueba de Salud del Servicio (Sonda en `{primary_health_ep}`):**
 ```bash
-curl -Iv "$APP_URL/health" || curl -Iv "$APP_URL/"
+curl -Iv "$APP_URL{primary_health_ep}" || curl -Iv "$APP_URL/"
 ```
 3. **Uso y Pruebas Operativas:**
 - Abre `$APP_URL` en tu navegador web.
-- Si es una API REST o FastAPI/Node, accede a la documentacion Swagger interactiva en `$APP_URL/docs` o `$APP_URL/swagger`.
+- Si expone una API REST (FastAPI/Express), accede a la documentacion interactiva en `$APP_URL/docs` o `$APP_URL/swagger`.
 - Realiza una peticion de prueba de login o consulta de registros de prueba contra la base de datos migrada.
 """
     else:
         return f"""# Guia Paso a Paso: Despliegue y Configuracion de Aplicacion en Google Cloud (Cloud Run / Cloud SQL)
 **Carga de Trabajo:** {job_name} | **ID de Migracion:** {migration_id}
-**Entorno de Ejecucion:** {runtime} ({framework}) | **Region Destino:** GCP `{region}`
-**Proyecto GCP:** `{gcp_project}` | **Base de Datos:** Cloud SQL ({detected_db})
+**Repositorio GitHub:** `{repo_url}` (Rama: `{git_ref}`, Commit: `{short_sha}`)
+**Entorno de Ejecucion:** {runtime} ({framework}) | **Puerto:** `{detected_port}` | **Region Destino:** GCP `{region}`
+**Proyecto GCP:** `{gcp_project}` | **Base de Datos:** Cloud SQL ({db_engine} {db_version})
 
 ---
 
-### Paso 1: Descargar el Paquete de Despliegue (.ZIP)
-Descarga el paquete completo generado por CloudMove:
+### Paso 1: Descargar el Paquete de Despliegue y Clonar el Repositorio
+Para desplegar el codigo analizado en Google Cloud:
+1. Clonar el repositorio y posicionarse en el commit analizado:
+```bash
+git clone {repo_url} {slug_name}
+cd {slug_name}
+git checkout {commit_sha}
+```
+2. Descargar los artefactos generados por CloudMove:
 ```bash
 CLOUDMOVE_API_URL="${{CLOUDMOVE_API_URL:-{DEFAULT_API_URL}}}"
 curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/bundle.zip"
-unzip bundle.zip -d ./cloudmove_app_deploy
-cd ./cloudmove_app_deploy
+unzip -o bundle.zip
 ```
-Archivos incluidos:
-- `main.tf`, `variables.tf`, `outputs.tf`, `provider.tf`: Codigo Terraform para Google Cloud (VPC, Cloud SQL, Cloud Run / GKE, Secret Manager).
-- `Dockerfile`: Definicion de contenedor optimizada para {runtime}.
-- `DEPLOYMENT_INSTRUCTIONS.md`: Este manual tecnico de referencia.
 
-### Paso 2: Autenticacion y Seleccion de Proyecto en GCP
+### Paso 2: Instalacion de Dependencias y Validacion Local
+```bash
+{dep_install_cmd}
+```
+
+### Paso 3: Autenticacion y Seleccion de Proyecto en GCP
 ```bash
 gcloud auth login
 gcloud config set project {gcp_project}
 gcloud services enable compute.googleapis.com artifactregistry.googleapis.com run.googleapis.com sqladmin.googleapis.com secretmanager.googleapis.com
 ```
 
-### Paso 3: Compilacion y Registro en Google Artifact Registry
+### Paso 4: Compilacion y Registro en Google Artifact Registry
 1. Crear el repositorio de artefactos:
 ```bash
 gcloud artifacts repositories create {slug_name}-repo \\
@@ -296,24 +359,26 @@ gcloud artifacts repositories create {slug_name}-repo \\
 ```bash
 gcloud auth configure-docker {region}-docker.pkg.dev
 ```
-3. Compilar y subir la imagen:
+3. Compilar y subir la imagen con tag del commit:
 ```bash
-IMAGE_TAG="{region}-docker.pkg.dev/{gcp_project}/{slug_name}-repo/{slug_name}:latest"
+IMAGE_TAG="{region}-docker.pkg.dev/{gcp_project}/{slug_name}-repo/{slug_name}:{short_sha}"
 docker build -t "$IMAGE_TAG" .
+docker tag "$IMAGE_TAG" "{region}-docker.pkg.dev/{gcp_project}/{slug_name}-repo/{slug_name}:latest"
 docker push "$IMAGE_TAG"
+docker push "{region}-docker.pkg.dev/{gcp_project}/{slug_name}-repo/{slug_name}:latest"
 ```
 
-### Paso 4: Aprovisionamiento de Infraestructura con Terraform
+### Paso 5: Aprovisionamiento de Infraestructura con Terraform
 ```bash
 terraform init
 terraform plan
 terraform apply -auto-approve -var="gcp_project_id={gcp_project}" -var="gcp_region={region}"
 ```
 
-### Paso 5: Despliegue Efectivo del Servicio en Google Cloud Run
+### Paso 6: Despliegue Efectivo del Servicio en Google Cloud Run
 Despliega o actualiza el servicio con la imagen compilada y acceso publico:
 ```bash
-IMAGE_TAG="{region}-docker.pkg.dev/{gcp_project}/{slug_name}-repo/{slug_name}:latest"
+IMAGE_TAG="{region}-docker.pkg.dev/{gcp_project}/{slug_name}-repo/{slug_name}:{short_sha}"
 
 gcloud run deploy {slug_name} \\
     --image="$IMAGE_TAG" \\
@@ -324,9 +389,9 @@ gcloud run deploy {slug_name} \\
     --set-env-vars="NODE_ENV=production,PORT={detected_port}"
 ```
 
-### Paso 6: Configuraciones Necesarias para Usar la Aplicacion
+### Paso 7: Configuraciones Necesarias para Usar la Aplicacion
 
-#### 6.1 Variables de Entorno y Secretos en Google Secret Manager
+#### 7.1 Variables de Entorno y Secretos en Google Secret Manager
 Almacena las credenciales sensibles:
 ```bash
 cat << 'EOF' > .env.production
@@ -337,7 +402,7 @@ gcloud secrets create {slug_name}-env --data-file=.env.production || \\
 gcloud secrets versions add {slug_name}-env --data-file=.env.production
 ```
 
-#### 6.2 Conexion a Cloud SQL e Inicializacion de Migraciones
+#### 7.2 Conexion a Cloud SQL e Inicializacion de Migraciones
 1. Otorga permisos a la cuenta de servicio de Cloud Run para conectar a Cloud SQL:
 ```bash
 CLOUDRUN_SA=$(gcloud run services describe {slug_name} --region={region} --format="value(spec.template.spec.serviceAccountName)")
@@ -350,26 +415,26 @@ gcloud projects add-iam-policy-binding {gcp_project} \\
 gcloud run jobs create {slug_name}-migrate \\
     --image="$IMAGE_TAG" \\
     --region={region} \\
-    --command="npm,run,migrate" || true
+    --command="{migrate_cmd}" || true
 gcloud run jobs execute {slug_name}-migrate --region={region} --wait
 ```
 
-#### 6.3 Enlace Frontend <-> Backend
+#### 7.3 Enlace Frontend <-> Backend
 Configura la URL de Cloud Run en tu aplicacion cliente:
 ```bash
 SERVICE_URL=$(gcloud run services describe {slug_name} --region={region} --format="value(status.url)")
 echo "Configurar en cliente frontend: VITE_API_BASE_URL=$SERVICE_URL"
 ```
 
-### Paso 7: Acceso Publico, Verificacion y Como Usar la Aplicacion
+### Paso 8: Acceso Publico, Verificacion y Como Usar la Aplicacion
 1. **Consultar URL de Cloud Run:**
 ```bash
 SERVICE_URL=$(gcloud run services describe {slug_name} --region={region} --format="value(status.url)")
 echo "Servicio disponible en: $SERVICE_URL"
 ```
-2. **Prueba de Salud:**
+2. **Prueba de Salud (Sonda en `{primary_health_ep}`):**
 ```bash
-curl -Iv "$SERVICE_URL"
+curl -Iv "$SERVICE_URL{primary_health_ep}" || curl -Iv "$SERVICE_URL"
 ```
 3. **Uso de la Aplicacion:**
 - Abre la URL en el navegador web para verificar la interfaz de usuario.
@@ -394,12 +459,20 @@ def _build_case_2_guide(
     arch = os_info.get("architecture", "x86_64")
     boot_mode = src.get("boot_mode", "UEFI")
     part_scheme = src.get("partition_scheme", "GPT")
-    users = ", ".join(src.get("local_users", ["root"]))
+    raw_users = src.get("local_users", ["root"])
+    users = ", ".join(raw_users)
     pkgs_count = src.get("installed_packages_summary", {}).get("total_count", 0)
     disks = src.get("disks", [{}])
     primary_disk = disks[0].get("device", "/dev/nvme0n1")
     disk_size = disks[0].get("size_gib", 50)
-    used_gib = src.get("total_used_gib", 15)
+    used_gib = disks[0].get("used_gib", src.get("total_used_gib", 15))
+    services_list = src.get("services") or ["ssh.service", "systemd-journald.service", "cron.service"]
+    if isinstance(services_list, list) and services_list and isinstance(services_list[0], dict):
+        services_str = ", ".join(s.get("name") for s in services_list[:5] if s.get("name"))
+    elif isinstance(services_list, list):
+        services_str = ", ".join(str(s) for s in services_list[:5])
+    else:
+        services_str = "ssh.service, systemd-journald.service"
 
     if provider_clean == "aws":
         return f"""# Guia Paso a Paso: Despliegue y Montaje de Sistema Operativo e Imagen de VM en AWS EC2
@@ -407,28 +480,42 @@ def _build_case_2_guide(
 **Sistema Operativo:** {distro} (Kernel: `{kernel}`, `{arch}`)
 **Arranque / Particionado:** `{boot_mode}` (`{part_scheme}`) | **Disco Principal:** `{primary_disk}` ({disk_size} GiB prov, {used_gib} GiB usados)
 **Usuarios Descubiertos:** {users} | **Paquetes Inventariados:** {pkgs_count}
+**Servicios Detectados:** {services_str}
 **Region Destino:** AWS `{region}`
 
 ---
 
 ### Paso 1: Descargar la Copia del SO y los Artefactos de Migracion
-Tienes a tu disposicion descargas directas desde la interfaz de CloudMove o mediante la API:
+Tienes a tu disposicion descargas directas en formatos listos para cualquier virtualizador o para la nube:
 1. **Descargar Paquete Completo de Despliegue (.ZIP):**
-   Incluye Terraform (`main.tf`, `variables.tf`), `deploy_to_aws.sh`, `create_full_raw_disk_clone.sh`, `restore_system_image.sh`, manifiestos de paquetes/usuarios y la copia comprimida del SO.
+   Incluye Terraform (`main.tf`, `variables.tf`), `deploy_to_aws.sh`, script de VirtualBox (`launch_virtualbox.sh`), script de VMware (`launch_vmware.sh`, `{slug_name}.vmx`), `create_full_raw_disk_clone.sh` y `restore_system_image.sh`.
    ```bash
    CLOUDMOVE_API_URL="${{CLOUDMOVE_API_URL:-{DEFAULT_API_URL}}}"
-curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/bundle.zip"
+   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/bundle.zip"
    unzip bundle.zip -d ./cloudmove_os_migration
    cd ./cloudmove_os_migration
    ```
-2. **Descargar Copia del Sistema Operativo Directamente (.tar.gz):**
-   Contiene todos los ficheros de `/etc`, tabla de particiones, cuentas de usuarios locales, servicios de systemd y script de restauracion in-guest:
+2. **Descargar Disco Listo para VirtualBox (.VDI):**
+   ```bash
+   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/disk-image?format=vdi"
+   ```
+3. **Descargar Disco Listo para VMware (.VMDK):**
+   ```bash
+   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/disk-image?format=vmdk"
+   ```
+4. **Descargar Disco para QEMU / KVM / Proxmox (.QCOW2):**
+   ```bash
+   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/disk-image?format=qcow2"
+   ```
+5. **Descargar Copia de Configuraciones del SO (.tar.gz):**
+   Contiene todo `/etc`, tabla de particiones, cuentas de usuarios locales ({users}) y servicios de systemd:
    ```bash
    curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/system-image"
    ```
-3. **Descargar Imagen de Disco QCOW2 (si fue generada en Staging):**
+6. **Descargar Script Lanzador Automatizado VirtualBox (`launch_virtualbox.sh`):**
    ```bash
-   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/disk-image"
+   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/hypervisor-script?hypervisor=virtualbox"
+   chmod +x launch_virtualbox_{slug_name}.sh
    ```
 
 ### Paso 2: Subida de la Imagen / Transmision de Bloques hacia Amazon S3
@@ -549,9 +636,9 @@ sudo ./restore_system_image.sh
 ¿Que realiza `restore_system_image.sh`?
 - Restaura los archivos de `/etc` preservando certificados, `/etc/hosts` y configuraciones personalizadas.
 - Recrea las cuentas de usuario locales descubiertas ({users}) con sus mismos UID y shells.
-- Recarga demonios de systemd y activa los servicios criticos.
+- Recarga demonios de systemd y activa los servicios criticos detectados ({services_str}).
 
-### Paso 7: Validacion Operativa y Puesta en Marcha
+### Paso 7: Validacion Operativa y Puesta en Marcha en la Nube
 Verifica que los servicios del sistema operativo se encuentren activos:
 ```bash
 # Validar servicios principales
@@ -561,7 +648,29 @@ sudo ss -tulpn
 # Validar cuentas de usuario restauradas
 cat /etc/passwd | grep -E "${{SSH_USER:-admin}}|root|postgres"
 ```
-El servidor en la nube esta montado, activo y operando con la misma configuracion del entorno original.
+
+### Paso 8: Automatizacion y Prueba Local en Hipervisores (VirtualBox / VMware)
+Si deseas validar el sistema operativo o ejecutarlo como maquina virtual local antes o despues de subirlo a la nube:
+
+#### Opcion A: Lanzamiento Automatizado en VirtualBox (1 Comando)
+CloudMove genero el script desatendido `launch_virtualbox.sh` que crea y arranca la VM automaticamente:
+```bash
+chmod +x launch_virtualbox.sh
+./launch_virtualbox.sh
+```
+El script realiza:
+1. Verificacion de `VBoxManage`.
+2. Asignacion de 4 GB RAM, 2 CPUs y firmware `{boot_mode.lower()}`.
+3. Creacion de controlador SATA y montaje del disco VDI (`{slug_name}.vdi`).
+4. Inicio interactivo de la maquina virtual.
+
+#### Opcion B: Lanzamiento en VMware Workstation / Player / Fusion
+Abre directamente la plantilla VMX con el disco VMDK:
+```bash
+chmod +x launch_vmware.sh
+./launch_vmware.sh
+# O importa el archivo '{slug_name}.vmx' directamente desde la interfaz de VMware.
+```
 """
     else:
         return f"""# Guia Paso a Paso: Despliegue y Montaje de Sistema Operativo e Imagen de VM en Google Compute Engine
@@ -569,26 +678,35 @@ El servidor en la nube esta montado, activo y operando con la misma configuracio
 **Sistema Operativo:** {distro} (Kernel: `{kernel}`, `{arch}`)
 **Arranque / Particionado:** `{boot_mode}` (`{part_scheme}`) | **Disco Principal:** `{primary_disk}` ({disk_size} GiB prov, {used_gib} GiB usados)
 **Usuarios Descubiertos:** {users} | **Paquetes Inventariados:** {pkgs_count}
+**Servicios Detectados:** {services_str}
 **Region Destino:** GCP `{region}` | **Proyecto:** `{gcp_project}`
 
 ---
 
 ### Paso 1: Descargar la Copia del SO y los Artefactos de Migracion
-Descarga los artefactos desde la plataforma CloudMove:
+Descarga los artefactos desde la plataforma CloudMove listos para cualquier virtualizador o para GCP:
 1. **Descargar Paquete Completo de Despliegue (.ZIP):**
    ```bash
    CLOUDMOVE_API_URL="${{CLOUDMOVE_API_URL:-{DEFAULT_API_URL}}}"
-curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/bundle.zip"
+   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/bundle.zip"
    unzip bundle.zip -d ./cloudmove_os_migration
    cd ./cloudmove_os_migration
    ```
-2. **Descargar Copia del Sistema Operativo (.tar.gz):**
+2. **Descargar Disco Listo para VirtualBox (.VDI):**
+   ```bash
+   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/disk-image?format=vdi"
+   ```
+3. **Descargar Disco Listo para VMware (.VMDK):**
+   ```bash
+   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/disk-image?format=vmdk"
+   ```
+4. **Descargar Disco para QEMU / KVM / Proxmox (.QCOW2):**
+   ```bash
+   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/disk-image?format=qcow2"
+   ```
+5. **Descargar Copia del Sistema Operativo (.tar.gz):**
    ```bash
    curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/system-image"
-   ```
-3. **Descargar Imagen de Disco QCOW2:**
-   ```bash
-   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/disk-image"
    ```
 
 ### Paso 2: Subida de la Imagen a Google Cloud Storage
@@ -645,11 +763,23 @@ sudo chmod +x restore_system_image.sh
 sudo ./restore_system_image.sh
 ```
 
-### Paso 7: Validacion Operativa
+### Paso 7: Validacion Operativa en la Nube
 Comprueba el estado de salud de la maquina virtual y servicios en escucha:
 ```bash
 systemctl list-units --type=service --state=running
 sudo ss -tulpn
+```
+
+### Paso 8: Automatizacion y Prueba Local en Hipervisores (VirtualBox / VMware)
+Ejecuta la maquina virtual localmente para pruebas previas o entornos de contingencia:
+```bash
+# VirtualBox
+chmod +x launch_virtualbox.sh
+./launch_virtualbox.sh
+
+# VMware
+chmod +x launch_vmware.sh
+./launch_vmware.sh
 ```
 """
 
@@ -666,6 +796,29 @@ def _build_case_3_guide(
 ) -> str:
     servers_count = len(src.get("servers", [])) or 12
     waves_count = 4
+
+    hybrid_net = "AWS Site-to-Site VPN / Direct Connect" if provider_clean == "aws" else "Google Cloud Interconnect / Cloud VPN"
+    db_service = "Amazon RDS / Aurora Multi-AZ" if provider_clean == "aws" else "Google Cloud SQL"
+    lb_service = "Application Load Balancer" if provider_clean == "aws" else "Google Cloud Load Balancing"
+
+    if provider_clean == "aws":
+        dms_block = f"""```bash
+# Iniciar tarea de replicacion con AWS Database Migration Service (DMS)
+aws dms start-replication-task --replication-task-arn $DMS_TASK_ARN --start-replication-task-type start-replication
+```"""
+        mgn_block = f"""```bash
+# Instalar agente de AWS Application Migration Service (AWS MGN) en los servidores origen
+sudo ./aws-replication-installer-init.py --region {region}
+```"""
+    else:
+        dms_block = """```bash
+# Iniciar replicacion continua con Database Migration Service de GCP
+gcloud database-migration migration-jobs start $GCP_MIGRATION_JOB_ID
+```"""
+        mgn_block = """```bash
+# Configurar Google Cloud Migrate to Virtual Machines
+gcloud migration vms connectors create ...
+```"""
 
     return f"""# Guia Paso a Paso: Ejecucion de Campana de Migracion de Datacenter ({provider_clean.upper()})
 **Campana:** {job_name} | **ID de Migracion:** {migration_id}
@@ -698,34 +851,22 @@ terraform apply -auto-approve
 ```
 Esto aprovisiona:
 1. VPC central con enrutamiento entre subredes publicas, de aplicacion y de bases de datos.
-2. Conexion hibrida hacia el datacenter local ({provider_clean.upper() == "AWS" and "AWS Site-to-Site VPN / Direct Connect" or "Google Cloud Interconnect / Cloud VPN"}).
+2. Conexion hibrida hacia el datacenter local ({hybrid_net}).
 3. Roles de servicio IAM, politicas de firewall y perimetros de seguridad.
 
 ### Paso 3: Migracion Continua de Bases de Datos (Wave 1 - Data Tier)
-1. Aprovisionar instancias administradas de base de datos ({provider_clean.upper() == "AWS" and "Amazon RDS / Aurora Multi-AZ" or "Google Cloud SQL"}).
+1. Aprovisionar instancias administradas de base de datos ({db_service}).
 2. Configurar replicacion continua de datos con Change Data Capture (CDC):
-{provider_clean == "aws" and """```bash
-# Iniciar tarea de replicacion con AWS Database Migration Service (DMS)
-aws dms start-replication-task --replication-task-arn $DMS_TASK_ARN --start-replication-task-type start-replication
-```""" or """```bash
-# Iniciar replicacion continua con Database Migration Service de GCP
-gcloud database-migration migration-jobs start $GCP_MIGRATION_JOB_ID
-```"""}
+{dms_block}
 3. Mantener la replicacion activa mientras se migran las capas de aplicacion.
 
 ### Paso 4: Migracion de Servidores de Aplicacion por Bloques (Wave 2 - App Tier)
 Instalar los agentes de replicacion continua a nivel de bloques en los servidores fisicos o hipervisores VMware/Proxmox:
-{provider_clean == "aws" and f"""```bash
-# Instalar agente de AWS Application Migration Service (AWS MGN) en los servidores origen
-sudo ./aws-replication-installer-init.py --region {region}
-```""" or """```bash
-# Configurar Google Cloud Migrate to Virtual Machines
-gcloud migration vms connectors create ...
-```"""}
+{mgn_block}
 Los discos se sincronizan de forma continua y transparente en segundo plano.
 
 ### Paso 5: Despliegue de Balanceadores y Capa Web (Wave 3 - Web Tier)
-Aprovisionar balanceadores de carga ({provider_clean.upper() == "AWS" and "Application Load Balancer" or "Google Cloud Load Balancing"}) apuntando a los servidores replicados en la Wave 2.
+Aprovisionar balanceadores de carga ({lb_service}) apuntando a los servidores replicados en la Wave 2.
 
 ### Paso 6: Ventana de Conmutacion Final (Cutover) y Rollback
 1. Activar modo solo-lectura temporal en base de datos origen.

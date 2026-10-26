@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 import zipfile
 from fastapi import APIRouter, HTTPException, Query, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
 from app.cmir.normalizer import normalize_inventory
@@ -537,15 +537,21 @@ def download_system_image_snapshot(migration_id: str):
 
 
 @router.get("/jobs/{migration_id}/disk-image")
-def download_disk_image_file(migration_id: str):
+def download_disk_image_file(
+    migration_id: str,
+    format: Optional[str] = Query(None, description="Target hypervisor format: 'vdi' (VirtualBox), 'vmdk' (VMware), 'qcow2' (QEMU/KVM/Proxmox), 'raw'"),
+):
     """
-    Download the generated binary virtual disk image (.qcow2 / .raw / .vmdk) from staging.
+    Download the generated binary virtual disk image from staging, optionally
+    converting it on-the-fly to the requested hypervisor format (.vdi, .vmdk, .qcow2).
     """
     try:
         job = migration_orchestrator.get_migration(migration_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    import shutil
+    import subprocess
     from app.migration.deployment_guide_generator import _slug
     src = job.get("source_environment") or {}
     live_details = src.get("live_capture_details") or {}
@@ -576,7 +582,7 @@ def download_disk_image_file(migration_id: str):
             ] + [d for d in staging_root.iterdir() if d.is_dir()]
             for s_dir in staging_dirs:
                 if s_dir.is_dir():
-                    for disk_ext in ("*.qcow2", "*.vmdk", "*.raw", "*.vhdx"):
+                    for disk_ext in ("*.qcow2", "*.vmdk", "*.raw", "*.vhdx", "*.vdi"):
                         for disk_file in s_dir.glob(disk_ext):
                             if disk_file.is_file() and disk_file.stat().st_size < 1024 * 1024 * 1024:
                                 found_path = disk_file
@@ -589,19 +595,208 @@ def download_disk_image_file(migration_id: str):
     if not found_path:
         raise HTTPException(
             status_code=404,
-            detail=f"No se encontró archivo de imagen de disco (.qcow2) disponible para descargar en la migración '{migration_id}'. Use 'create_full_raw_disk_clone.sh' para streaming o clonado local.",
+            detail=f"No se encontró archivo de imagen de disco disponible para descargar en la migración '{migration_id}'. Use 'create_full_raw_disk_clone.sh' para streaming o clonado local.",
         )
 
+    # Conversion to requested hypervisor format if specified
+    req_fmt = str(format).lower().strip().lstrip(".") if format else None
+    if req_fmt and req_fmt in ("vdi", "vmdk", "qcow2", "raw"):
+        cur_fmt = found_path.suffix.lower().lstrip(".")
+        if cur_fmt != req_fmt:
+            target_converted = found_path.parent / f"{found_path.stem}.{req_fmt}"
+            if target_converted.is_file():
+                found_path = target_converted
+            else:
+                qemu_bin = shutil.which("qemu-img")
+                if qemu_bin:
+                    try:
+                        res = subprocess.run(
+                            [qemu_bin, "convert", "-f", cur_fmt, "-O", req_fmt, str(found_path), str(target_converted)],
+                            capture_output=True,
+                            timeout=60,
+                        )
+                        if res.returncode == 0 and target_converted.is_file():
+                            found_path = target_converted
+                    except Exception:
+                        pass
+
     media_type = "application/octet-stream"
-    if found_path.suffix.lower() == ".qcow2":
+    suf = found_path.suffix.lower()
+    if suf == ".qcow2":
         media_type = "application/x-qemu-disk"
-    elif found_path.suffix.lower() == ".vmdk":
+    elif suf == ".vmdk":
         media_type = "application/x-vmdk"
+    elif suf == ".vdi":
+        media_type = "application/x-virtualbox-vdi"
 
     return FileResponse(
         path=str(found_path),
         filename=found_path.name,
         media_type=media_type,
+    )
+
+
+@router.get("/jobs/{migration_id}/hypervisor-script")
+def download_hypervisor_script(
+    migration_id: str,
+    hypervisor: str = Query("virtualbox", description="Target hypervisor: 'virtualbox' or 'vmware'"),
+):
+    """
+    Download automated launch and provisioning script for VirtualBox or VMware.
+    """
+    try:
+        job = migration_orchestrator.get_migration(migration_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    from app.migration.deployment_guide_generator import _slug
+    src = job.get("source_environment") or {}
+    job_slug = _slug(job.get("name", "workload"))
+    boot_mode = str(src.get("boot_mode") or "uefi").lower()
+
+    if hypervisor.lower() == "vmware":
+        content = f"""#!/usr/bin/env bash
+# ==============================================================================
+# CloudMove — Lanzador Automatizado para VMware Workstation / Player
+# VM: CloudMove-{job_slug}
+# ==============================================================================
+set -euo pipefail
+
+VM_NAME="CloudMove-{job_slug}"
+VMDK_IMAGE="{job_slug}.vmdk"
+QCOW_IMAGE="{job_slug}.qcow2"
+VMX_FILE="{job_slug}.vmx"
+
+echo "=========================================================="
+echo " CloudMove — Lanzador Automatizado para VMware"
+echo "=========================================================="
+
+# 1. Convertir QCOW2 a VMDK si es necesario
+if [ ! -f "$VMDK_IMAGE" ] && [ -f "$QCOW_IMAGE" ]; then
+    echo "[1/3] Convirtiendo $QCOW_IMAGE a formato nativo VMware ($VMDK_IMAGE)..."
+    qemu-img convert -f qcow2 -O vmdk "$QCOW_IMAGE" "$VMDK_IMAGE"
+fi
+
+if [ ! -f "$VMDK_IMAGE" ]; then
+    echo "Descargando disco VMDK desde CloudMove..."
+    CLOUDMOVE_API_URL="${{CLOUDMOVE_API_URL:-http://localhost:8000}}"
+    curl -fSL "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/disk-image?format=vmdk" -o "$VMDK_IMAGE" || true
+fi
+
+echo "[2/3] Generando archivo de configuración VMware ($VMX_FILE)..."
+cat << 'EOF_VMX' > "$VMX_FILE"
+.encoding = "UTF-8"
+config.version = "8"
+virtualHW.version = "19"
+vmci0.present = "TRUE"
+displayName = "CloudMove-{job_slug}"
+guestOS = "debian11-64"
+memsize = "4096"
+numvcpus = "2"
+firmware = "{boot_mode}"
+sata0.present = "TRUE"
+sata0:0.present = "TRUE"
+sata0:0.fileName = "{job_slug}.vmdk"
+sata0:0.deviceType = "disk"
+ethernet0.present = "TRUE"
+ethernet0.connectionType = "nat"
+ethernet0.virtualDev = "e1000e"
+ethernet0.wakeOnPcktRcv = "FALSE"
+ethernet0.addressType = "generated"
+pciBridge0.present = "TRUE"
+EOF_VMX
+
+echo "[3/3] Configuración VMware creada exitosamente en $VMX_FILE."
+echo "Para abrir la máquina virtual en VMware:"
+echo "  vmplayer \"$(realpath "$VMX_FILE")\" &"
+echo "  o abra '$VMX_FILE' desde VMware Workstation / Fusion."
+"""
+        filename = f"launch_vmware_{job_slug}.sh"
+    else:
+        content = f"""#!/usr/bin/env bash
+# ==============================================================================
+# CloudMove — Lanzador Automatizado para VirtualBox
+# VM: CloudMove-{job_slug}
+# ==============================================================================
+set -euo pipefail
+
+VM_NAME="CloudMove-{job_slug}"
+VDI_IMAGE="{job_slug}.vdi"
+QCOW_IMAGE="{job_slug}.qcow2"
+MEMORY_MB=4096
+CPUS=2
+
+echo "=========================================================="
+echo " CloudMove — Lanzador Automatizado para VirtualBox"
+echo " Máquina Virtual: $VM_NAME"
+echo "=========================================================="
+
+if ! command -v VBoxManage >/dev/null 2>&1; then
+    echo "ERROR: VBoxManage no está instalado o no se encuentra en el PATH."
+    echo "Instale VirtualBox mediante: sudo apt-get install virtualbox"
+    exit 1
+fi
+
+# 1. Convertir QCOW2 a VDI si es necesario o descargar
+if [ ! -f "$VDI_IMAGE" ] && [ -f "$QCOW_IMAGE" ]; then
+    echo "[1/4] Convirtiendo $QCOW_IMAGE a formato nativo VirtualBox ($VDI_IMAGE)..."
+    qemu-img convert -f qcow2 -O vdi "$QCOW_IMAGE" "$VDI_IMAGE"
+fi
+
+if [ ! -f "$VDI_IMAGE" ]; then
+    echo "Descargando disco VDI desde CloudMove..."
+    CLOUDMOVE_API_URL="${{CLOUDMOVE_API_URL:-http://localhost:8000}}"
+    curl -fSL "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/disk-image?format=vdi" -o "$VDI_IMAGE" || true
+fi
+
+if [ ! -f "$VDI_IMAGE" ]; then
+    echo "ERROR: No se encontró '$VDI_IMAGE'."
+    exit 1
+fi
+
+# 2. Desregistrar VM previa si existe
+if VBoxManage showvminfo "$VM_NAME" >/dev/null 2>&1; then
+    echo "Desregistrando instancia anterior de $VM_NAME..."
+    VBoxManage controlvm "$VM_NAME" poweroff 2>/dev/null || true
+    VBoxManage unregistervm "$VM_NAME" --delete 2>/dev/null || true
+fi
+
+echo "[2/4] Creando máquina virtual en VirtualBox..."
+VBoxManage createvm --name "$VM_NAME" --ostype "Debian_64" --register
+
+echo "[3/4] Configurando CPU ($CPUS), RAM (${{MEMORY_MB}}MB), Firmware ({boot_mode}) y red..."
+VBoxManage modifyvm "$VM_NAME" \\
+    --memory "$MEMORY_MB" \\
+    --cpus "$CPUS" \\
+    --firmware "{boot_mode}" \\
+    --nic1 nat \\
+    --audio none \\
+    --vram 128 \\
+    --graphicscontroller vmsvga \\
+    --boot1 disk
+
+echo "[4/4] Creando controlador SATA y adjuntando disco virtual VDI..."
+VBoxManage storagectl "$VM_NAME" --name "SATA Controller" --add sata --controller IntelAhci --portcount 2
+VBoxManage storageattach "$VM_NAME" --storagectl "SATA Controller" \\
+    --port 0 --device 0 --type hdd --medium "$(realpath "$VDI_IMAGE")"
+
+echo "=========================================================="
+echo " Máquina virtual '$VM_NAME' lista en VirtualBox."
+echo " Para iniciar la máquina virtual:"
+echo "   VBoxManage startvm \"$VM_NAME\" --type gui"
+echo "=========================================================="
+
+read -p "¿Deseas iniciar la máquina virtual ahora en VirtualBox? (s/N): " -r CONFIRM || true
+if [[ "${{CONFIRM:-n}}" =~ ^[sSyY]$ ]]; then
+    VBoxManage startvm "$VM_NAME" --type gui
+fi
+"""
+        filename = f"launch_virtualbox_{job_slug}.sh"
+
+    return PlainTextResponse(
+        content=content,
+        media_type="text/x-shellscript; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

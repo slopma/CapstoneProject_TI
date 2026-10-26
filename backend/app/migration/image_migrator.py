@@ -2090,6 +2090,7 @@ def generate_vm_image_migration_artifacts(
     primary_dev_size_gib = disks[0].get("size_gib", 50.0)
     root_used_gib = manifest.get("total_used_gib", 15.0)
     root_total_gib = manifest.get("total_provisioned_gib", 50.0)
+    boot_mode = manifest.get("boot_mode", "UEFI")
 
     # 1. Full automated deployment script
     if provider_clean == "aws":
@@ -2371,6 +2372,129 @@ echo "Restauración de imagen de sistema completada exitosamente."
     files[f"import_image_{provider_clean}.sh"] = deploy_script
     files["create_full_raw_disk_clone.sh"] = raw_clone_script
     files["restore_system_image.sh"] = restore_script
+    files["launch_virtualbox.sh"] = f"""#!/usr/bin/env bash
+# ==============================================================================
+# CloudMove — Lanzador Automatizado para VirtualBox
+# VM: CloudMove-{slug}
+# ==============================================================================
+set -euo pipefail
+
+VM_NAME="CloudMove-{slug}"
+VDI_IMAGE="{slug}.vdi"
+QCOW_IMAGE="{slug}.qcow2"
+MEMORY_MB=4096
+CPUS=2
+
+echo "=========================================================="
+echo " CloudMove — Lanzador Automatizado para VirtualBox"
+echo " Máquina Virtual: $VM_NAME"
+echo "=========================================================="
+
+if ! command -v VBoxManage >/dev/null 2>&1; then
+    echo "ERROR: VBoxManage no está instalado o no se encuentra en el PATH."
+    echo "Instale VirtualBox mediante: sudo apt-get install virtualbox"
+    exit 1
+fi
+
+# 1. Convertir QCOW2 a VDI si es necesario
+if [ ! -f "$VDI_IMAGE" ] && [ -f "$QCOW_IMAGE" ]; then
+    echo "[1/4] Convirtiendo $QCOW_IMAGE a formato nativo VirtualBox ($VDI_IMAGE)..."
+    qemu-img convert -f qcow2 -O vdi "$QCOW_IMAGE" "$VDI_IMAGE"
+fi
+
+if [ ! -f "$VDI_IMAGE" ]; then
+    echo "ERROR: No se encontró '$VDI_IMAGE'. Por favor descárguelo desde la interfaz de CloudMove."
+    exit 1
+fi
+
+# 2. Desregistrar VM previa si existe
+if VBoxManage showvminfo "$VM_NAME" >/dev/null 2>&1; then
+    echo "Desregistrando instancia anterior de $VM_NAME..."
+    VBoxManage controlvm "$VM_NAME" poweroff 2>/dev/null || true
+    VBoxManage unregistervm "$VM_NAME" --delete 2>/dev/null || true
+fi
+
+echo "[2/4] Creando máquina virtual en VirtualBox..."
+VBoxManage createvm --name "$VM_NAME" --ostype "Debian_64" --register
+
+echo "[3/4] Configurando CPU ($CPUS), RAM (${{MEMORY_MB}}MB), Firmware ({boot_mode.lower()}) y red..."
+VBoxManage modifyvm "$VM_NAME" \\
+    --memory "$MEMORY_MB" \\
+    --cpus "$CPUS" \\
+    --firmware "{boot_mode.lower()}" \\
+    --nic1 nat \\
+    --audio none \\
+    --vram 128 \\
+    --graphicscontroller vmsvga \\
+    --boot1 disk
+
+echo "[4/4] Creando controlador SATA y adjuntando disco virtual VDI..."
+VBoxManage storagectl "$VM_NAME" --name "SATA Controller" --add sata --controller IntelAhci --portcount 2
+VBoxManage storageattach "$VM_NAME" --storagectl "SATA Controller" \\
+    --port 0 --device 0 --type hdd --medium "$(realpath "$VDI_IMAGE")"
+
+echo "=========================================================="
+echo " Máquina virtual '$VM_NAME' lista en VirtualBox."
+echo " Para iniciar la máquina virtual:"
+echo "   VBoxManage startvm \"$VM_NAME\" --type gui"
+echo "=========================================================="
+
+read -p "¿Deseas iniciar la máquina virtual ahora en VirtualBox? (s/N): " -r CONFIRM || true
+if [[ "${{CONFIRM:-n}}" =~ ^[sSyY]$ ]]; then
+    VBoxManage startvm "$VM_NAME" --type gui
+fi
+"""
+    files["launch_vmware.sh"] = f"""#!/usr/bin/env bash
+# ==============================================================================
+# CloudMove — Lanzador Automatizado para VMware Workstation / Player
+# VM: CloudMove-{slug}
+# ==============================================================================
+set -euo pipefail
+
+VM_NAME="CloudMove-{slug}"
+VMDK_IMAGE="{slug}.vmdk"
+QCOW_IMAGE="{slug}.qcow2"
+VMX_FILE="{slug}.vmx"
+
+echo "=========================================================="
+echo " CloudMove — Lanzador Automatizado para VMware"
+echo "=========================================================="
+
+if [ ! -f "$VMDK_IMAGE" ] && [ -f "$QCOW_IMAGE" ]; then
+    echo "[1/3] Convirtiendo $QCOW_IMAGE a formato nativo VMware ($VMDK_IMAGE)..."
+    qemu-img convert -f qcow2 -O vmdk "$QCOW_IMAGE" "$VMDK_IMAGE"
+fi
+
+if [ ! -f "$VMDK_IMAGE" ]; then
+    echo "ERROR: No se encontró '$VMDK_IMAGE'. Por favor descárguelo desde CloudMove."
+    exit 1
+fi
+
+echo "[2/3] Configuración VMware creada exitosamente en $VMX_FILE."
+echo "Para abrir la máquina virtual en VMware:"
+echo "  vmplayer \"$(realpath "$VMX_FILE")\" &"
+echo "  o abra '$VMX_FILE' desde VMware Workstation / Fusion."
+"""
+    files[f"{slug}.vmx"] = f""".encoding = "UTF-8"
+config.version = "8"
+virtualHW.version = "19"
+vmci0.present = "TRUE"
+displayName = "CloudMove-{slug}"
+guestOS = "debian11-64"
+memsize = "4096"
+numvcpus = "2"
+firmware = "{boot_mode.lower()}"
+sata0.present = "TRUE"
+sata0:0.present = "TRUE"
+sata0:0.fileName = "{slug}.vmdk"
+sata0:0.deviceType = "disk"
+ethernet0.present = "TRUE"
+ethernet0.connectionType = "nat"
+ethernet0.virtualDev = "e1000e"
+ethernet0.wakeOnPcktRcv = "FALSE"
+ethernet0.addressType = "generated"
+pciBridge0.present = "TRUE"
+"""
     files["image_manifest.json"] = json.dumps(manifest, indent=2, ensure_ascii=False)
     files["staging_verification.json"] = json.dumps(staging_verification, indent=2, ensure_ascii=False)
     files["inventory_diff_report.json"] = json.dumps(diff_report, indent=2, ensure_ascii=False)
