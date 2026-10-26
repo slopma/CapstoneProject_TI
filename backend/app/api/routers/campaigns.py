@@ -46,6 +46,14 @@ def list_campaigns():
     }
 
 
+@router.delete("/campaigns")
+def clear_all_campaigns(x_cloudmove_role: Optional[str] = Header(default=None)):
+    """Limpiar todas las campañas de descubrimiento del data center persistidas."""
+    _require_operator_role(x_cloudmove_role, "campaigns.delete")
+    count = campaign_store.clear_all_campaigns()
+    return {"status": "CLEARED", "deleted_count": count}
+
+
 @router.get("/campaigns/{campaign_id}")
 def get_campaign(campaign_id: str):
     """Consultar el resumen, métricas, sitios, activos y progreso de una campaña."""

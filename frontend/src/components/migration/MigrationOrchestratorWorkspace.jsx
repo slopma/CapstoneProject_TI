@@ -610,7 +610,7 @@ export default function MigrationOrchestratorWorkspace({
             Flujos guiados para migración desde aplicación (Caso 1), imagen completa de SO/VM (Caso 2) y campañas de datacenter (Caso 3) con máquina de estados transaccional, validación Terraform CLI y diferenciación estricta entre simulación Dry-Run y nube real.
           </p>
         </div>
-        <div className="cm-header-badges">
+        <div className="cm-header-badges" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           {persistenceStatus && (
             <span className="cm-badge observed">
               BD Transaccional: {persistenceStatus.engine?.toUpperCase()} ({persistenceStatus.journal_mode?.toUpperCase()}) · Esquema v{persistenceStatus.current_schema_version}
@@ -618,6 +618,15 @@ export default function MigrationOrchestratorWorkspace({
           )}
           <span className="cm-badge aws">AWS Soportado</span>
           <span className="cm-badge gcp">GCP Soportado</span>
+          <button
+            type="button"
+            className="cm-btn sm danger"
+            onClick={handleClearAllJobs}
+            style={{ fontSize: 11, padding: "3px 10px" }}
+            title="Eliminar planes persistidos, imágenes en staging e iniciar el orquestador desde 0"
+          >
+            Limpiar Planes e Imágenes (Iniciar desde 0)
+          </button>
         </div>
       </div>
 

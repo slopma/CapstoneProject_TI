@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from enum import Enum
 import json
 from pathlib import Path
+import shutil
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -1077,7 +1078,8 @@ class MigrationOrchestrator:
         return items
 
     def delete_migration(self, migration_id: str, actor_id: str = "operator@cloudmove.local") -> bool:
-        """Permanently delete a migration job from memory and the transactional database."""
+        """Permanently delete a migration job from memory, the database, and its staging directory."""
+        job = self.jobs.get(migration_id)
         deleted = self.db.delete_migration_job(migration_id)
         if migration_id in self.jobs:
             del self.jobs[migration_id]
@@ -1088,10 +1090,18 @@ class MigrationOrchestrator:
             )
         except Exception:
             pass
+        if job:
+            from app.migration.deployment_guide_generator import _slug
+            job_slug = _slug(job.get("name", ""))
+            if job_slug:
+                staging_root = PROJECT_ROOT / "generated" / "staging_images"
+                for target_dir in [staging_root / f"live_capture_{job_slug}", staging_root / job_slug]:
+                    if target_dir.is_dir():
+                        shutil.rmtree(target_dir, ignore_errors=True)
         return deleted
 
-    def clear_all_migrations(self, actor_id: str = "operator@cloudmove.local") -> int:
-        """Permanently clear all migration jobs from memory and the transactional database."""
+    def clear_all_migrations(self, actor_id: str = "operator@cloudmove.local", clean_staging_images: bool = True) -> int:
+        """Permanently clear all migration jobs from memory, transactional db, and staging images."""
         count = self.db.clear_all_migration_jobs()
         self.jobs.clear()
         try:
@@ -1101,6 +1111,17 @@ class MigrationOrchestrator:
             )
         except Exception:
             pass
+        if clean_staging_images:
+            staging_root = PROJECT_ROOT / "generated" / "staging_images"
+            if staging_root.is_dir():
+                for item in staging_root.iterdir():
+                    try:
+                        if item.is_dir():
+                            shutil.rmtree(item, ignore_errors=True)
+                        elif item.is_file() and item.name != ".gitkeep":
+                            item.unlink(missing_ok=True)
+                    except Exception:
+                        pass
         return count
 
     def _ensure_seeded(self) -> None:

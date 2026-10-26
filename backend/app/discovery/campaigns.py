@@ -1335,6 +1335,17 @@ class DataCenterCampaignStore:
         self._save()
         return self.get_campaign_detail(campaign_id)
 
+    def clear_all_campaigns(self) -> int:
+        """Permanently clear all datacenter campaigns and discovery tasks."""
+        count = len(self.state.get("campaigns", {}))
+        self.state["campaigns"] = {}
+        self.state["discovery_tasks"] = {}
+        self._save()
+        db = get_transactional_db()
+        with db.transaction(write=True) as conn:
+            conn.execute("DELETE FROM campaigns")
+        return count
+
     def pause_campaign(self, campaign_id: str, reason: str = "Pausa solicitada por el operador") -> Dict[str, Any]:
         """Pause an active campaign while preserving all partial host discoveries and checkpoints."""
         campaign = self._require_campaign(campaign_id)
