@@ -179,8 +179,9 @@ export function ResourceIcon({ type, size = 16, color = "currentColor" }) {
   );
 }
 
-export function NavIcon({ name, size = 18, color = "currentColor" }) {
-  if (name === "architecture") {
+export function NavIcon({ name, type, size = 18, color = "currentColor" }) {
+  const iconName = name || type;
+  if (iconName === "architecture") {
     return (
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <rect x="3" y="3" width="7" height="7" />
@@ -190,7 +191,7 @@ export function NavIcon({ name, size = 18, color = "currentColor" }) {
       </svg>
     );
   }
-  if (name === "discovery") {
+  if (iconName === "discovery") {
     return (
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="11" cy="11" r="8" />
@@ -198,7 +199,7 @@ export function NavIcon({ name, size = 18, color = "currentColor" }) {
       </svg>
     );
   }
-  if (name === "dependencies") {
+  if (iconName === "dependencies") {
     return (
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="18" cy="5" r="3" />
@@ -209,7 +210,7 @@ export function NavIcon({ name, size = 18, color = "currentColor" }) {
       </svg>
     );
   }
-  if (name === "migration") {
+  if (iconName === "migration") {
     return (
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M5 12h14" />
@@ -217,7 +218,7 @@ export function NavIcon({ name, size = 18, color = "currentColor" }) {
       </svg>
     );
   }
-  if (name === "iac") {
+  if (iconName === "iac") {
     return (
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <polyline points="16 18 22 12 16 6" />
@@ -225,7 +226,7 @@ export function NavIcon({ name, size = 18, color = "currentColor" }) {
       </svg>
     );
   }
-  if (name === "audit") {
+  if (iconName === "audit") {
     return (
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -235,7 +236,7 @@ export function NavIcon({ name, size = 18, color = "currentColor" }) {
       </svg>
     );
   }
-  if (name === "settings") {
+  if (iconName === "settings") {
     return (
       <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <circle cx="12" cy="12" r="3" />
@@ -249,4 +250,83 @@ export function NavIcon({ name, size = 18, color = "currentColor" }) {
       <circle cx="12" cy="12" r="10" />
     </svg>
   );
+}
+
+export function ActionIcon({ type, size = 14, color = "currentColor" }) {
+  if (type === "search") {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="11" cy="11" r="8" />
+        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+      </svg>
+    );
+  }
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+    </svg>
+  );
+}
+
+export function getDomainByType(type) {
+  const t = (type || "").toLowerCase();
+  if (t.includes("database") || t.includes("db") || t.includes("cache") || t.includes("redis") || t.includes("queue") || t.includes("rabbitmq")) {
+    return "data";
+  }
+  if (t.includes("storage") || t.includes("san") || t.includes("disk") || t.includes("volume") || t.includes("partition") || t.includes("bucket")) {
+    return "storage";
+  }
+  if (t.includes("firewall") || t.includes("security") || t.includes("iam") || t.includes("auth")) {
+    return "security";
+  }
+  if (t.includes("network") || t.includes("vlan") || t.includes("vpc") || t.includes("subnet") || t.includes("load_balancer") || t.includes("port") || t.includes("endpoint")) {
+    return "network";
+  }
+  if (t.includes("datacenter") || t.includes("rack") || t.includes("cluster") || t.includes("hypervisor") || t.includes("host")) {
+    return "infra";
+  }
+  return "compute";
+}
+
+export function getHumanReadableType(type) {
+  const map = {
+    datacenter: "Centro de datos",
+    rack: "Infraestructura física",
+    vlan: "Red virtual / VLAN",
+    network: "Segmento de red",
+    cluster: "Clúster de virtualización",
+    namespace: "Pool de recursos",
+    application: "Sistema de aplicación",
+    service: "Servicio de aplicación",
+    vm: "Máquina virtual",
+    compute: "Instancia de cómputo",
+    database: "Base de datos",
+    database_instance: "Motor de base de datos",
+    cache: "Caché en memoria",
+    queue: "Cola de mensajería",
+    storage: "Almacenamiento persistente",
+    firewall: "Perímetro de seguridad",
+    load_balancer: "Balanceador de carga",
+  };
+  return map[(type || "").toLowerCase()] || type || "Recurso";
+}
+
+export function getHumanReadableEdge(type) {
+  const map = {
+    contains: "Contiene",
+    routes_to: "Enruta a",
+    exposes: "Expone",
+    depends_on: "Depende de",
+    authenticates_via: "Autentica con",
+    connects_to: "Conecta a",
+    reads_from: "Lee de",
+    reads_writes: "Lee/Escribe",
+    publishes_to: "Publica en",
+    consumes_from: "Consume de",
+    mounts: "Monta",
+    backed_by: "Respaldado en",
+    inferred_relation: "Inferida",
+    communicates_with: "Comunica con",
+  };
+  return map[(type || "").toLowerCase()] || type || "Relación";
 }

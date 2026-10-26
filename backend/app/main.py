@@ -2,8 +2,11 @@ import json
 import logging
 import uuid
 from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+from app.discovery.connectors import ConnectorError
 
 from app.cmir.normalizer import normalize_inventory
 from app.graph.builder import build_graph
@@ -11,7 +14,7 @@ from app.dependencies.resolver import resolve_dependencies
 from app.translators.aws import translate_cmir_to_aws
 from app.generators.terraform import generate_aws_terraform
 from app.config import AWS_OUTPUT_PATH, CORS_ORIGINS, INVENTORY_PATH, LOG_LEVEL
-from app.api.routers import architecture, migration, discovery
+from app.api.routers import architecture, migration, discovery, campaigns, agents
 
 class _CorrelationIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
@@ -52,10 +55,33 @@ async def add_correlation_id(request: Request, call_next):
     return response
 
 
+@app.exception_handler(ConnectorError)
+async def connector_error_handler(request: Request, exc: ConnectorError):
+    logger.error("Connector error on %s %s: [%s] %s", request.method, request.url.path, exc.code, exc.message)
+    status_code = 404 if exc.code == "GITHUB_NOT_FOUND" else (400 if exc.code in ("GITHUB_REF_NOT_FOUND", "GITHUB_RATE_LIMIT") else 502)
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": exc.message, "code": exc.code},
+        headers={"X-Correlation-ID": getattr(request.state, "correlation_id", "-")},
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled server exception on %s %s: %s", request.method, request.url.path, exc)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"Error interno del servidor: {str(exc)}"},
+        headers={"X-Correlation-ID": getattr(request.state, "correlation_id", "-")},
+    )
+
+
 # Include Routers
 app.include_router(architecture.router)
 app.include_router(migration.router)
 app.include_router(discovery.router)
+app.include_router(campaigns.router)
+app.include_router(agents.router)
 
 
 
@@ -78,6 +104,8 @@ def root():
 
 
 @app.get("/health")
+@app.get("/api/health")
+@app.get("/api/v1/health")
 def health():
     return {
         "status": "healthy",

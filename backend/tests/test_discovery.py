@@ -517,6 +517,12 @@ def test_collector_script_and_live_device_endpoint():
     assert "collect_osquery_inventory" in script_res.text
     assert "launch_local_ui" in script_res.text
 
+    catalog_res = client.get("/api/v1/discovery/osquery-catalog")
+    assert catalog_res.status_code == 200
+    cat = catalog_res.json()
+    assert cat["available_web_assets_count"] >= 8
+    assert cat["recommended_asset_for_pc"] is not None
+
     import shutil
     if shutil.which("osqueryi"):
         live_res = client.post("/api/v1/discovery/collect-device?persist_json=false")
@@ -525,6 +531,382 @@ def test_collector_script_and_live_device_endpoint():
         assert live_data["cmir_validation"]["valid"] is True
         assert live_data["hostname"]
         assert "terraform" in live_data
+        assert live_data["agent_smoke_test"]["verified"] is True
+
+
+def test_multi_os_installer_catalog_and_local_agent():
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+
+    from cloudmove_agent.osquery_installer import (
+        FALLBACK_RELEASE_ASSETS,
+        _extract_archive_safely,
+        fetch_available_release_assets,
+        select_asset_for_current_pc,
+    )
+    from cloudmove_agent.app import app as agent_app
+    import io
+    import tarfile
+    import tempfile
+
+    # Verify tar.gz with internal absolute symlink ('usr/bin/osqueryi' -> '/opt/osquery/bin/osqueryd')
+    # extracts cleanly under Python 3.12+ filter="data" by converting to a safe relative symlink
+    with tempfile.TemporaryDirectory() as tmp:
+        tar_path = Path(tmp) / "osquery-mock.tar.gz"
+        with tarfile.open(tar_path, "w:gz") as tf:
+            payload = b"#!/bin/sh\necho 5.23.1\n"
+            bin_info = tarfile.TarInfo(name="opt/osquery/bin/osqueryd")
+            bin_info.size = len(payload)
+            bin_info.mode = 0o755
+            tf.addfile(bin_info, io.BytesIO(payload))
+
+            sym_info = tarfile.TarInfo(name="usr/bin/osqueryi")
+            sym_info.type = tarfile.SYMTYPE
+            sym_info.linkname = "/opt/osquery/bin/osqueryd"
+            tf.addfile(sym_info)
+
+        extracted_dir = Path(tmp) / "extracted"
+        _extract_archive_safely(tar_path, "tar.gz", extracted_dir)
+        extracted_sym = extracted_dir / "usr/bin/osqueryi"
+        assert extracted_sym.is_symlink()
+        assert str(extracted_sym.readlink()) == "../../opt/osquery/bin/osqueryd"
+        assert extracted_sym.resolve().is_file()
+
+    assets, source = fetch_available_release_assets(timeout=5)
+    assert len(assets) >= 8
+
+    # Verify automatic selection across any PC (Linux x86_64/ARM64, Windows x86_64/ARM64, macOS ARM64/x86_64)
+    linux_x64 = select_asset_for_current_pc(
+        FALLBACK_RELEASE_ASSETS, {"os": "linux", "arch": "x86_64", "raw_system": "Linux", "raw_machine": "x86_64"}
+    )
+    assert linux_x64["name"].endswith(".linux_x86_64.tar.gz")
+    assert linux_x64["portable"] is True
+    assert linux_x64["sha256"]
+
+    linux_arm = select_asset_for_current_pc(
+        FALLBACK_RELEASE_ASSETS, {"os": "linux", "arch": "aarch64", "raw_system": "Linux", "raw_machine": "aarch64"}
+    )
+    assert linux_arm["name"].endswith(".linux_aarch64.tar.gz")
+
+    win_x64 = select_asset_for_current_pc(
+        FALLBACK_RELEASE_ASSETS, {"os": "windows", "arch": "x86_64", "raw_system": "Windows", "raw_machine": "AMD64"}
+    )
+    assert win_x64["name"].endswith(".windows_x86_64.zip")
+
+    win_arm = select_asset_for_current_pc(
+        FALLBACK_RELEASE_ASSETS, {"os": "windows", "arch": "aarch64", "raw_system": "Windows", "raw_machine": "ARM64"}
+    )
+    assert win_arm["name"].endswith(".windows_arm64.zip")
+
+    mac_arm = select_asset_for_current_pc(
+        FALLBACK_RELEASE_ASSETS, {"os": "darwin", "arch": "aarch64", "raw_system": "Darwin", "raw_machine": "arm64"}
+    )
+    assert "macos" in mac_arm["name"] and mac_arm["format"] == "tar.gz"
+
+    # Test decoupled local agent FastAPI endpoints (/health, /catalog, /discover, /inventory)
+    agent_client = TestClient(agent_app)
+    health_res = agent_client.get("/health")
+    assert health_res.status_code == 200
+    health_json = health_res.json()
+    assert health_json["collector_exists"] is True
+    assert health_json["recommended_asset_for_pc"] is not None
+
+    disc_res = agent_client.post("/discover")
+    assert disc_res.status_code == 200
+    disc_json = disc_res.json()
+    assert disc_json["status"] == "completed"
+    assert disc_json["smoke_test"]["verified"] is True
+
+    inv_res = agent_client.get("/inventory")
+    assert inv_res.status_code == 200
+    inv_doc = inv_res.json()
+    assert inv_doc["schema_version"] == "cloudmove.discovery.v1"
+
+
+def test_datacenter_campaigns_end_to_end():
+    # 1. Create a campaign in Mode 2 (discover_plan)
+    create_payload = {
+        "environment_id": "env-datacenter-01",
+        "mode": "discover_plan",
+        "discovery_sources": [
+            "hypervisor_apis",
+            "approved_network_ranges",
+            "dns_ipam",
+            "ssh_winrm",
+            "agent_inventory",
+        ],
+        "scope": {
+            "connector_ids": ["conn-01", "conn-02"],
+            "network_range_ids": ["range-internal-01", "range-site-b-01"],
+            "include_physical_servers": True,
+            "include_virtual_machines": True,
+            "include_cloud_instances": True,
+        },
+        "agent_strategy": {
+            "provider": "fleet",
+            "install_missing_agents": False,
+            "update_existing_agents": False,
+        },
+        "execution_limits": {
+            "max_parallel_tasks": 20,
+            "max_parallel_per_connector": 5,
+        },
+    }
+    res_create = client.post("/api/v1/campaigns", json=create_payload)
+    assert res_create.status_code == 200
+    camp = res_create.json()
+    cid = camp["id"]
+    assert camp["metrics"]["discovered_count"] == 7
+    assert camp["metrics"]["identified_count"] == 6
+
+    # Reject unauthorized connector/range scope
+    bad_scope = dict(create_payload, environment_id="env-unauthorized-99")
+    assert client.post("/api/v1/campaigns", json=bad_scope).status_code == 422
+
+    # 2. List & Get campaign
+    assert client.get("/api/v1/campaigns").status_code == 200
+    assert client.get(f"/api/v1/campaigns/{cid}").status_code == 200
+
+    # 3. Recalculate plan & verify idempotency (no duplicate assets on repeated runs)
+    res_plan = client.post(f"/api/v1/campaigns/{cid}/plan")
+    assert res_plan.status_code == 200
+    assert res_plan.json()["metrics"]["discovered_count"] == 7
+
+    # 4. Create & Execute Mode 4 (global_test) with approval
+    res_global = client.post("/api/v1/campaigns", json={**create_payload, "mode": "global_test"})
+    assert res_global.status_code == 200
+    gid = res_global.json()["id"]
+
+    res_approve = client.post(
+        f"/api/v1/campaigns/{gid}/approve",
+        json={"approved_by": "secops@cloudmove.local", "notes": "Approved pilot"},
+    )
+    assert res_approve.status_code == 200
+    assert res_approve.json()["policy"]["approved"] is True
+
+    res_exec = client.post(f"/api/v1/campaigns/{gid}/execute")
+    assert res_exec.status_code == 200
+    executed = res_exec.json()
+    assert executed["status"] in ("completed", "partial_with_unreachable_hosts")
+    assert executed["fully_discovered"] is False
+    # 5 compatible nodes with admin channel (Kali, Debian, RHEL, Windows Server, Ubuntu ARM64) reach VERIFIED;
+    # DMZ isolated node stays discovered_unverified and Solaris SPARC64 stays unsupported
+    assert executed["metrics"]["verified_agents_count"] == 5
+    assert executed["metrics"]["review_pending_count"] == 2
+
+    # 5. Assets, Tasks, Report (JSON + Markdown) and Asset Health endpoints
+    assets_res = client.get(f"/api/v1/campaigns/{gid}/assets")
+    assert assets_res.status_code == 200
+    assert assets_res.json()["count"] == 7
+
+    tasks_res = client.get(f"/api/v1/campaigns/{gid}/tasks")
+    assert tasks_res.status_code == 200
+    assert tasks_res.json()["count"] >= 15
+
+    report_json = client.get(f"/api/v1/campaigns/{gid}/report")
+    assert report_json.status_code == 200
+    report_md = client.get(f"/api/v1/campaigns/{gid}/report?format=md")
+    assert report_md.status_code == 200
+    assert "# Informe Global de Campaña" in report_md.text
+
+    health_res = client.get("/api/v1/assets/asset-host-rabbitmq-kali/health")
+    assert health_res.status_code == 200
+    assert health_res.json()["verification_levels"]["level_4_inventory"] == "inventory_verified"
+
+    # 6. Cancel endpoint
+    cancel_res = client.post(f"/api/v1/campaigns/{cid}/cancel")
+    assert cancel_res.status_code == 200
+    assert cancel_res.json()["status"] == "cancelled"
+
+
+def test_proxmox_connector_pagination_auth_timeout_and_ssrf():
+    from app.discovery.connectors import (
+        ConnectorAuthError,
+        ConnectorTimeoutError,
+        ProxmoxVEConnector,
+        SecurityPolicyViolationError,
+        validate_endpoint_against_ssrf,
+    )
+
+    # Anti-SSRF checks
+    with pytest.raises(SecurityPolicyViolationError):
+        validate_endpoint_against_ssrf("http://169.254.169.254/latest/meta-data/")
+    with pytest.raises(SecurityPolicyViolationError):
+        validate_endpoint_against_ssrf("file:///etc/passwd")
+
+    # Partial config without transport -> test_connection returns ready_simulated, while _request_json raises ConnectorAuthError
+    partial_conn = ProxmoxVEConnector(
+        api_url="https://pve.internal:8006/api2/json",
+        token_id="root@pam!tok",
+        token_secret=None,
+    )
+    assert partial_conn.test_connection()["status"] == "ready_simulated"
+    with pytest.raises(ConnectorAuthError):
+        partial_conn.discover_infrastructure()
+
+    # Mock transport for pagination, 401/403 and timeout
+    def mock_transport(url: str, token_id: str, token_secret: str, timeout: int):
+        if "unauthorized" in url:
+            raise ConnectorAuthError("HTTP_401", "HTTP 401 Unauthorized")
+        if "timeout" in url:
+            raise ConnectorTimeoutError("Timeout connecting to Proxmox")
+        if url.endswith("/version"):
+            return {"data": {"version": "8.2-1", "release": "8.2"}}
+        if url.endswith("/nodes"):
+            return {"data": [{"node": "pve-01", "status": "online", "maxcpu": 16, "maxmem": 68719476736}]}
+        if url.endswith("/cluster/resources"):
+            return {
+                "data": [
+                    {"type": "qemu", "vmid": 101, "name": "vm-01", "node": "pve-01", "status": "running", "maxcpu": 4, "maxmem": 8589934592},
+                    {"type": "qemu", "vmid": 102, "name": "vm-02", "node": "pve-01", "status": "running", "maxcpu": 8, "maxmem": 17179869184},
+                    {"type": "storage", "storage": "ceph-nvme", "node": "pve-01", "plugintype": "rbd", "maxdisk": 1099511627776, "disk": 274877906944},
+                ]
+            }
+        return {"data": {"ostype": "l26", "bios": "uefi"}}
+
+    conn = ProxmoxVEConnector(
+        api_url="https://pve.internal:8006/api2/json",
+        token_id="cloudmove@pve!ro",
+        token_secret="secret-val",
+        http_transport=mock_transport,
+    )
+    assert conn.test_connection()["status"] == "connected"
+
+    page1 = conn.discover_infrastructure(page=1, page_size=1)
+    assert page1["total_vms"] == 2
+    assert len(page1["virtual_machines"]) == 1
+    assert page1["has_more"] is True
+
+    # 401/403 Auth error propagation
+    bad_auth_conn = ProxmoxVEConnector(
+        api_url="https://unauthorized.internal:8006/api2/json",
+        http_transport=mock_transport,
+    )
+    with pytest.raises(ConnectorAuthError):
+        bad_auth_conn.discover_infrastructure()
+
+    # Timeout propagation
+    timeout_conn = ProxmoxVEConnector(
+        api_url="https://timeout.internal:8006/api2/json",
+        http_transport=mock_transport,
+    )
+    with pytest.raises(ConnectorTimeoutError):
+        timeout_conn.discover_infrastructure()
+
+
+def test_secret_redactor_and_architecture_scanner_security():
+    from app.discovery.connectors import (
+        ArchitectureFileScanner,
+        SecretRedactor,
+        SecurityPolicyViolationError,
+    )
+
+    raw_sample = """
+    database_url = "postgresql://erp_admin:SuperSecret99!@10.0.2.42:5432/erp_prod"
+    api_token = "tok_live_987654321abcdef"
+    aws_key = "AKIAIOSFODNN7EXAMPLE"
+    -----BEGIN RSA PRIVATE KEY-----
+    MIIEowIBAAKCAQEA0123456789abcdef
+    -----END RSA PRIVATE KEY-----
+    """
+    redacted, refs = SecretRedactor.redact_text(raw_sample)
+    assert "SuperSecret99!" not in redacted
+    assert "tok_live_987654321abcdef" not in redacted
+    assert "AKIAIOSFODNN7EXAMPLE" not in redacted
+    assert "MIIEowIBAAKCAQEA0123456789abcdef" not in redacted
+    assert len(refs) >= 3
+
+    scanner = ArchitectureFileScanner()
+    artifacts = scanner.scan_authorized_directories()
+    assert len(artifacts) >= 2
+
+    # Unauthorized directory / path traversal must raise SecurityPolicyViolationError
+    with pytest.raises(SecurityPolicyViolationError):
+        scanner.scan_file(Path("/etc/passwd"))
+
+
+def test_identity_reconciler_ambiguous_conflict_and_readiness_endpoints():
+    from app.discovery.readiness import AssetReconciler
+
+    existing = {
+        "asset-vm-erp-db-01": {
+            "id": "asset-vm-erp-db-01",
+            "hostname": "srv-erp-postgres-01",
+            "ip_address": "10.0.2.42",
+            "mac_address": "00:50:56:9a:11:20",
+            "hypervisor_id": "vcenter-dc1:vm-172",
+        }
+    }
+    # Ambiguous candidate: same hostname & IP as existing, but a completely different hypervisor_id
+    ambiguous_cand = {
+        "canonical_key": "asset-vm-clone-conflict",
+        "hostname": "srv-erp-postgres-01",
+        "ip_address": "10.0.2.42",
+        "mac_address": "00:50:56:9a:99:99",
+        "hypervisor_id": "vcenter-dc1:vm-999-different",
+    }
+    aid, status, warning = AssetReconciler.reconcile_candidate(ambiguous_cand, existing)
+    assert status == "ambiguous_conflict"
+    assert warning is not None
+
+    # Test new Phase 7 endpoints: /api/v1/assets, observations, relationships, migration-readiness, connectors
+    res_assets = client.get("/api/v1/assets?site_id=site-dc-a&os_family=linux")
+    assert res_assets.status_code == 200
+    assert res_assets.json()["count"] >= 2
+
+    res_detail = client.get("/api/v1/assets/asset-vm-erp-db-01")
+    assert res_detail.status_code == 200
+    assert len(res_detail.json()["database_instances"]) >= 1
+
+    res_obs = client.get("/api/v1/assets/asset-vm-erp-db-01/observations")
+    assert res_obs.status_code == 200
+    assert res_obs.json()["count"] >= 1
+
+    res_rels = client.get("/api/v1/assets/asset-vm-erp-db-01/relationships")
+    assert res_rels.status_code == 200
+    assert res_rels.json()["count"] >= 2
+
+    res_ready = client.get("/api/v1/assets/asset-vm-erp-db-01/migration-readiness")
+    assert res_ready.status_code == 200
+    assert res_ready.json()["compatibility_status"] in ("verified_compatible", "preliminary_compatible")
+
+    # Security checks:
+    # 1. Cross-environment access denied (403)
+    res_cross_env = client.get(
+        "/api/v1/assets/asset-vm-erp-db-01",
+        headers={"X-CloudMove-Env": "env-other-tenant-99"},
+    )
+    assert res_cross_env.status_code == 403
+
+    # 2. Viewer role denied mutation (403)
+    res_viewer = client.post(
+        "/api/v1/campaigns",
+        headers={"X-CloudMove-Role": "viewer"},
+    )
+    assert res_viewer.status_code == 403
+
+    # 3. Forcing agent installation during discover_plan mode is strictly forbidden (403)
+    camp_plan = client.post("/api/v1/campaigns", json={"mode": "discover_plan"}).json()
+    res_force_install = client.post(
+        f"/api/v1/campaigns/{camp_plan['id']}/execute?force_install=true"
+    )
+    assert res_force_install.status_code == 403
+
+    # 4. Connectors list, register & test
+    res_conns = client.get("/api/v1/connectors")
+    assert res_conns.status_code == 200
+    assert res_conns.json()["count"] >= 2
+
+    res_test_conn = client.post("/api/v1/connectors/conn-01/test")
+    assert res_test_conn.status_code == 200
+    assert res_test_conn.json()["status"] in ("connected", "ready_simulated")
+
+
+
 
 
 

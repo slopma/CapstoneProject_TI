@@ -1,25 +1,38 @@
 import React, { memo } from "react";
 
-const ARCHITECTURAL_TIERS = [
-  { level: null, label: "Toda la topología" },
-  { level: 1, label: "Infraestructura" },
-  { level: 3, label: "Red y perímetro" },
-  { level: 4, label: "Clústeres" },
-  { level: 7, label: "Cómputo y servicios" },
-  { level: 8, label: "Datos y colas" },
+const LAYER_PRESETS = [
+  { id: "ALL", label: "Toda la topología" },
+  { id: "L0_L1", label: "Infraestructura" },
+  { id: "L2", label: "Red y perímetro" },
+  { id: "L3_L4", label: "Clústeres y grupos" },
+  { id: "L5", label: "Cargas y servicios" },
+];
+
+const DOMAIN_FILTERS = [
+  { id: "ALL", label: "Todos los tipos" },
+  { id: "compute", label: "Cómputo & Apps" },
+  { id: "data", label: "Bases de Datos" },
+  { id: "network", label: "Red & Seguridad" },
+  { id: "shared", label: "Solo Compartidos" },
 ];
 
 function CanvasToolbar({
-  activeLevel = null,
-  onSelectLevel,
+  activeLayer,
+  setActiveLayer,
+  domainFilter = "ALL",
+  setDomainFilter,
+  highlightDeps = true,
+  setHighlightDeps,
+  showLegend = true,
+  setShowLegend,
   onExpandAll,
   onCollapseAll,
-  focusNodeId,
-  onClearFocus,
   selectedCount = 0,
+  onClearSelection,
+  onAnalyzeDependencies,
 }) {
   return (
-    <div className="canvas-toolbar" role="toolbar" aria-label="Controles de topología">
+    <div className="canvas-toolbar" role="toolbar" aria-label="Controles de visualización del grafo de arquitectura">
       <div className="toolbar-group">
         <span className="toolbar-label">Jerarquía</span>
         <button
@@ -40,39 +53,87 @@ function CanvasToolbar({
         </button>
       </div>
 
-      {typeof onSelectLevel === "function" && (
-        <div className="toolbar-group toolbar-tier-filter" role="group" aria-label="Filtrar por capa arquitectónica">
-          <span className="toolbar-label">Capa</span>
-          {ARCHITECTURAL_TIERS.map((tier) => {
-            const isActive = activeLevel === tier.level;
+      <div className="toolbar-group toolbar-tier-filter" role="group" aria-label="Filtrar por capa arquitectónica">
+        <span className="toolbar-label">Capa</span>
+        {LAYER_PRESETS.map((layer) => {
+          const isActive = activeLayer === layer.id;
+          return (
+            <button
+              key={layer.id}
+              type="button"
+              className={`toolbar-btn is-filter-chip ${isActive ? "active" : ""}`}
+              aria-pressed={isActive}
+              onClick={() => setActiveLayer(layer.id)}
+            >
+              {layer.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {setDomainFilter && (
+        <div className="toolbar-group toolbar-tier-filter" role="group" aria-label="Filtrar por tipo de activo">
+          <span className="toolbar-label">Activos</span>
+          {DOMAIN_FILTERS.map((df) => {
+            const isActive = domainFilter === df.id;
             return (
               <button
-                key={tier.label}
+                key={df.id}
                 type="button"
                 className={`toolbar-btn is-filter-chip ${isActive ? "active" : ""}`}
                 aria-pressed={isActive}
-                onClick={() => onSelectLevel(tier.level)}
+                onClick={() => setDomainFilter(df.id)}
               >
-                {tier.label}
+                {df.label}
               </button>
             );
           })}
         </div>
       )}
 
-      <div className="toolbar-right">
-        {focusNodeId && (
+      <div className="toolbar-right" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        {setHighlightDeps && (
           <button
             type="button"
-            className="toolbar-btn focus-active"
-            onClick={onClearFocus}
+            className={`toolbar-btn is-filter-chip ${highlightDeps ? "active" : ""}`}
+            aria-pressed={highlightDeps}
+            onClick={() => setHighlightDeps((prev) => !prev)}
           >
-            Salir de enfoque
+            {highlightDeps ? "Alcance ON" : "Alcance OFF"}
           </button>
         )}
+
+        {setShowLegend && (
+          <button
+            type="button"
+            className={`toolbar-btn is-filter-chip ${showLegend ? "active" : ""}`}
+            aria-pressed={showLegend}
+            onClick={() => setShowLegend((prev) => !prev)}
+          >
+            {showLegend ? "Leyenda ON" : "Leyenda OFF"}
+          </button>
+        )}
+
         <span className="selected-indicator" aria-live="polite">
           Seleccionados <strong>{selectedCount}</strong>
         </span>
+
+        {selectedCount > 0 && (
+          <>
+            {onAnalyzeDependencies && (
+              <button
+                type="button"
+                className="toolbar-btn active"
+                onClick={onAnalyzeDependencies}
+              >
+                Analizar alcance
+              </button>
+            )}
+            <button type="button" className="toolbar-btn" onClick={onClearSelection}>
+              Limpiar
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

@@ -1,0 +1,115 @@
+{
+  "image_id": "img-debian12-erp-prod-01",
+  "name": "debian12-erp-prod",
+  "image_file": "inventory/sample_images/debian12-erp-prod.vmdk",
+  "format": "VMDK",
+  "virtual_hw_version": "vmx-19",
+  "boot_mode": "UEFI",
+  "bootloader": "GRUB2 (2.06-13+deb12u1)",
+  "partition_scheme": "GPT",
+  "os": {
+    "family": "linux",
+    "distro": "Debian GNU/Linux",
+    "version": "12 (bookworm)",
+    "kernel": "6.1.0-18-amd64",
+    "architecture": "x86_64",
+    "license_model": "open_source_free"
+  },
+  "resources": {
+    "vcpus": 4,
+    "memory_mib": 16384
+  },
+  "drivers_present": [
+    "virtio_blk",
+    "virtio_scsi",
+    "virtio_net",
+    "virtio_pci",
+    "nvme",
+    "nvme_core",
+    "ena",
+    "gvnic"
+  ],
+  "disks": [
+    {
+      "disk_id": "disk-0-boot",
+      "device": "/dev/sda",
+      "image_file": "inventory/sample_images/debian12-erp-prod.vmdk",
+      "order": 0,
+      "is_boot": true,
+      "format": "VMDK",
+      "size_gib": 50,
+      "used_gib": 18.4,
+      "partition_table": "GPT",
+      "partitions": [
+        {"name": "/dev/sda1", "size_mib": 512, "filesystem": "vfat", "mount_point": "/boot/efi", "fstab_ref": "UUID=4A12-9F01"},
+        {"name": "/dev/sda2", "size_mib": 49688, "filesystem": "ext4", "mount_point": "/", "fstab_ref": "UUID=8c21e0a4-7b11-44d9-9e02-11a2b3c4d5e6"}
+      ]
+    },
+    {
+      "disk_id": "disk-1-data",
+      "device": "/dev/sdb",
+      "image_file": "inventory/sample_images/debian12-erp-prod-data.vmdk",
+      "order": 1,
+      "is_boot": false,
+      "format": "VMDK",
+      "size_gib": 120,
+      "used_gib": 64.2,
+      "partition_table": "GPT",
+      "partitions": [
+        {"name": "/dev/sdb1", "size_mib": 122880, "filesystem": "xfs", "mount_point": "/var/lib/postgresql", "fstab_ref": "UUID=9f81c2b0-3e44-4a10-b123-998877665544"}
+      ]
+    }
+  ],
+  "snapshot_consistency": {
+    "consistency_type": "application_quiesced_snapshot",
+    "captured_at": "2026-10-25T08:00:00Z",
+    "hypervisor_coordinator": "proxmox-qemu-guest-agent-fsfreeze",
+    "database_quiesced": true,
+    "source_running_during_raw_copy": false,
+    "limitations": "Snapshot consistente en disco obtenido con fsfreeze y CHECKPOINT de PostgreSQL; la memoria RAM volátil no forma parte de la imagen de disco."
+  },
+  "network_interfaces": [
+    {
+      "name": "ens192",
+      "mac": "00:50:56:9a:12:34",
+      "dhcp_enabled": true,
+      "static_ip": "10.30.10.25/24",
+      "gateway": "10.30.10.1",
+      "has_hardcoded_udev_mac_rule": false
+    }
+  ],
+  "systemd_services": [
+    {"name": "ssh.service", "enabled": true, "active": true, "port": 22},
+    {"name": "nginx.service", "enabled": true, "active": true, "port": 443},
+    {"name": "erp-backend.service", "enabled": true, "active": true, "port": 8000},
+    {"name": "postgresql@15-main.service", "enabled": true, "active": true, "port": 5432},
+    {"name": "redis-server.service", "enabled": true, "active": true, "port": 6379}
+  ],
+  "installed_packages_summary": {
+    "total_count": 642,
+    "critical_packages": [
+      {"name": "linux-image-6.1.0-18-amd64", "version": "6.1.76-1"},
+      {"name": "grub-efi-amd64", "version": "2.06-13+deb12u1"},
+      {"name": "openssh-server", "version": "1:9.2p1-2+deb12u2"},
+      {"name": "nginx", "version": "1.22.1-9"},
+      {"name": "postgresql-15", "version": "15.6-0+deb12u1"},
+      {"name": "redis-server", "version": "5:7.0.15-1~deb12u1"},
+      {"name": "python3", "version": "3.11.2-1+b1"}
+    ]
+  },
+  "databases": [
+    {
+      "engine": "postgresql",
+      "version": "15.6",
+      "port": 5432,
+      "data_dir": "/var/lib/postgresql/15/main",
+      "catalogs": ["erp_production", "audit_trail"],
+      "estimated_size_gib": 58.5
+    }
+  ],
+  "local_users": ["root", "debian", "postgres", "erp_svc"],
+  "scheduled_tasks": [
+    "/etc/cron.d/erp-nightly-ledger-close",
+    "systemd-timer: apt-daily-upgrade.timer"
+  ]
+}

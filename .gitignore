@@ -18,9 +18,18 @@ __pycache__/
 docs/cloudmove-osquery-inventory.json
 *osquery-inventory*.json
 backend/data/discovery_sessions/
+backend/data/datacenter_campaigns.json
 cloudmove-parsed/
 *.bak
 .codex/
 .cursor/
 .gemini/
 .grok/
+# Generated VM images
+/generated/staging_images/
+
+# Generated VM images
+/generated/staging_images/
+
+# Generated VM images
+/generated/staging_images/

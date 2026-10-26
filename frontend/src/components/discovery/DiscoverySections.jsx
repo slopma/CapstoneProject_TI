@@ -1465,17 +1465,17 @@ export function AwsSuggestedDiagramSection({ data, apiUrl }) {
   const summary = data.summary || {};
   const hw = data.sections?.hardware || {};
   const net = data.sections?.network || {};
-  const hostname = data.hostname || summary.hostname || "rabbitmq-kali";
-  const osLabel = `${summary.os?.name || "Kali GNU/Linux"} ${summary.os?.version || "2025.4"}`.trim();
-  const cpuBrand = hw.cpu?.brand || summary.cpu?.brand || "AMD Ryzen 5 5500U";
+  const hostname = data.hostname || summary.hostname || "localhost";
+  const osLabel = `${summary.os?.name || "Linux"} ${summary.os?.version || ""}`.trim();
+  const cpuBrand = hw.cpu?.brand || summary.cpu?.brand || "Procesador";
   const vcpus = hw.cpu?.logical_cores ?? summary.cpu?.logical_cores ?? 2;
-  const ramHuman = hw.memory?.total_human || summary.memory?.total_human || "1.88 GiB";
-  const diskHuman = hw.storage?.total_physical_disk_human || summary.storage?.total_physical_disk_human || "80.00 GiB";
+  const ramHuman = hw.memory?.total_human || summary.memory?.total_human || "N/A";
+  const diskHuman = hw.storage?.total_physical_disk_human || summary.storage?.total_physical_disk_human || "N/A";
   const rootFs = (hw.storage?.filesystems || [])[0] || {};
-  const rootUsedHuman = rootFs.used_human || "14.91 GiB";
-  const rootUsedPct = rootFs.used_percent ?? 19.29;
+  const rootUsedHuman = rootFs.used_human || "N/A";
+  const rootUsedPct = rootFs.used_percent ?? 0;
   const primaryIface = (net.interfaces || []).find((i) => i.interface !== "lo") || {};
-  const primaryCidr = primaryIface.cidr || "10.0.2.15/24";
+  const primaryCidr = primaryIface.cidr || "DHCP";
 
   const tfBundle =
     data.terraform?.[tfStrategy] ||
@@ -1515,7 +1515,7 @@ export function AwsSuggestedDiagramSection({ data, apiUrl }) {
     setPersisting(true);
     setPersistFeedback("");
     try {
-      const base = apiUrl || "http://localhost:8001";
+      const base = apiUrl || (typeof window !== "undefined" ? window.location.origin : "");
       const res = await fetch(
         `${base}/api/v1/discovery/sessions/${data.session_id}/terraform?strategy=${tfStrategy}&write_files=true`,
         { method: "POST" }

@@ -1,6 +1,7 @@
 import pytest
 from app.cmir.models import CMIRNode, CMIRRelationship, CMIR
 from app.adapters.aws_adapter import AWSAdapter
+from app.adapters.gcp_adapter import GCPAdapter
 from app.adapters.azure_adapter import AzureAdapter
 from app.adapters.k8s_adapter import KubernetesAdapter
 
@@ -37,6 +38,22 @@ def test_aws_adapter_translation(sample_cmir):
     assert type_map["redis-1"] == "aws_elasticache_cluster"
     assert type_map["bucket-1"] == "aws_s3_bucket"
     assert type_map["secret-1"] == "aws_secretsmanager_secret"
+
+
+def test_gcp_adapter_translation(sample_cmir):
+    adapter = GCPAdapter()
+    translated = adapter.translate_cmir(sample_cmir)
+    assert len(translated) == 7
+
+    type_map = {res["id"]: res["type"] for res in translated}
+    assert type_map["vpc-1"] == "google_compute_network"
+    assert type_map["subnet-1"] == "google_compute_subnetwork"
+    assert type_map["vm-1"] == "google_compute_instance"
+    assert type_map["db-1"] == "google_sql_database_instance"
+    assert type_map["redis-1"] == "google_redis_instance"
+    assert type_map["bucket-1"] == "google_storage_bucket"
+    assert type_map["secret-1"] == "google_secret_manager_secret"
+
 
 
 def test_azure_adapter_translation(sample_cmir):

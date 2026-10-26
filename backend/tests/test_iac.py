@@ -1,13 +1,16 @@
 import json
 from app.cmir.normalizer import normalize_inventory
 from app.adapters.aws_adapter import AWSAdapter
+from app.adapters.gcp_adapter import GCPAdapter
 from app.adapters.azure_adapter import AzureAdapter
 from app.adapters.k8s_adapter import KubernetesAdapter
 from app.generators.terraform import (
     generate_aws_terraform,
+    generate_gcp_terraform,
     generate_azure_terraform,
     generate_k8s_manifests,
     generate_aws_terraform_files,
+    generate_gcp_terraform_files,
     generate_azure_terraform_files,
     generate_k8s_manifest_files,
     format_terraform_code,
@@ -29,6 +32,16 @@ def test_iac_generation_all_targets():
     assert "resource \"aws_db_instance\"" in aws_tf
     assert "resource \"aws_elasticache_cluster\"" in aws_tf
     assert "resource \"aws_s3_bucket\"" in aws_tf
+
+    # GCP HCL Generation
+    gcp_adapter = GCPAdapter()
+    gcp_specs = gcp_adapter.translate_cmir(cmir)
+    gcp_tf = generate_gcp_terraform(gcp_specs)
+
+    assert "resource \"google_compute_network\"" in gcp_tf
+    assert "resource \"google_sql_database_instance\"" in gcp_tf
+    assert "resource \"google_redis_instance\"" in gcp_tf
+    assert "resource \"google_storage_bucket\"" in gcp_tf
 
     # Azure HCL Generation
     azure_adapter = AzureAdapter()
@@ -67,6 +80,19 @@ def test_modular_iac_files_generation():
     assert "provider.tf" in aws_files
     assert "resource \"aws_vpc\"" in aws_files["main.tf"]
     assert "variable \"aws_region\"" in aws_files["variables.tf"]
+
+    # Test GCP modular files
+    gcp_adapter = GCPAdapter()
+    gcp_specs = gcp_adapter.translate_cmir(cmir)
+    gcp_files = generate_gcp_terraform_files(gcp_specs)
+
+    assert "main.tf" in gcp_files
+    assert "variables.tf" in gcp_files
+    assert "outputs.tf" in gcp_files
+    assert "provider.tf" in gcp_files
+    assert "resource \"google_compute_network\"" in gcp_files["main.tf"]
+    assert "variable \"gcp_project_id\"" in gcp_files["variables.tf"]
+    assert "variable \"gcp_region\"" in gcp_files["variables.tf"]
 
     # Test Azure modular files
     azure_adapter = AzureAdapter()

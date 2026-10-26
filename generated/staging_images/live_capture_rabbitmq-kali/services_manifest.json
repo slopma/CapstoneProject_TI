@@ -1,0 +1,1138 @@
+[
+  {
+    "name": "accounts-daemon.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Accounts Service",
+    "is_running": true
+  },
+  {
+    "name": "acpid.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "ACPI event daemon",
+    "is_running": true
+  },
+  {
+    "name": "apparmor.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Load AppArmor profiles",
+    "is_running": false
+  },
+  {
+    "name": "apt-daily-upgrade.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Daily apt upgrade and clean activities",
+    "is_running": false
+  },
+  {
+    "name": "apt-daily.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Daily apt download activities",
+    "is_running": false
+  },
+  {
+    "name": "auth-rpcgss-module.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Kernel Module supporting RPCSEC_GSS",
+    "is_running": false
+  },
+  {
+    "name": "avahi-daemon.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Avahi mDNS/DNS-SD Stack",
+    "is_running": true
+  },
+  {
+    "name": "bluetooth.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Bluetooth service",
+    "is_running": true
+  },
+  {
+    "name": "colord.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Manage, Install and Generate Color Profiles",
+    "is_running": true
+  },
+  {
+    "name": "console-setup.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Set console font and keymap",
+    "is_running": true
+  },
+  {
+    "name": "containerd.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "containerd container runtime",
+    "is_running": true
+  },
+  {
+    "name": "cron.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Regular background program processing daemon",
+    "is_running": true
+  },
+  {
+    "name": "cups.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "CUPS Scheduler",
+    "is_running": false
+  },
+  {
+    "name": "dbus.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "D-Bus System Message Bus",
+    "is_running": true
+  },
+  {
+    "name": "docker.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Docker Application Container Engine",
+    "is_running": true
+  },
+  {
+    "name": "dpkg-db-backup.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Daily dpkg database backup service",
+    "is_running": false
+  },
+  {
+    "name": "e2scrub_all.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Online ext4 Metadata Check for All Filesystems",
+    "is_running": false
+  },
+  {
+    "name": "emergency.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Emergency Shell",
+    "is_running": false
+  },
+  {
+    "name": "fstrim.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Discard unused blocks on filesystems from /etc/fstab",
+    "is_running": false
+  },
+  {
+    "name": "geoclue.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Location Lookup Service",
+    "is_running": true
+  },
+  {
+    "name": "getty-static.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "getty on tty2-tty6 if dbus and logind are not available",
+    "is_running": false
+  },
+  {
+    "name": "getty@tty1.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Getty on tty1",
+    "is_running": true
+  },
+  {
+    "name": "haveged.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Entropy Daemon based on the HAVEGE algorithm",
+    "is_running": true
+  },
+  {
+    "name": "ifupdown-pre.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Helper to synchronize boot up for ifupdown",
+    "is_running": true
+  },
+  {
+    "name": "initrd-cleanup.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Cleaning Up and Shutting Down Daemons",
+    "is_running": false
+  },
+  {
+    "name": "initrd-parse-etc.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Mountpoints Configured in the Real Root",
+    "is_running": false
+  },
+  {
+    "name": "initrd-switch-root.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Switch Root",
+    "is_running": false
+  },
+  {
+    "name": "initrd-udevadm-cleanup-db.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Cleanup udev Database",
+    "is_running": false
+  },
+  {
+    "name": "keyboard-setup.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Set the console keyboard layout",
+    "is_running": true
+  },
+  {
+    "name": "kmod-static-nodes.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Create List of Static Device Nodes",
+    "is_running": true
+  },
+  {
+    "name": "ldconfig.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Rebuild Dynamic Linker Cache",
+    "is_running": false
+  },
+  {
+    "name": "lightdm.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Light Display Manager",
+    "is_running": true
+  },
+  {
+    "name": "logrotate.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Rotate log files",
+    "is_running": false
+  },
+  {
+    "name": "man-db.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Daily man-db regeneration",
+    "is_running": false
+  },
+  {
+    "name": "ModemManager.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Modem Manager",
+    "is_running": true
+  },
+  {
+    "name": "modprobe@configfs.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Load Kernel Module configfs",
+    "is_running": false
+  },
+  {
+    "name": "modprobe@dm_mod.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Load Kernel Module dm_mod",
+    "is_running": false
+  },
+  {
+    "name": "modprobe@drm.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Load Kernel Module drm",
+    "is_running": false
+  },
+  {
+    "name": "modprobe@efi_pstore.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Load Kernel Module efi_pstore",
+    "is_running": false
+  },
+  {
+    "name": "modprobe@fuse.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Load Kernel Module fuse",
+    "is_running": false
+  },
+  {
+    "name": "modprobe@loop.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Load Kernel Module loop",
+    "is_running": false
+  },
+  {
+    "name": "networking.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Raise network interfaces",
+    "is_running": true
+  },
+  {
+    "name": "NetworkManager-wait-online.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Network Manager Wait Online",
+    "is_running": true
+  },
+  {
+    "name": "NetworkManager.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Network Manager",
+    "is_running": true
+  },
+  {
+    "name": "nfs-utils.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "NFS server and client services",
+    "is_running": false
+  },
+  {
+    "name": "ollama.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Ollama Service",
+    "is_running": true
+  },
+  {
+    "name": "open-vm-tools.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Service for virtual machines hosted on VMware",
+    "is_running": false
+  },
+  {
+    "name": "pcscd.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "PC/SC Smart Card Daemon",
+    "is_running": true
+  },
+  {
+    "name": "phpsessionclean.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Clean php session files",
+    "is_running": false
+  },
+  {
+    "name": "plocate-updatedb.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Update the plocate database",
+    "is_running": false
+  },
+  {
+    "name": "plymouth-halt.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Show Plymouth Halt Screen",
+    "is_running": false
+  },
+  {
+    "name": "plymouth-kexec.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Show Plymouth Reboot with kexec Screen",
+    "is_running": false
+  },
+  {
+    "name": "plymouth-poweroff.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Show Plymouth Power Off Screen",
+    "is_running": false
+  },
+  {
+    "name": "plymouth-quit-wait.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Hold until boot process finishes up",
+    "is_running": true
+  },
+  {
+    "name": "plymouth-quit.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Terminate Plymouth Boot Screen",
+    "is_running": false
+  },
+  {
+    "name": "plymouth-read-write.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Tell Plymouth To Write Out Runtime Data",
+    "is_running": true
+  },
+  {
+    "name": "plymouth-reboot.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Show Plymouth Reboot Screen",
+    "is_running": false
+  },
+  {
+    "name": "plymouth-start.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Show Plymouth Boot Screen",
+    "is_running": true
+  },
+  {
+    "name": "plymouth-switch-root-initramfs.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Tell Plymouth To Jump To initramfs",
+    "is_running": false
+  },
+  {
+    "name": "plymouth-switch-root.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Plymouth switch root service",
+    "is_running": false
+  },
+  {
+    "name": "polkit.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Authorization Manager",
+    "is_running": true
+  },
+  {
+    "name": "regenerate-ssh-host-keys.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Regenerate SSH host keys",
+    "is_running": false
+  },
+  {
+    "name": "rescue.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Rescue Shell",
+    "is_running": false
+  },
+  {
+    "name": "rpc-gssd.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "RPC security service for NFS client and server",
+    "is_running": false
+  },
+  {
+    "name": "rpc-statd-notify.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Notify NFS peers of a restart",
+    "is_running": true
+  },
+  {
+    "name": "rpc-svcgssd.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "RPC security service for NFS server",
+    "is_running": false
+  },
+  {
+    "name": "rtkit-daemon.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "RealtimeKit Scheduling Policy Service",
+    "is_running": true
+  },
+  {
+    "name": "smartmontools.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Self Monitoring and Reporting Technology (SMART) Daemon",
+    "is_running": true
+  },
+  {
+    "name": "ssh.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "OpenBSD Secure Shell server",
+    "is_running": true
+  },
+  {
+    "name": "systemd-ask-password-console.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Dispatch Password Requests to Console",
+    "is_running": false
+  },
+  {
+    "name": "systemd-ask-password-plymouth.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Forward Password Requests to Plymouth",
+    "is_running": false
+  },
+  {
+    "name": "systemd-ask-password-wall.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Forward Password Requests to Wall",
+    "is_running": false
+  },
+  {
+    "name": "systemd-backlight@backlight:intel_backlight.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Load/Save Screen Backlight Brightness of backlight:intel_backlight",
+    "is_running": true
+  },
+  {
+    "name": "systemd-backlight@leds:platform::kbd_backlight.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Load/Save Screen Backlight Brightness of leds:platform::kbd_backlight",
+    "is_running": true
+  },
+  {
+    "name": "systemd-battery-check.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Early Battery Level Check",
+    "is_running": false
+  },
+  {
+    "name": "systemd-binfmt.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Set Up Additional Binary Formats",
+    "is_running": true
+  },
+  {
+    "name": "systemd-bsod.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Display Boot-Time Emergency Messages In Full Screen",
+    "is_running": false
+  },
+  {
+    "name": "systemd-confext-initrd.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Merge System Configuration Images into /etc/ of the initrd",
+    "is_running": false
+  },
+  {
+    "name": "systemd-confext.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Merge System Configuration Images into /etc/",
+    "is_running": false
+  },
+  {
+    "name": "systemd-firstboot.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Initial Setup",
+    "is_running": false
+  },
+  {
+    "name": "systemd-fsck-root.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "File System Check on Root Device",
+    "is_running": false
+  },
+  {
+    "name": "systemd-fsck@dev-disk-by\\x2duuid-1BFA\\x2d66AA.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "File System Check on /dev/disk/by-uuid/1BFA-66AA",
+    "is_running": true
+  },
+  {
+    "name": "systemd-halt.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "System Halt",
+    "is_running": false
+  },
+  {
+    "name": "systemd-hibernate-clear.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Clear Stale Hibernate Storage Info",
+    "is_running": false
+  },
+  {
+    "name": "systemd-hibernate-resume.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Resume from hibernation",
+    "is_running": false
+  },
+  {
+    "name": "systemd-hostnamed.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Hostname Service",
+    "is_running": false
+  },
+  {
+    "name": "systemd-hwdb-update.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Rebuild Hardware Database",
+    "is_running": false
+  },
+  {
+    "name": "systemd-journal-catalog-update.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Rebuild Journal Catalog",
+    "is_running": false
+  },
+  {
+    "name": "systemd-journal-flush.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Flush Journal to Persistent Storage",
+    "is_running": true
+  },
+  {
+    "name": "systemd-journald.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Journal Service",
+    "is_running": true
+  },
+  {
+    "name": "systemd-kexec.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Reboot via kexec",
+    "is_running": false
+  },
+  {
+    "name": "systemd-logind.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "User Login Management",
+    "is_running": true
+  },
+  {
+    "name": "systemd-machine-id-commit.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Save Transient machine-id to Disk",
+    "is_running": false
+  },
+  {
+    "name": "systemd-modules-load.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Load Kernel Modules",
+    "is_running": true
+  },
+  {
+    "name": "systemd-networkd-persistent-storage.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Enable Persistent Storage in systemd-networkd",
+    "is_running": false
+  },
+  {
+    "name": "systemd-networkd.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Network Management",
+    "is_running": false
+  },
+  {
+    "name": "systemd-pcrlogin@1000.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "TPM NvPCR Measurement of User Record for UID 1000",
+    "is_running": false
+  },
+  {
+    "name": "systemd-pcrmachine.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "TPM PCR Machine ID Measurement",
+    "is_running": false
+  },
+  {
+    "name": "systemd-pcrnvdone.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "TPM PCR NvPCR Initialization Separator",
+    "is_running": false
+  },
+  {
+    "name": "systemd-pcrosseparator.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "TPM PCR OS Separator",
+    "is_running": false
+  },
+  {
+    "name": "systemd-pcrphase-initrd.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "TPM PCR Barrier (initrd)",
+    "is_running": false
+  },
+  {
+    "name": "systemd-pcrphase-sysinit.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "TPM PCR Barrier (Initialization)",
+    "is_running": false
+  },
+  {
+    "name": "systemd-pcrphase.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "TPM PCR Barrier (User)",
+    "is_running": false
+  },
+  {
+    "name": "systemd-pcrproduct.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "TPM NvPCR Product ID Measurement",
+    "is_running": false
+  },
+  {
+    "name": "systemd-poweroff.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "System Power Off",
+    "is_running": false
+  },
+  {
+    "name": "systemd-pstore.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Platform Persistent Storage Archival",
+    "is_running": false
+  },
+  {
+    "name": "systemd-quotacheck-root.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Root File System Quota Check",
+    "is_running": false
+  },
+  {
+    "name": "systemd-random-seed.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Load/Save OS Random Seed",
+    "is_running": true
+  },
+  {
+    "name": "systemd-reboot.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "System Reboot",
+    "is_running": false
+  },
+  {
+    "name": "systemd-remount-fs.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Remount Root and Kernel File Systems",
+    "is_running": true
+  },
+  {
+    "name": "systemd-soft-reboot.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Reboot System Userspace",
+    "is_running": false
+  },
+  {
+    "name": "systemd-sysctl.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Apply Kernel Variables",
+    "is_running": true
+  },
+  {
+    "name": "systemd-sysext-initrd.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Merge System Extension Images into /usr/ and /opt/ of the initrd",
+    "is_running": false
+  },
+  {
+    "name": "systemd-sysext.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Merge System Extension Images into /usr/ and /opt/",
+    "is_running": false
+  },
+  {
+    "name": "systemd-sysusers.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Create System Users",
+    "is_running": false
+  },
+  {
+    "name": "systemd-timesyncd.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Network Time Synchronization",
+    "is_running": false
+  },
+  {
+    "name": "systemd-tmpfiles-clean.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Cleanup of Temporary Directories",
+    "is_running": false
+  },
+  {
+    "name": "systemd-tmpfiles-setup-dev-early.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Create Static Device Nodes in /dev gracefully",
+    "is_running": true
+  },
+  {
+    "name": "systemd-tmpfiles-setup-dev.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Create Static Device Nodes in /dev",
+    "is_running": true
+  },
+  {
+    "name": "systemd-tmpfiles-setup.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Create System Files and Directories",
+    "is_running": true
+  },
+  {
+    "name": "systemd-tpm2-setup-early.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Early TPM SRK Setup",
+    "is_running": false
+  },
+  {
+    "name": "systemd-tpm2-setup.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "TPM SRK Setup",
+    "is_running": false
+  },
+  {
+    "name": "systemd-udev-load-credentials.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Load udev Rules from Credentials",
+    "is_running": true
+  },
+  {
+    "name": "systemd-udev-settle.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Wait for udev To Complete Device Initialization",
+    "is_running": false
+  },
+  {
+    "name": "systemd-udev-trigger.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Coldplug All udev Devices",
+    "is_running": true
+  },
+  {
+    "name": "systemd-udevd.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Rule-based Manager for Device Events and Files",
+    "is_running": true
+  },
+  {
+    "name": "systemd-update-done.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Update is Completed",
+    "is_running": false
+  },
+  {
+    "name": "systemd-user-sessions.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Permit User Sessions",
+    "is_running": true
+  },
+  {
+    "name": "systemd-userdb-load-credentials.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Load JSON user/group Records from Credentials",
+    "is_running": true
+  },
+  {
+    "name": "systemd-userdbd.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "User Database Manager",
+    "is_running": true
+  },
+  {
+    "name": "thermald.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Thermal Daemon Service",
+    "is_running": true
+  },
+  {
+    "name": "tlp-pd.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "TLP profiles daemon API service",
+    "is_running": true
+  },
+  {
+    "name": "tlp.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "TLP system startup/shutdown",
+    "is_running": true
+  },
+  {
+    "name": "tpm-udev.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Handle dynamically added tpm devices",
+    "is_running": false
+  },
+  {
+    "name": "udisks2.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Disk Manager",
+    "is_running": true
+  },
+  {
+    "name": "upower.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "Daemon for power management",
+    "is_running": true
+  },
+  {
+    "name": "user-runtime-dir@1000.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "User Runtime Directory /run/user/1000",
+    "is_running": true
+  },
+  {
+    "name": "user@1000.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "User Manager for UID 1000",
+    "is_running": true
+  },
+  {
+    "name": "vgauth.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Authentication service for virtual machines hosted on VMware",
+    "is_running": false
+  },
+  {
+    "name": "virtualbox-guest-utils.service",
+    "load_state": "loaded",
+    "active_state": "inactive",
+    "sub_state": "dead",
+    "description": "Virtualbox guest utils",
+    "is_running": false
+  },
+  {
+    "name": "virtualbox.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "exited",
+    "description": "Virtualbox kernel modules",
+    "is_running": true
+  },
+  {
+    "name": "wpa_supplicant.service",
+    "load_state": "loaded",
+    "active_state": "active",
+    "sub_state": "running",
+    "description": "WPA supplicant",
+    "is_running": true
+  }
+]

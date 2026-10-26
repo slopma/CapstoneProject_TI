@@ -4,16 +4,32 @@ import hashlib
 import importlib.util
 import json
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
+from pydantic import BaseModel, Field
 
-from app.config import AWS_OUTPUT_PATH, PROJECT_ROOT
+from app.config import AWS_OUTPUT_PATH, GCP_OUTPUT_PATH, PROJECT_ROOT
+from app.discovery.cloud_live_discovery import (
+    AWSLiveDiscoveryConnector,
+    GCPLiveDiscoveryConnector,
+    CloudInventoryReconciler,
+)
+from app.discovery.connectors import (
+    ConnectorAuthError,
+    ConnectorError,
+    ConnectorTimeoutError,
+)
 from app.discovery.exporters import generate_markdown_report, generate_mermaid_diagram
 from app.discovery.models import DATABASE_COLLECTOR_SPECS, OpenAudITCollectorAdapter
 from app.discovery.osquery_parser import SUPPORTED_SCHEMAS
 from app.discovery.storage import DEFAULT_OSQUERY_JSON_PATH, discovery_store
-from app.discovery.terraform_bridge import generate_discovery_aws_terraform
+from app.discovery.terraform_bridge import (
+    generate_discovery_aws_terraform,
+    generate_discovery_gcp_terraform,
+    generate_discovery_terraform,
+)
+from app.persistence.transactional_db import get_transactional_db
 
 router = APIRouter(prefix="/api/v1/discovery", tags=["Discovery Analyzer"])
 
@@ -120,7 +136,19 @@ def get_discovery_collectors():
                 "name": "osquery Host Discovery Collector",
                 "status": "active",
                 "supported_schemas": sorted(SUPPORTED_SCHEMAS),
-            }
+            },
+            {
+                "id": "aws_live_discovery",
+                "name": "AWS Live Cloud Discovery Connector (boto3 STS/EC2/RDS/S3/IAM)",
+                "status": "active",
+                "supported_schemas": ["cmir-2.1"],
+            },
+            {
+                "id": "gcp_live_discovery",
+                "name": "GCP Live Cloud Discovery Connector (Cloud Asset API / Compute / SQL / GCS / IAM)",
+                "status": "active",
+                "supported_schemas": ["cmir-2.1"],
+            },
         ],
         "prepared_collectors": [
             {
@@ -409,7 +437,8 @@ def query_session_services(
 @router.get("/sessions/{session_id}/export")
 def export_discovery_session(
     session_id: str,
-    format: str = Query("json", description="Export format: json | md | mmd | cmir"),
+    format: str = Query("json", description="Export format: json | md | mmd | cmir | tf"),
+    target_provider: str = Query("aws", description="Target provider when format=tf: aws | gcp"),
 ):
     """Export the normalized discovery inventory, Markdown report, Mermaid diagram, or CMIR model."""
     session = discovery_store.get_session(session_id)
@@ -453,6 +482,9 @@ def export_discovery_session(
             },
         )
     if fmt == "tf":
+        provider_clean = target_provider.lower().strip()
+        if provider_clean not in ("aws", "gcp"):
+            raise HTTPException(status_code=400, detail="Proveedor no soportado. Use 'aws' o 'gcp'.")
         tf_context = {
             "session_id": session["session_id"],
             "filename": session["filename"],
@@ -462,12 +494,12 @@ def export_discovery_session(
             "sections": norm["sections"],
             "cmir": session.get("cmir"),
         }
-        tf_bundle = generate_discovery_aws_terraform(tf_context, strategy="replatform")
+        tf_bundle = generate_discovery_terraform(tf_context, strategy="replatform", target_provider=provider_clean)
         return PlainTextResponse(
             content=tf_bundle["iac_code"],
             media_type="text/plain; charset=utf-8",
             headers={
-                "Content-Disposition": f'attachment; filename="cloudmove-aws-{hostname}.tf"'
+                "Content-Disposition": f'attachment; filename="cloudmove-{provider_clean}-{hostname}.tf"'
             },
         )
 
@@ -482,12 +514,20 @@ def export_discovery_session(
 def generate_session_terraform(
     session_id: str,
     strategy: str = Query("replatform", description="Migration strategy: replatform | rehost"),
-    write_files: bool = Query(False, description="Persist modular .tf files into generated/aws/"),
+    target_provider: str = Query("aws", description="Target cloud provider: aws | gcp"),
+    write_files: bool = Query(False, description="Persist modular .tf files into generated/aws/ or generated/gcp/"),
 ):
     """
-    Generate modular AWS Terraform (`provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`)
-    and step-by-step JSON->CMIR->AWS traceability for a discovery session.
+    Generate modular AWS or GCP Terraform (`provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`)
+    and step-by-step JSON->CMIR->Provider traceability for a discovery session.
     """
+    provider_clean = target_provider.lower().strip()
+    if provider_clean not in ("aws", "gcp"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Proveedor '{target_provider}' no admitido. Proveedores destino admitidos: aws, gcp.",
+        )
+
     session = discovery_store.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail=f"Sesión '{session_id}' no encontrada.")
@@ -503,15 +543,45 @@ def generate_session_terraform(
         "cmir": session.get("cmir"),
     }
 
-    result = generate_discovery_aws_terraform(tf_context, strategy=strategy)
+    result = generate_discovery_terraform(tf_context, strategy=strategy, target_provider=provider_clean)
 
     if write_files:
-        AWS_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        out_dir = GCP_OUTPUT_PATH.parent if provider_clean == "gcp" else AWS_OUTPUT_PATH.parent
+        out_dir.mkdir(parents=True, exist_ok=True)
         for fname, fcontent in result["files"].items():
-            (AWS_OUTPUT_PATH.parent / fname).write_text(fcontent, encoding="utf-8")
-        result["written_to_dir"] = str(AWS_OUTPUT_PATH.parent)
+            (out_dir / fname).write_text(fcontent, encoding="utf-8")
+        result["written_to_dir"] = str(out_dir)
 
     return result
+
+
+def _load_osquery_installer_module():
+    installer_path = PROJECT_ROOT / "cloudmove_agent" / "osquery_installer.py"
+    if not installer_path.is_file():
+        raise RuntimeError(f"No se encontró el instalador en '{installer_path}'.")
+    spec = importlib.util.spec_from_file_location("cloudmove_osquery_installer", installer_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("No se pudo cargar cloudmove_agent/osquery_installer.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@router.get("/osquery-catalog")
+def get_osquery_installer_catalog():
+    """
+    Inspect the official osquery web release assets, detect the current PC's OS and
+    architecture, and return the recommended package and smoke-test status.
+    """
+    try:
+        installer_mod = _load_osquery_installer_module()
+        return installer_mod.get_installer_status_report()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al consultar el catálogo de instaladores osquery: {exc}",
+        ) from exc
 
 
 @router.get("/collector-script")
@@ -540,8 +610,9 @@ def collect_live_device_inventory(
     persist_json: bool = Query(True, description="Persist collected JSON snapshot in backend/data/discovery_sessions"),
 ):
     """
-    Execute `cloudmove_osquery_export.py` directly on the local device via `osqueryi`,
-    parse and normalize the live inventory, and activate the session in CloudMove.
+    Two-stage automated discovery:
+    1. Prepare/install osquery for the current PC's OS & architecture and run smoke test.
+    2. Execute `cloudmove_osquery_export.py` via `osqueryi`, parse and normalize into CloudMove.
     """
     if not COLLECTOR_SCRIPT_PATH.exists():
         raise HTTPException(
@@ -550,13 +621,17 @@ def collect_live_device_inventory(
         )
 
     try:
+        installer_mod = _load_osquery_installer_module()
+        osquery_bin = installer_mod.install_osquery(force_download=False)
+        smoke_test = installer_mod.verify_osquery_binary(osquery_bin)
+
         spec = importlib.util.spec_from_file_location("cloudmove_osquery_export", COLLECTOR_SCRIPT_PATH)
         if spec is None or spec.loader is None:
             raise RuntimeError("No se pudo cargar el módulo cloudmove_osquery_export.py")
         mod = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = mod
         spec.loader.exec_module(mod)
-        document = mod.collect_osquery_inventory(require_root=False)
+        document = mod.collect_osquery_inventory(require_root=False, osquery_bin=osquery_bin)
     except RuntimeError as exc:
         raise HTTPException(
             status_code=422,
@@ -564,8 +639,8 @@ def collect_live_device_inventory(
                 "error_code": "OSQUERY_COLLECTION_FAILED",
                 "message": str(exc),
                 "remediation": (
-                    "Verifique que 'osqueryi' esté instalado en el equipo o descargue "
-                    "cloudmove_osquery_export.py para ejecutarlo en el host objetivo."
+                    "Verifique la conexión para descargar osquery o inicie cloudmove_agent "
+                    "en el equipo objetivo."
                 ),
             },
         ) from exc
@@ -574,7 +649,7 @@ def collect_live_device_inventory(
             status_code=500,
             detail={
                 "error_code": "DEVICE_SCAN_ERROR",
-                "message": f"Error al escanear el dispositivo con osquery: {exc}",
+                "message": f"Error al preparar osquery o escanear el dispositivo: {exc}",
             },
         ) from exc
 
@@ -599,7 +674,135 @@ def collect_live_device_inventory(
             },
         ) from exc
 
-    return _build_session_response(session)
+    resp = _build_session_response(session)
+    resp["agent_smoke_test"] = smoke_test
+    return resp
+
+
+# ==============================================================================
+# Live Cloud Infrastructure Discovery (AWS & GCP) with Reconciliation
+# ==============================================================================
+
+
+class AWSLiveDiscoveryRequest(BaseModel):
+    regions: Optional[List[str]] = Field(default_factory=lambda: ["us-east-1"])
+    profile_name: Optional[str] = Field(None)
+    aws_access_key_id: Optional[str] = Field(None)
+    aws_secret_access_key: Optional[str] = Field(None)
+    aws_session_token: Optional[str] = Field(None)
+    role_arn: Optional[str] = Field(None)
+
+
+class GCPLiveDiscoveryRequest(BaseModel):
+    project_id: Optional[str] = Field(None)
+    zone: str = Field("us-central1-a")
+    service_account_json: Optional[str] = Field(None)
+    access_token: Optional[str] = Field(None)
+
+
+@router.post("/cloud/aws")
+def discover_live_aws_infrastructure(request: Optional[AWSLiveDiscoveryRequest] = None):
+    """
+    Execute real AWS live cloud discovery via boto3 (`sts`, `ec2`, `rds`, `s3`, `iam` with pagination),
+    normalize into CMIR v2.1, reconcile against any previous snapshot for the same account/region,
+    and persist in the ACID transactional database.
+    Never converts an API/auth error into an empty inventory.
+    """
+    req = request or AWSLiveDiscoveryRequest()
+    primary_region = (req.regions or ["us-east-1"])[0]
+    connector = AWSLiveDiscoveryConnector(
+        region=primary_region,
+        profile_name=req.profile_name,
+        role_arn=req.role_arn,
+    )
+    try:
+        return connector.discover_live_account()
+    except ConnectorAuthError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error_code": "AWS_AUTH_OR_PERMISSION_ERROR",
+                "provider": "aws",
+                "message": str(exc),
+            },
+        ) from exc
+    except ConnectorTimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail={
+                "error_code": "AWS_API_TIMEOUT",
+                "provider": "aws",
+                "message": str(exc),
+            },
+        ) from exc
+    except ConnectorError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error_code": "AWS_DISCOVERY_ERROR",
+                "provider": "aws",
+                "message": str(exc),
+            },
+        ) from exc
+
+
+@router.post("/cloud/gcp")
+def discover_live_gcp_infrastructure(request: Optional[GCPLiveDiscoveryRequest] = None):
+    """
+    Execute real GCP live cloud discovery via Google Cloud Asset API (`searchAllResources` with pagination),
+    normalize into CMIR v2.1, reconcile against any previous snapshot for the same project,
+    and persist in the ACID transactional database.
+    Never converts an API/auth error into an empty inventory.
+    """
+    req = request or GCPLiveDiscoveryRequest()
+    connector = GCPLiveDiscoveryConnector(
+        project_id=req.project_id,
+        region=req.zone,
+        credentials_path=req.service_account_json,
+    )
+    try:
+        return connector.discover_live_project()
+    except ConnectorAuthError as exc:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error_code": "GCP_AUTH_OR_PERMISSION_ERROR",
+                "provider": "gcp",
+                "message": str(exc),
+            },
+        ) from exc
+    except ConnectorTimeoutError as exc:
+        raise HTTPException(
+            status_code=504,
+            detail={
+                "error_code": "GCP_API_TIMEOUT",
+                "provider": "gcp",
+                "message": str(exc),
+            },
+        ) from exc
+    except ConnectorError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "error_code": "GCP_DISCOVERY_ERROR",
+                "provider": "gcp",
+                "message": str(exc),
+            },
+        ) from exc
+
+
+@router.get("/cloud/snapshots")
+def list_cloud_discovery_snapshots(provider: Optional[str] = Query(None, description="aws | gcp")):
+    """Return persisted live cloud discovery snapshots and reconciliation diffs."""
+    if provider and provider.lower().strip() not in ("aws", "gcp"):
+        raise HTTPException(status_code=400, detail="Proveedor no soportado. Use 'aws' o 'gcp'.")
+    snapshots = get_transactional_db().list_cloud_discovery_snapshots(
+        provider=provider.lower().strip() if provider else None
+    )
+    return {
+        "count": len(snapshots),
+        "snapshots": snapshots,
+    }
 
 
 

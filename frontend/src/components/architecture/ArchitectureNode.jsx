@@ -72,6 +72,7 @@ function ArchitectureNode({ data }) {
     node.engine || node.cidr || node.ip || node.platform || node.location || "";
   const childLabel =
     childCount === 1 ? "1 recurso interno" : `${childCount} recursos internos`;
+  const epistemic = (node.epistemic_state || "").toLowerCase();
 
   const staggerDelayMs = Math.min(staggerIndex * 22, 260);
 
@@ -126,6 +127,7 @@ function ArchitectureNode({ data }) {
     width: "100%",
     height: "100%",
     "--stagger-delay": `${staggerDelayMs}ms`,
+    borderStyle: epistemic === "inferred" ? "dashed" : undefined,
   };
 
   // 1. Expanded Boundary Container Node
@@ -192,7 +194,7 @@ function ArchitectureNode({ data }) {
     );
   }
 
-  // 2. Collapsed Boundary Container Node (Compact Summary Card with Expand Trigger)
+  // 2. Collapsed Boundary Container Node
   if (hasChildren) {
     return (
       <div
@@ -314,6 +316,31 @@ function ArchitectureNode({ data }) {
                   ·
                 </span>
                 <span className="node-provider-inline">{provider.label}</span>
+              </>
+            )}
+            {epistemic && (
+              <>
+                <span className="node-meta-dot" aria-hidden="true">
+                  ·
+                </span>
+                <small
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    color:
+                      epistemic === "inferred"
+                        ? "#b45309"
+                        : epistemic === "observed"
+                        ? "#15803d"
+                        : "#1d4ed8",
+                  }}
+                >
+                  {epistemic === "inferred"
+                    ? "INFERIDO"
+                    : epistemic === "observed"
+                    ? "CONFIRMADO"
+                    : "DERIVADO"}
+                </small>
               </>
             )}
           </div>

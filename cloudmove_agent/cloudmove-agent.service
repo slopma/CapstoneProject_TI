@@ -1,0 +1,19 @@
+[Unit]
+Description=CloudMove Discovery & Migration Agent
+Documentation=https://github.com/lacastrilp/CapstoneProject_TI
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 -m cloudmove_agent.agent_daemon
+WorkingDirectory=/opt/cloudmove-agent
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/cloudmove/agent.log
+StandardError=append:/var/log/cloudmove/agent.log
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,63 @@
+[
+  {
+    "name": "nvme0n1",
+    "path": "/dev/nvme0n1",
+    "model": "UMIS RPJTJ512MGE1QDY",
+    "serial": "SS1D05470Z2CD27L153Y",
+    "size_bytes": 512110190592,
+    "size_gib": 476.94,
+    "type": "disk",
+    "read_only": false,
+    "is_boot_device": true,
+    "partitions": [
+      {
+        "name": "nvme0n1p1",
+        "path": "/dev/nvme0n1p1",
+        "size_bytes": 1023410176,
+        "size_gib": 0.95,
+        "mount_point": "/boot/efi",
+        "filesystem": "vfat",
+        "uuid": "1BFA-66AA",
+        "partuuid": "6014c635-64d4-4aba-bab2-b7008d98db14",
+        "label": null,
+        "used_gib": 0.01,
+        "free_gib": 0.94,
+        "usage_percent": 0.9,
+        "is_root": false,
+        "is_boot": true
+      },
+      {
+        "name": "nvme0n1p2",
+        "path": "/dev/nvme0n1p2",
+        "size_bytes": 494194917376,
+        "size_gib": 460.25,
+        "mount_point": "/",
+        "filesystem": "ext4",
+        "uuid": "e8df1f3f-113e-4b9e-a271-6940b8dc398d",
+        "partuuid": "7e30053a-b56f-404b-91a8-3fd7b772b61e",
+        "label": null,
+        "used_gib": 233.93,
+        "free_gib": 218.03,
+        "usage_percent": 51.8,
+        "is_root": true,
+        "is_boot": false
+      },
+      {
+        "name": "nvme0n1p3",
+        "path": "/dev/nvme0n1p3",
+        "size_bytes": 16890462208,
+        "size_gib": 15.73,
+        "mount_point": "[SWAP]",
+        "filesystem": "swap",
+        "uuid": "69590fa7-3b95-45a5-ab41-eb1197524b4d",
+        "partuuid": "65621deb-2372-41b1-8309-3dcf88926a23",
+        "label": null,
+        "used_gib": 0.0,
+        "free_gib": 0.0,
+        "usage_percent": 0.0,
+        "is_root": false,
+        "is_boot": false
+      }
+    ]
+  }
+]

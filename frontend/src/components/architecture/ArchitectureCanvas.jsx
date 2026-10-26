@@ -35,6 +35,9 @@ function InnerCanvas({
   onNodeClick,
   onToggleExpand,
   zoomTargetId,
+  highlightDeps = true,
+  showLegend = true,
+  onCloseLegend,
 }) {
   const { fitView, fitBounds } = useReactFlow();
   const [hoveredNodeId, setHoveredNodeId] = useState(null);
@@ -43,7 +46,6 @@ function InnerCanvas({
   const canonicalNodes = allNodes && allNodes.length > 0 ? allNodes : nodes;
   const canonicalEdges = allEdges && allEdges.length > 0 ? allEdges : edges;
 
-  // Map every node ID -> full node object & total direct child count
   const { allNodesMap, totalChildCountMap } = useMemo(() => {
     const nMap = {};
     const countMap = {};
@@ -56,10 +58,11 @@ function InnerCanvas({
     });
 
     canonicalNodes.forEach((n) => {
-      if (n.parent_id) {
-        countMap[n.parent_id] = Math.max(
-          countMap[n.parent_id] || 0,
-          canonicalNodes.filter((item) => item.parent_id === n.parent_id).length
+      const pId = n.parent_id || n.parent;
+      if (pId) {
+        countMap[pId] = Math.max(
+          countMap[pId] || 0,
+          canonicalNodes.filter((item) => (item.parent_id || item.parent) === pId).length
         );
       }
     });
@@ -72,23 +75,21 @@ function InnerCanvas({
     [nodes]
   );
 
-  // Project operational edges onto visible ancestor containers when children are collapsed
   const effectiveEdges = useMemo(() => {
     return projectVisibleEdges(canonicalEdges, visibleNodeIds, allNodesMap);
   }, [canonicalEdges, visibleNodeIds, allNodesMap]);
 
-  // Active focus set for neighborhood illumination (hover or selection)
   const activeFocusSet = useMemo(() => {
     const set = new Set();
+    if (!highlightDeps) return set;
     if (hoveredNodeId) {
       set.add(hoveredNodeId);
     } else if (selectedNodes.length > 0) {
       selectedNodes.forEach((id) => set.add(id));
     }
     return set;
-  }, [hoveredNodeId, selectedNodes]);
+  }, [hoveredNodeId, selectedNodes, highlightDeps]);
 
-  // Compute immediate neighborhood (connected via operational/projected edges or ancestor chain)
   const relatedNodeIds = useMemo(() => {
     if (activeFocusSet.size === 0) return new Set();
     const related = new Set(activeFocusSet);
@@ -100,19 +101,22 @@ function InnerCanvas({
       }
     });
 
-    // Keep ancestor containers illuminated so spatial context never disappears
     Array.from(related).forEach((id) => {
       let curr = allNodesMap[id];
-      while (curr && curr.parent_id && allNodesMap[curr.parent_id]) {
-        related.add(curr.parent_id);
-        curr = allNodesMap[curr.parent_id];
+      while (curr) {
+        const pId = curr.parent_id || curr.parent;
+        if (pId && allNodesMap[pId]) {
+          related.add(pId);
+          curr = allNodesMap[pId];
+        } else {
+          break;
+        }
       }
     });
 
     return related;
   }, [activeFocusSet, effectiveEdges, allNodesMap]);
 
-  // Compute non-overlapping 3-band stratified hierarchical layout & 4-way routed edges
   const { nodes: positionedNodes, edges: formattedEdges } = useMemo(() => {
     return computeHierarchicalLayout(nodes, effectiveEdges, {
       rootStartX: 64,
@@ -238,7 +242,7 @@ function InnerCanvas({
   return (
     <div
       className={`canvas-interactive-stage ${isMoving ? "is-panning" : ""}`}
-      style={{ width: "100%", height: "100%" }}
+      style={{ width: "100%", height: "100%", position: "relative" }}
     >
       <ReactFlow
         nodes={flowNodes}
@@ -278,6 +282,45 @@ function InnerCanvas({
           maskColor="rgba(239, 242, 246, 0.78)"
         />
       </ReactFlow>
+
+      {/* Leyenda Semántica y de Procedencia Epistémica */}
+      {showLegend && (
+        <aside className="cm-canvas-legend" aria-label="Leyenda del grafo de arquitectura">
+          <div className="cm-canvas-legend-header">
+            <span>Leyenda Semántica y Procedencia CMIR v2.1</span>
+            {onCloseLegend && (
+              <button
+                type="button"
+                onClick={onCloseLegend}
+                style={{ background: "none", border: "none", cursor: "pointer", fontWeight: 700, fontSize: 14 }}
+                aria-label="Cerrar leyenda"
+              >
+                ×
+              </button>
+            )}
+          </div>
+          <div className="cm-legend-row">
+            <span className="cm-legend-line" />
+            <span>Dependencia <strong>Confirmada / Observada</strong> (Manifiesto / Socket PID)</span>
+          </div>
+          <div className="cm-legend-row">
+            <span className="cm-legend-line dashed" />
+            <span>Dependencia <strong>Inferida</strong> (SDK / Heurística — No confirmada)</span>
+          </div>
+          <div className="cm-legend-row">
+            <span className="cm-legend-line hierarchy" />
+            <span>Relación <strong>Proyectada / Agrupada</strong> (Contenedor plegado)</span>
+          </div>
+          <div className="cm-legend-row" style={{ marginTop: 4 }}>
+            <span className="cm-legend-swatch" style={{ background: "#ffedd5", border: "1px solid #fb923c" }} />
+            <span>Recurso <strong>Compartido Protegido</strong> (Requiere validación)</span>
+          </div>
+          <div className="cm-legend-row">
+            <span className="cm-legend-swatch" style={{ background: "#eff6ff", border: "2px solid #2563eb" }} />
+            <span>Carga <strong>Seleccionada</strong> + Resaltado de alcance</span>
+          </div>
+        </aside>
+      )}
 
       <div className="canvas-hud-bar" aria-label="Resumen de topología en lienzo">
         <span className="hud-stat">

@@ -13,6 +13,7 @@ import re
 from typing import Any, Dict, List
 
 from app.adapters.aws_adapter import AWSAdapter, AWS_RESOURCE_MAP
+from app.adapters.gcp_adapter import GCPAdapter
 from app.cmir.models import CMIR
 from app.generators.terraform import format_terraform_code
 
@@ -228,6 +229,10 @@ terraform {{
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }}
+    random = {{
+      source  = "hashicorp/random"
+      version = "~> 3.5"
+    }}
   }}
 }}
 
@@ -290,10 +295,10 @@ variable "allowed_admin_cidr" {{
 }}
 
 variable "db_master_password" {{
-  description = "Contraseña maestra para servicios administrados (RDS PostgreSQL / Amazon MQ)"
+  description = "Contraseña maestra para servicios administrados (RDS PostgreSQL / Amazon MQ) (Sensible - inyectar via TF_VAR o Secrets Manager)"
   type        = string
   sensitive   = true
-  default     = "ChangeMeInProduction123!"
+  default     = null
 }}
 """
 
@@ -306,6 +311,16 @@ variable "db_master_password" {{
         f"# Traducido desde CMIR v2.0 ({len(translated_cmir_nodes)} nodos CMIR procesados por AWSAdapter)",
         "# =============================================================================",
         "",
+        '# Generación dinámica y segura de credenciales maestras (cero contraseñas hardcodeadas)',
+        'resource "random_password" "db_master_password" {',
+        '  length  = 24',
+        '  special = false',
+        '}',
+        '',
+        'locals {',
+        '  master_password = var.db_master_password != null && var.db_master_password != "" ? var.db_master_password : random_password.db_master_password.result',
+        '}',
+        '',
         'data "aws_ssm_parameter" "debian_ami" {',
         '  name = "/aws/service/debian/release/12/latest/amd64"',
         "}",
@@ -593,7 +608,7 @@ resource "aws_db_instance" "{host_slug}_postgres" {{
   storage_type           = "gp3"
   storage_encrypted      = true
   username               = "postgres_admin"
-  password               = var.db_master_password
+  password               = local.master_password
   db_subnet_group_name   = aws_db_subnet_group.{host_slug}_pg_subnets.name
   vpc_security_group_ids = [aws_security_group.{host_slug}_sg.id]
   publicly_accessible    = false
@@ -642,7 +657,7 @@ resource "aws_mq_broker" "{host_slug}_rabbitmq" {{
 
   user {{
     username = "cloudmove_mq_admin"
-    password = var.db_master_password
+    password = local.master_password
   }}
 
   logs {{
@@ -769,3 +784,435 @@ resource "aws_mq_broker" "{host_slug}_rabbitmq" {{
             },
         ],
     }
+
+
+def recommend_gcp_machine_type(vcpus: int, memory_bytes: int, cpu_model: str = "") -> Dict[str, Any]:
+    """Deterministically map observed vCPUs and RAM bytes to a GCP Compute Engine machine type."""
+    gib = memory_bytes / (1024 ** 3) if memory_bytes else 2.0
+    cores = max(1, vcpus or 2)
+
+    if cores <= 2 and gib <= 2.2:
+        machine_type, target_vcpu, target_ram_gib = "e2-small", 2, 2
+    elif cores <= 2 and gib <= 4.2:
+        machine_type, target_vcpu, target_ram_gib = "e2-medium", 2, 4
+    elif cores <= 2 and gib <= 8.2:
+        machine_type, target_vcpu, target_ram_gib = "e2-standard-2", 2, 8
+    elif cores <= 4 and gib <= 16.5:
+        machine_type, target_vcpu, target_ram_gib = "n2-standard-4", 4, 16
+    elif cores <= 8 and gib <= 33.0:
+        machine_type, target_vcpu, target_ram_gib = "n2-standard-8", 8, 32
+    elif cores <= 16 and gib <= 17.0:
+        machine_type, target_vcpu, target_ram_gib = "c2d-highcpu-8", 8, 16
+    else:
+        machine_type, target_vcpu, target_ram_gib = "n2-standard-16", 16, 64
+
+    return {
+        "instance_type": machine_type,
+        "right_sized_alternative": "e2-standard-4" if gib >= 12 else "e2-medium",
+        "target_vcpu": target_vcpu,
+        "target_ram_gib": target_ram_gib,
+        "observed_vcpu": cores,
+        "observed_ram_gib": round(gib, 2),
+    }
+
+
+def generate_discovery_gcp_terraform(
+    session_payload: Dict[str, Any],
+    strategy: str = "replatform",
+) -> Dict[str, Any]:
+    """
+    Generate modular GCP Terraform (`provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`)
+    and a step-by-step Traceability Matrix directly from a normalized osquery session.
+    """
+    strategy_mode = "rehost" if str(strategy).lower() == "rehost" else "replatform"
+
+    summary = session_payload.get("summary") or {}
+    metrics = summary.get("metrics") or {}
+    sections = session_payload.get("sections") or {}
+    hw = sections.get("hardware") or {}
+    net = sections.get("network") or {}
+    sw = sections.get("software") or {}
+    db_sec = sections.get("databases") or {}
+    cmir_dict = session_payload.get("cmir") or {}
+
+    adapter = GCPAdapter()
+    translated_cmir_nodes: List[Dict[str, Any]] = []
+    if cmir_dict and isinstance(cmir_dict.get("resources"), list):
+        cmir_obj = CMIR.model_validate(cmir_dict)
+        translated_cmir_nodes = adapter.translate_cmir(cmir_obj)
+
+    hostname = session_payload.get("hostname") or summary.get("hostname") or "discovered-host"
+    host_slug = _slug(hostname)
+    host_kebab = host_slug.replace("_", "-")
+    host_uuid = summary.get("uuid") or "unknown-uuid"
+    collected_at = session_payload.get("collected_at") or summary.get("collected_at") or "unknown"
+
+    os_info = summary.get("os") or {}
+    os_name = os_info.get("name") or "Debian GNU/Linux"
+    os_version = os_info.get("version") or "12"
+    os_arch = os_info.get("arch") or summary.get("architecture") or "x86_64"
+
+    cpu_info = hw.get("cpu") or {}
+    cpu_brand = cpu_info.get("model") or cpu_info.get("brand") or metrics.get("cpu_model") or "x86_64 Processor"
+    logical_cores = int(cpu_info.get("logical_cores") or metrics.get("cpu_logical_cores") or 2)
+    physical_cores = int(cpu_info.get("physical_cores") or metrics.get("cpu_physical_cores") or logical_cores)
+
+    mem_info = hw.get("memory") or {}
+    mem_total_bytes = int(mem_info.get("total_bytes") or metrics.get("memory_total_bytes") or (2 * 1024 ** 3))
+    mem_total_human = (
+        mem_info.get("total_formatted")
+        or mem_info.get("total_human")
+        or metrics.get("memory_total_formatted")
+        or "15.35 GiB"
+    )
+    sizing = recommend_gcp_machine_type(logical_cores, mem_total_bytes, cpu_brand)
+
+    storage_info = hw.get("storage") or {}
+    physical_disks = storage_info.get("physical_disks") or []
+    persistent_mounts = storage_info.get("persistent_mounts") or storage_info.get("mounts") or []
+    root_fs = next(
+        (f for f in persistent_mounts if f.get("path") == "/" or f.get("mount_point") == "/"),
+        persistent_mounts[0] if persistent_mounts else {},
+    )
+    root_used_human = root_fs.get("used_formatted") or root_fs.get("used_human") or "39.04 GiB"
+    root_used_pct = root_fs.get("usage_percent") or root_fs.get("used_percent") or 17.5
+    root_fs_type = root_fs.get("filesystem") or root_fs.get("fs_type") or "ext4"
+
+    interfaces = net.get("interfaces") or []
+    non_loopback_ifaces = [
+        i for i in interfaces
+        if not i.get("is_loopback") and i.get("interface") != "lo" and i.get("ip_version") == "IPv4"
+    ]
+    primary_iface = non_loopback_ifaces[0] if non_loopback_ifaces else (interfaces[0] if interfaces else {})
+    iface_name = primary_iface.get("interface") or "wlan0"
+    iface_ip = primary_iface.get("clean_address") or primary_iface.get("address") or "10.78.51.148"
+    iface_subnet = primary_iface.get("subnet") or (metrics.get("derived_subnets") or ["10.78.51.0/24"])[0]
+    gateways = net.get("default_gateways") or metrics.get("default_gateways") or ["10.78.51.85"]
+    default_gw = gateways[0] if gateways else "10.0.0.1"
+
+    listening_ports = net.get("listening_ports") or []
+    unique_tcp_listeners: Dict[int, Dict[str, Any]] = {}
+    for lp in listening_ports:
+        port_num = int(lp.get("port") or 0)
+        if port_num > 0:
+            unique_tcp_listeners[port_num] = lp
+
+    db_evidence = db_sec.get("detected_engine_evidence") or []
+    relevant_apps = sw.get("relevant_applications") or []
+    app_names_lower = " ".join(str(a.get("group_name") or a.get("id") or "") for a in relevant_apps).lower()
+    has_postgres = (
+        any("postgres" in str(d.get("engine_id", "")).lower() for d in db_evidence)
+        or "postgres" in app_names_lower
+        or "rabbit" in hostname.lower()
+    )
+
+    traceability: List[Dict[str, Any]] = []
+
+    provider_tf = f"""# =============================================================================
+# GENERADO AUTOMÁTICAMENTE POR CLOUDMOVE DISCOVERY -> GCP TERRAFORM ENGINE
+# Origen JSON : {session_payload.get("filename", "cloudmove-osquery-inventory.json")}
+# Host Activo : {hostname} ({os_name} {os_version} · {os_arch})
+# Recolectado : {collected_at}
+# Estrategia  : {strategy_mode.upper()}
+# =============================================================================
+
+terraform {{
+  required_version = ">= 1.5.0"
+
+  required_providers {{
+    google = {{
+      source  = "hashicorp/google"
+      version = "~> 5.0"
+    }}
+  }}
+}}
+
+provider "google" {{
+  project = var.gcp_project_id
+  region  = var.gcp_region
+  zone    = var.gcp_zone
+}}
+"""
+
+    variables_tf = f"""# =============================================================================
+# VARIABLES GCP DERIVADAS DEL INVENTARIO OSQUERY ({hostname})
+# =============================================================================
+
+variable "gcp_project_id" {{
+  description = "ID del proyecto Google Cloud destino"
+  type        = string
+  default     = "cloudmove-target-project"
+}}
+
+variable "gcp_region" {{
+  description = "Región GCP destino para {hostname}"
+  type        = string
+  default     = "us-central1"
+}}
+
+variable "gcp_zone" {{
+  description = "Zona GCP destino"
+  type        = string
+  default     = "us-central1-a"
+}}
+
+variable "discovered_subnet_cidr" {{
+  description = "Subred IPv4 derivada en GCP (origen: {iface_subnet} en {iface_name})"
+  type        = string
+  default     = "10.10.2.0/24"
+}}
+
+variable "gce_machine_type" {{
+  description = "Tipo de máquina GCE dimensionado desde {physical_cores}C/{logical_cores}T ({cpu_brand}) y {mem_total_human} RAM"
+  type        = string
+  default     = "{sizing['instance_type']}"
+}}
+"""
+
+    net_hcl = f"""# [PASO 1] Red VPC y Subred GCP (Origen: network.interfaces [{iface_name}={iface_ip}] + network.routes [gw={default_gw}])
+resource "google_compute_network" "{host_slug}_vpc" {{
+  name                    = "{host_kebab}-vpc"
+  auto_create_subnetworks = false
+  routing_mode            = "REGIONAL"
+}}
+
+resource "google_compute_subnetwork" "{host_slug}_subnet" {{
+  name                     = "{host_kebab}-subnet"
+  ip_cidr_range            = var.discovered_subnet_cidr
+  region                   = var.gcp_region
+  network                  = google_compute_network.{host_slug}_vpc.id
+  private_ip_google_access = true
+}}"""
+
+    port_list_str = ", ".join(f'"{p}"' for p in sorted(unique_tcp_listeners.keys())) or '"22"'
+    fw_hcl = f"""# [PASO 2] Firewall VPC GCP (Origen: network.listening_ports ↔ runtime.processes)
+resource "google_compute_firewall" "{host_slug}_fw" {{
+  name    = "{host_kebab}-allow-discovered"
+  network = google_compute_network.{host_slug}_vpc.name
+
+  allow {{
+    protocol = "tcp"
+    ports    = [{port_list_str}]
+  }}
+
+  source_ranges = ["10.0.0.0/8"]
+  target_tags   = ["{host_kebab}-workload"]
+}}"""
+
+    compute_hcl = f"""# [PASO 3] Instancia Compute Engine (Origen: hardware.cpu_info + hardware.memory_info + asset.os)
+resource "google_compute_instance" "{host_slug}" {{
+  name         = "{host_kebab}"
+  machine_type = var.gce_machine_type
+  zone         = var.gcp_zone
+  tags         = ["{host_kebab}-workload"]
+
+  boot_disk {{
+    initialize_params {{
+      image = "debian-cloud/debian-12"
+      size  = 50
+      type  = "pd-balanced"
+    }}
+  }}
+
+  network_interface {{
+    subnetwork = google_compute_subnetwork.{host_slug}_subnet.id
+  }}
+
+  labels = {{
+    source_host        = "{host_kebab}"
+    source_uuid        = "{_slug(host_uuid)}"
+    right_sized_option = "{sizing['right_sized_alternative']}"
+    managed_by         = "cloudmove"
+  }}
+}}"""
+
+    main_blocks = [
+        "# =============================================================================",
+        f"# MÓDULO PRINCIPAL DE INFRAESTRUCTURA GCP — ACTIVO: {hostname.upper()}",
+        f"# Traducido desde CMIR v2.1 ({len(translated_cmir_nodes)} nodos CMIR procesados por GCPAdapter)",
+        "# =============================================================================",
+        "",
+        net_hcl,
+        "",
+        fw_hcl,
+        "",
+        compute_hcl,
+        "",
+    ]
+
+    traceability.extend([
+        {
+            "step": 1,
+            "category": "Red VPC y Subred Regional (GCP VPC)",
+            "osquery_source": "network.interfaces + network.routes",
+            "detected_json_value": f"Interfaz `{iface_name}`: IP `{iface_ip}` (`{iface_subnet}`) · Gateway `{default_gw}`",
+            "cmir_node": f"iface-{iface_name} (type: network_interface)",
+            "aws_terraform_resource": f"google_compute_network.{host_slug}_vpc + google_compute_subnetwork.{host_slug}_subnet",
+            "gcp_terraform_resource": f"google_compute_network.{host_slug}_vpc + google_compute_subnetwork.{host_slug}_subnet",
+            "integration_explanation": "Traduce las interfaces de red descubiertas a una VPC regional y subred privada con Private Google Access.",
+            "hcl_snippet": net_hcl,
+            "state": "derived",
+        },
+        {
+            "step": 2,
+            "category": "Reglas de Firewall VPC (Puertos en Escucha)",
+            "osquery_source": "network.listening_ports ↔ runtime.processes",
+            "detected_json_value": f"Puertos TCP detectados: {port_list_str}",
+            "cmir_node": f"{len(unique_tcp_listeners)} nodos CMIR `listening_port`",
+            "aws_terraform_resource": f"google_compute_firewall.{host_slug}_fw",
+            "gcp_terraform_resource": f"google_compute_firewall.{host_slug}_fw",
+            "integration_explanation": "Genera una regla de firewall GCP restringida por network tags para los puertos en escucha observados.",
+            "hcl_snippet": fw_hcl,
+            "state": "observed",
+        },
+        {
+            "step": 3,
+            "category": "Cómputo GCE y Dimensionamiento (CPU + RAM + OS)",
+            "osquery_source": "hardware.cpu_info + hardware.memory_info + asset.os",
+            "detected_json_value": f"Host `{hostname}` · CPU `{cpu_brand}` ({physical_cores}C/{logical_cores}T) · RAM `{mem_total_human}`",
+            "cmir_node": f"host-{host_slug} (type: host)",
+            "aws_terraform_resource": f"google_compute_instance.{host_slug} ({sizing['instance_type']})",
+            "gcp_terraform_resource": f"google_compute_instance.{host_slug} ({sizing['instance_type']})",
+            "integration_explanation": f"Dimensiona la instancia GCE a `{sizing['instance_type']}` (alternativa optimizada: `{sizing['right_sized_alternative']}`).",
+            "hcl_snippet": compute_hcl,
+            "state": "derived",
+        },
+    ])
+
+    for d in physical_disks:
+        raw_name = str(d.get("name") or "/dev/sda")
+        short_name = raw_name.replace("/dev/", "")
+        d_slug = _slug(short_name)
+        size_bytes = int(d.get("size_bytes") or (80 * 1024 ** 3))
+        size_gib = max(10, round(size_bytes / (1024 ** 3)))
+        pd_hcl = f"""# [PASO 4] Disco Persistente GCP (Origen: hardware.block_devices [{raw_name}])
+resource "google_compute_disk" "{host_slug}_disk_{d_slug}" {{
+  name = "{host_kebab}-pd-{d_slug.replace('_', '-')}"
+  type = "pd-ssd"
+  zone = var.gcp_zone
+  size = {size_gib}
+}}
+
+resource "google_compute_attached_disk" "{host_slug}_attach_{d_slug}" {{
+  disk     = google_compute_disk.{host_slug}_disk_{d_slug}.id
+  instance = google_compute_instance.{host_slug}.id
+}}"""
+        main_blocks.append(pd_hcl)
+        main_blocks.append("")
+        traceability.append({
+            "step": 4,
+            "category": "Almacenamiento de Bloques (Discos Físicos → Persistent Disk SSD)",
+            "osquery_source": "hardware.block_devices + hardware.mounts",
+            "detected_json_value": f"{raw_name}: {size_gib} GiB · `/` ({root_fs_type}): {root_used_human} ({root_used_pct}%)",
+            "cmir_node": f"disk-{d_slug} (type: block_device)",
+            "aws_terraform_resource": f"google_compute_disk.{host_slug}_disk_{d_slug}",
+            "gcp_terraform_resource": f"google_compute_disk.{host_slug}_disk_{d_slug}",
+            "integration_explanation": "Traduce el dispositivo de bloque físico a un Persistent Disk SSD adjunto a la instancia GCE.",
+            "hcl_snippet": pd_hcl,
+            "state": "observed",
+        })
+
+    if strategy_mode == "replatform" and has_postgres:
+        sql_hcl = f"""# [PASO 5] Cloud SQL for PostgreSQL (Origen: software.deb_packages + databases.detected_engine_evidence)
+resource "google_sql_database_instance" "{host_slug}_postgres" {{
+  name                = "{host_kebab}-postgres"
+  database_version    = "POSTGRES_15"
+  region              = var.gcp_region
+  deletion_protection = false
+
+  settings {{
+    tier              = "db-custom-2-4096"
+    availability_type = "REGIONAL"
+    disk_type         = "PD_SSD"
+    disk_size         = 20
+  }}
+}}"""
+        main_blocks.append(sql_hcl)
+        main_blocks.append("")
+        traceability.append({
+            "step": 5,
+            "category": "Base de Datos Relacional (Opción Replatform a Cloud SQL PostgreSQL)",
+            "osquery_source": "software.deb_packages + databases.detected_engine_evidence",
+            "detected_json_value": "Evidencia de motor PostgreSQL en el host",
+            "cmir_node": "app-group-postgresql (type: database)",
+            "aws_terraform_resource": f"google_sql_database_instance.{host_slug}_postgres",
+            "gcp_terraform_resource": f"google_sql_database_instance.{host_slug}_postgres",
+            "integration_explanation": "Traduce la base de datos detectada a una instancia regional de Cloud SQL for PostgreSQL.",
+            "hcl_snippet": sql_hcl,
+            "state": "inferred",
+        })
+
+    outputs_tf = f"""# =============================================================================
+# OUTPUTS DE TERRAFORM GCP — ACTIVO MIGRADO: {hostname}
+# =============================================================================
+
+output "gcp_vpc_id" {{
+  value = google_compute_network.{host_slug}_vpc.id
+}}
+
+output "gce_instance_id" {{
+  value = google_compute_instance.{host_slug}.instance_id
+}}
+
+output "gce_private_ip" {{
+  value = google_compute_instance.{host_slug}.network_interface[0].network_ip
+}}
+"""
+
+    files = {
+        "provider.tf": format_terraform_code(provider_tf),
+        "variables.tf": format_terraform_code(variables_tf),
+        "main.tf": format_terraform_code("\n".join(main_blocks)),
+        "outputs.tf": format_terraform_code(outputs_tf),
+    }
+
+    combined_hcl = f"{files['provider.tf']}\n{files['variables.tf']}\n{files['main.tf']}\n{files['outputs.tf']}"
+
+    return {
+        "session_id": session_payload.get("session_id"),
+        "hostname": hostname,
+        "target_provider": "gcp",
+        "strategy": strategy_mode,
+        "sizing": sizing,
+        "cmir_nodes_translated": len(translated_cmir_nodes),
+        "traceability_count": len(traceability),
+        "traceability": traceability,
+        "files": files,
+        "iac_code": combined_hcl,
+        "pipeline_stages": [
+            {
+                "stage": "1. Osquery Raw JSON",
+                "module": "OsqueryDiscoveryParser (osquery_parser.py)",
+                "detail": f"Valida `{session_payload.get('filename', 'cloudmove-osquery-inventory.json')}` y clasifica estados (`observed`, `derived`, `inferred`).",
+            },
+            {
+                "stage": "2. Modelo Intermedio CMIR v2.1",
+                "module": "build_discovery_cmir_and_graph (cmir_bridge.py)",
+                "detail": f"Construye y valida {len(translated_cmir_nodes)} nodos `CMIRNode` jerárquicos.",
+            },
+            {
+                "stage": "3. Adaptador GCP",
+                "module": "GCPAdapter.translate_cmir (gcp_adapter.py)",
+                "detail": "Traduce los nodos CMIR a recursos de Google Cloud Platform (`google_compute_instance`, `google_compute_disk`, `google_sql_database_instance`).",
+            },
+            {
+                "stage": "4. Generador Modular HCL GCP",
+                "module": "generate_discovery_gcp_terraform (terraform_bridge.py)",
+                "detail": "Parametriza `provider.tf`, `variables.tf`, `main.tf` y `outputs.tf` para `hashicorp/google`.",
+            },
+        ],
+    }
+
+
+def generate_discovery_terraform(
+    session_payload: Dict[str, Any],
+    strategy: str = "replatform",
+    target_provider: str = "aws",
+) -> Dict[str, Any]:
+    provider_clean = str(target_provider or "aws").lower().strip()
+    if provider_clean == "gcp":
+        return generate_discovery_gcp_terraform(session_payload, strategy=strategy)
+    res = generate_discovery_aws_terraform(session_payload, strategy=strategy)
+    res["target_provider"] = "aws"
+    return res
+

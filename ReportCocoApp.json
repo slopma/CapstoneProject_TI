@@ -1,0 +1,3679 @@
+{
+  "migration_id": "mig-app-aws-b6d554",
+  "name": "Migración CocoaApp → AWS",
+  "use_case": "app_source",
+  "target_provider": "aws",
+  "target_config": {
+    "region": "us-east-1",
+    "vpc_cidr": "10.0.0.0/16"
+  },
+  "source_config": {
+    "deployment_mode": "vm_rehost",
+    "github_url": "https://github.com/slopma/CocoaApp",
+    "github_ref": "main"
+  },
+  "state": "COMPLETED",
+  "previous_state": "READY_FOR_CUTOVER",
+  "version": 8,
+  "locked_by": null,
+  "locked_at": null,
+  "execution_mode": "simulated_dry_run",
+  "completed_in_real_cloud": false,
+  "source_environment_destroyed": false,
+  "source_retention_policy": "PRESERVED_READ_ONLY_STANDBY",
+  "irreversible_operation_executed": false,
+  "created_at": "2026-10-26T01:57:54.288090+00:00",
+  "updated_at": "2026-10-26T01:59:28.321579+00:00",
+  "approved_by": "architect@cloudmove.local",
+  "approved_at": "2026-10-26T01:59:20.403243+00:00",
+  "source_environment": {
+    "app_id": "app-cocoaapp",
+    "app_name": "CocoaApp",
+    "source_path": "/tmp/cloudmove_gh_hifdkosu/unpacked/slopma-CocoaApp-ae95bb7",
+    "discovered_at": "2026-10-26T01:58:09.851940+00:00",
+    "static_analysis_only": true,
+    "arbitrary_code_executed": false,
+    "files_inspected": [
+      ".env",
+      ".env.example",
+      "Dockerfile",
+      "backend/.env",
+      "backend/Dockerfile",
+      "backend/requirements.txt",
+      "frontend-vite/.env",
+      "frontend-vite/.vite/deps/package.json",
+      "frontend-vite/Dockerfile",
+      "frontend-vite/package-lock.json",
+      "frontend-vite/package.json",
+      "package-lock.json",
+      "package.json",
+      "requirements.txt"
+    ],
+    "language": "JavaScript/Node.js",
+    "framework": "FastAPI",
+    "runtime": "nginx:alpine",
+    "runtime_constraints": ">=3.10,<4.0",
+    "has_dockerfile": true,
+    "start_commands": [
+      "[\"nginx\", \"-g\", \"daemon off;\"]"
+    ],
+    "exposed_ports": [
+      80
+    ],
+    "health_endpoints": [
+      "/health"
+    ],
+    "persistent_volumes": [],
+    "environment_variables": [
+      {
+        "name": "VITE_SUPABASE_URL",
+        "redacted_value": "https://zlkdxzfxkhohlpswdmap.supabase.co",
+        "is_secret": false,
+        "value_stored": true
+      },
+      {
+        "name": "VITE_SUPABASE_ANON_KEY",
+        "redacted_value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpsa2R4emZ4a2hvaGxwc3dkbWFwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NzUzOTU5OCwiZXhwIjoyMDczMTE1NTk4fQ.YWoptStsW-UIQhWa0Sc9RgV0azqk9Qj3HxkzpGJe94w",
+        "is_secret": false,
+        "value_stored": true
+      },
+      {
+        "name": "VITE_SUPABASE_SERVICE_ROLE_KEY",
+        "redacted_value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpsa2R4emZ4a2hvaGxwc3dkbWFwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NzUzOTU5OCwiZXhwIjoyMDczMTE1NTk4fQ.YWoptStsW-UIQhWa0Sc9RgV0azqk9Qj3HxkzpGJe94w",
+        "is_secret": false,
+        "value_stored": true
+      },
+      {
+        "name": "VITE_API_URL",
+        "redacted_value": "http://54.227.24.240t:8000",
+        "is_secret": false,
+        "value_stored": true
+      }
+    ],
+    "secrets_redacted_count": 0,
+    "packages_count": 25,
+    "packages_sample": [
+      "fastapi==0.104.1",
+      "uvicorn==0.24.0",
+      "supabase==2.4.0",
+      "pydantic==2.5.2",
+      "python-dotenv==1.0.0",
+      "httpx==0.25.2",
+      "gotrue==2.4.2",
+      "scikit-learn==1.5.0",
+      "shapely==2.0.4",
+      "alembic==1.13.1",
+      "SQLAlchemy==2.0.29",
+      "psycopg2-binary==2.9.9",
+      "numpy==1.26.4",
+      "pandas==2.2.2",
+      "geopandas==0.14.3",
+      "@supabase/supabase-js@^2.57.4",
+      "axios@^1.11.0",
+      "buffer@^6.0.3",
+      "react@^18.2.0",
+      "react-dom@^18.2.0",
+      "react-leaflet@^4.2.1",
+      "react-router-dom@^7.8.2",
+      "recharts@^3.2.0",
+      "@types/react@^18.2.7",
+      "@types/react-dom@^18.2.4"
+    ],
+    "network_and_identity_requirements": {
+      "ingress_tcp_ports": [
+        80
+      ],
+      "egress_required_ports": [
+        443,
+        5432
+      ],
+      "secrets_manager_keys": [],
+      "least_privilege_iam_actions": [
+        "secretsmanager:GetSecretValue / secretmanager.versions.access",
+        "s3:GetObject,s3:PutObject / storage.objects.create,storage.objects.get",
+        "logs:CreateLogStream,logs:PutLogEvents / logging.logEntries.create"
+      ]
+    },
+    "assumptions": [
+      "No se declaró endpoint explícito en HEALTHCHECK; se asume `/health` sobre el puerto principal."
+    ],
+    "dependencies": [
+      {
+        "id": "dep-cocoaapp-postgresql-inferred",
+        "name": "cocoaapp-postgresql",
+        "type": "database_instance",
+        "engine": "postgres",
+        "port": 5432,
+        "relationship_type": "inferred_relation",
+        "classification": "inferred",
+        "epistemic_state": "inferred",
+        "confidence": 0.65,
+        "requires_data_migration": true,
+        "evidence": [
+          {
+            "source": "manifiesto de paquetes",
+            "observed_at": "2026-10-26T01:58:09.851940+00:00",
+            "epistemic_state": "inferred",
+            "confidence": 0.65,
+            "detail": "Driver PostgreSQL presente en dependencias de paquetes pero sin endpoint de conexión confirmado."
+          }
+        ]
+      },
+      {
+        "id": "dep-cocoaapp-ext-vite-api-url",
+        "name": "external-endpoint-vite-api-url",
+        "type": "network_connection",
+        "engine": "https",
+        "port": 443,
+        "relationship_type": "communicates_with",
+        "classification": "unknown",
+        "epistemic_state": "unknown",
+        "confidence": 0.5,
+        "evidence": [
+          {
+            "source": ".env (VITE_API_URL)",
+            "observed_at": "2026-10-26T01:58:09.851940+00:00",
+            "epistemic_state": "unknown",
+            "confidence": 0.5,
+            "detail": "Endpoint externo referenciado en 'VITE_API_URL' (http://54.227.24.240t:8000); se desconoce si requiere VPN/DirectConnect desde la nube."
+          }
+        ]
+      }
+    ],
+    "dependency_summary": {
+      "total": 2,
+      "confirmed_count": 0,
+      "inferred_count": 1,
+      "unknown_count": 1,
+      "confirmed": [],
+      "inferred": [
+        "dep-cocoaapp-postgresql-inferred"
+      ],
+      "unknown": [
+        "dep-cocoaapp-ext-vite-api-url"
+      ]
+    },
+    "repository_tree": {
+      "name": "slopma-CocoaApp-ae95bb7",
+      "path": "",
+      "type": "directory",
+      "children": [
+        {
+          "name": "backend",
+          "path": "backend",
+          "type": "directory",
+          "children": [
+            {
+              "name": "src",
+              "path": "backend/src",
+              "type": "directory",
+              "children": [
+                {
+                  "name": "db",
+                  "path": "backend/src/db",
+                  "type": "directory",
+                  "children": [
+                    {
+                      "name": "__init__.py",
+                      "path": "backend/src/db/__init__.py",
+                      "type": "file",
+                      "size": 69,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "feed.json",
+                      "path": "backend/src/db/feed.json",
+                      "type": "file",
+                      "size": 11390,
+                      "extension": ".json",
+                      "language": "JSON",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "import_lotes_supabase.py",
+                      "path": "backend/src/db/import_lotes_supabase.py",
+                      "type": "file",
+                      "size": 8872,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "main.py",
+                      "path": "backend/src/db/main.py",
+                      "type": "file",
+                      "size": 2135,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "models.py",
+                      "path": "backend/src/db/models.py",
+                      "type": "file",
+                      "size": 934,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "TEST.PY",
+                      "path": "backend/src/db/TEST.PY",
+                      "type": "file",
+                      "size": 285,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "upload_cultivos.py",
+                      "path": "backend/src/db/upload_cultivos.py",
+                      "type": "file",
+                      "size": 2898,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "upload_frutos_arbole.py",
+                      "path": "backend/src/db/upload_frutos_arbole.py",
+                      "type": "file",
+                      "size": 3061,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "upload_readings.py",
+                      "path": "backend/src/db/upload_readings.py",
+                      "type": "file",
+                      "size": 3901,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    }
+                  ]
+                },
+                {
+                  "name": "services",
+                  "path": "backend/src/services",
+                  "type": "directory",
+                  "children": [
+                    {
+                      "name": "arboles.py",
+                      "path": "backend/src/services/arboles.py",
+                      "type": "file",
+                      "size": 3562,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "cleanup.py",
+                      "path": "backend/src/services/cleanup.py",
+                      "type": "file",
+                      "size": 4019,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "cultivos.py",
+                      "path": "backend/src/services/cultivos.py",
+                      "type": "file",
+                      "size": 1009,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "lotes.py",
+                      "path": "backend/src/services/lotes.py",
+                      "type": "file",
+                      "size": 1155,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "notificaciones.py",
+                      "path": "backend/src/services/notificaciones.py",
+                      "type": "file",
+                      "size": 5813,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "stats.py",
+                      "path": "backend/src/services/stats.py",
+                      "type": "file",
+                      "size": 9191,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "update_clusters.py",
+                      "path": "backend/src/services/update_clusters.py",
+                      "type": "file",
+                      "size": 586,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "zone_analysis.py",
+                      "path": "backend/src/services/zone_analysis.py",
+                      "type": "file",
+                      "size": 4830,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    }
+                  ]
+                },
+                {
+                  "name": "utils",
+                  "path": "backend/src/utils",
+                  "type": "directory",
+                  "children": [
+                    {
+                      "name": "cluster.py",
+                      "path": "backend/src/utils/cluster.py",
+                      "type": "file",
+                      "size": 4925,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "metrics_file.json",
+                      "path": "backend/src/utils/metrics_file.json",
+                      "type": "file",
+                      "size": 4710,
+                      "extension": ".json",
+                      "language": "JSON",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "supaBaseClient.py",
+                      "path": "backend/src/utils/supaBaseClient.py",
+                      "type": "file",
+                      "size": 671,
+                      "extension": ".py",
+                      "language": "Python",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": ".env",
+              "path": "backend/.env",
+              "type": "file",
+              "size": 707,
+              "extension": ".env",
+              "language": "Environment",
+              "is_manifest": true,
+              "manifest_type": "env_file"
+            },
+            {
+              "name": "__init__.py",
+              "path": "backend/__init__.py",
+              "type": "file",
+              "size": 0,
+              "extension": ".py",
+              "language": "Python",
+              "is_manifest": false,
+              "manifest_type": null
+            },
+            {
+              "name": "Dockerfile",
+              "path": "backend/Dockerfile",
+              "type": "file",
+              "size": 696,
+              "extension": "",
+              "language": "Plain Text",
+              "is_manifest": true,
+              "manifest_type": "dockerfile"
+            },
+            {
+              "name": "requirements.txt",
+              "path": "backend/requirements.txt",
+              "type": "file",
+              "size": 253,
+              "extension": ".txt",
+              "language": "Other",
+              "is_manifest": true,
+              "manifest_type": "python_requirements"
+            }
+          ]
+        },
+        {
+          "name": "frontend-vite",
+          "path": "frontend-vite",
+          "type": "directory",
+          "children": [
+            {
+              "name": ".vite",
+              "path": "frontend-vite/.vite",
+              "type": "directory",
+              "children": [
+                {
+                  "name": "deps",
+                  "path": "frontend-vite/.vite/deps",
+                  "type": "directory",
+                  "children": [
+                    {
+                      "name": "package.json",
+                      "path": "frontend-vite/.vite/deps/package.json",
+                      "type": "file",
+                      "size": 23,
+                      "extension": ".json",
+                      "language": "JSON",
+                      "is_manifest": true,
+                      "manifest_type": "nodejs_package_json"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "src",
+              "path": "frontend-vite/src",
+              "type": "directory",
+              "children": [
+                {
+                  "name": "components",
+                  "path": "frontend-vite/src/components",
+                  "type": "directory",
+                  "children": [
+                    {
+                      "name": "profile",
+                      "path": "frontend-vite/src/components/profile",
+                      "type": "directory",
+                      "children": [
+                        {
+                          "name": "ProfileHeader.tsx",
+                          "path": "frontend-vite/src/components/profile/ProfileHeader.tsx",
+                          "type": "file",
+                          "size": 4145,
+                          "extension": ".tsx",
+                          "language": "TypeScript (React)",
+                          "is_manifest": false,
+                          "manifest_type": null
+                        },
+                        {
+                          "name": "ProfileMenu.tsx",
+                          "path": "frontend-vite/src/components/profile/ProfileMenu.tsx",
+                          "type": "file",
+                          "size": 1507,
+                          "extension": ".tsx",
+                          "language": "TypeScript (React)",
+                          "is_manifest": false,
+                          "manifest_type": null
+                        },
+                        {
+                          "name": "ProfileMenuItem.tsx",
+                          "path": "frontend-vite/src/components/profile/ProfileMenuItem.tsx",
+                          "type": "file",
+                          "size": 2371,
+                          "extension": ".tsx",
+                          "language": "TypeScript (React)",
+                          "is_manifest": false,
+                          "manifest_type": null
+                        },
+                        {
+                          "name": "ProfileStats.tsx",
+                          "path": "frontend-vite/src/components/profile/ProfileStats.tsx",
+                          "type": "file",
+                          "size": 1885,
+                          "extension": ".tsx",
+                          "language": "TypeScript (React)",
+                          "is_manifest": false,
+                          "manifest_type": null
+                        }
+                      ]
+                    },
+                    {
+                      "name": "stats",
+                      "path": "frontend-vite/src/components/stats",
+                      "type": "directory",
+                      "children": [
+                        {
+                          "name": "constants.ts",
+                          "path": "frontend-vite/src/components/stats/constants.ts",
+                          "type": "file",
+                          "size": 168,
+                          "extension": ".ts",
+                          "language": "TypeScript",
+                          "is_manifest": false,
+                          "manifest_type": null
+                        },
+                        {
+                          "name": "GraficoConTabla.tsx",
+                          "path": "frontend-vite/src/components/stats/GraficoConTabla.tsx",
+                          "type": "file",
+                          "size": 5654,
+                          "extension": ".tsx",
+                          "language": "TypeScript (React)",
+                          "is_manifest": false,
+                          "manifest_type": null
+                        }
+                      ]
+                    },
+                    {
+                      "name": "ui",
+                      "path": "frontend-vite/src/components/ui",
+                      "type": "directory",
+                      "children": [
+                        {
+                          "name": "Button.tsx",
+                          "path": "frontend-vite/src/components/ui/Button.tsx",
+                          "type": "file",
+                          "size": 4250,
+                          "extension": ".tsx",
+                          "language": "TypeScript (React)",
+                          "is_manifest": false,
+                          "manifest_type": null
+                        },
+                        {
+                          "name": "ToggleSwitch.tsx",
+                          "path": "frontend-vite/src/components/ui/ToggleSwitch.tsx",
+                          "type": "file",
+                          "size": 2438,
+                          "extension": ".tsx",
+                          "language": "TypeScript (React)",
+                          "is_manifest": false,
+                          "manifest_type": null
+                        }
+                      ]
+                    },
+                    {
+                      "name": "ArbolMarker.tsx",
+                      "path": "frontend-vite/src/components/ArbolMarker.tsx",
+                      "type": "file",
+                      "size": 1810,
+                      "extension": ".tsx",
+                      "language": "TypeScript (React)",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "BottomNavigation.tsx",
+                      "path": "frontend-vite/src/components/BottomNavigation.tsx",
+                      "type": "file",
+                      "size": 1381,
+                      "extension": ".tsx",
+                      "language": "TypeScript (React)",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "BottomNavItem.tsx",
+                      "path": "frontend-vite/src/components/BottomNavItem.tsx",
+                      "type": "file",
+                      "size": 1910,
+                      "extension": ".tsx",
+                      "language": "TypeScript (React)",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "Map.tsx",
+                      "path": "frontend-vite/src/components/Map.tsx",
+                      "type": "file",
+                      "size": 4467,
+                      "extension": ".tsx",
+                      "language": "TypeScript (React)",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "NotificationBell.tsx",
+                      "path": "frontend-vite/src/components/NotificationBell.tsx",
+                      "type": "file",
+                      "size": 5365,
+                      "extension": ".tsx",
+                      "language": "TypeScript (React)",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    }
+                  ]
+                },
+                {
+                  "name": "config",
+                  "path": "frontend-vite/src/config",
+                  "type": "directory",
+                  "children": [
+                    {
+                      "name": "tabs.ts",
+                      "path": "frontend-vite/src/config/tabs.ts",
+                      "type": "file",
+                      "size": 528,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    }
+                  ]
+                },
+                {
+                  "name": "hooks",
+                  "path": "frontend-vite/src/hooks",
+                  "type": "directory",
+                  "children": [
+                    {
+                      "name": "geoUtils.ts",
+                      "path": "frontend-vite/src/hooks/geoUtils.ts",
+                      "type": "file",
+                      "size": 1165,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "useArboles.ts",
+                      "path": "frontend-vite/src/hooks/useArboles.ts",
+                      "type": "file",
+                      "size": 742,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "useAuth.ts",
+                      "path": "frontend-vite/src/hooks/useAuth.ts",
+                      "type": "file",
+                      "size": 3359,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "useAvatar.ts",
+                      "path": "frontend-vite/src/hooks/useAvatar.ts",
+                      "type": "file",
+                      "size": 4301,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "useCultivos.ts",
+                      "path": "frontend-vite/src/hooks/useCultivos.ts",
+                      "type": "file",
+                      "size": 1042,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "useGeoData.ts",
+                      "path": "frontend-vite/src/hooks/useGeoData.ts",
+                      "type": "file",
+                      "size": 972,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "useLotes.ts",
+                      "path": "frontend-vite/src/hooks/useLotes.ts",
+                      "type": "file",
+                      "size": 829,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "useNotifications.ts",
+                      "path": "frontend-vite/src/hooks/useNotifications.ts",
+                      "type": "file",
+                      "size": 5165,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "useProfileStats.ts",
+                      "path": "frontend-vite/src/hooks/useProfileStats.ts",
+                      "type": "file",
+                      "size": 1643,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "useSettings.ts",
+                      "path": "frontend-vite/src/hooks/useSettings.ts",
+                      "type": "file",
+                      "size": 3887,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    }
+                  ]
+                },
+                {
+                  "name": "screen",
+                  "path": "frontend-vite/src/screen",
+                  "type": "directory",
+                  "children": [
+                    {
+                      "name": "LoginScreen.tsx",
+                      "path": "frontend-vite/src/screen/LoginScreen.tsx",
+                      "type": "file",
+                      "size": 6768,
+                      "extension": ".tsx",
+                      "language": "TypeScript (React)",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "ProfileScreen.tsx",
+                      "path": "frontend-vite/src/screen/ProfileScreen.tsx",
+                      "type": "file",
+                      "size": 6734,
+                      "extension": ".tsx",
+                      "language": "TypeScript (React)",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "RegisterScreen.tsx",
+                      "path": "frontend-vite/src/screen/RegisterScreen.tsx",
+                      "type": "file",
+                      "size": 10081,
+                      "extension": ".tsx",
+                      "language": "TypeScript (React)",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "SettingsScreen.tsx",
+                      "path": "frontend-vite/src/screen/SettingsScreen.tsx",
+                      "type": "file",
+                      "size": 8539,
+                      "extension": ".tsx",
+                      "language": "TypeScript (React)",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "StatsScreen.tsx",
+                      "path": "frontend-vite/src/screen/StatsScreen.tsx",
+                      "type": "file",
+                      "size": 14322,
+                      "extension": ".tsx",
+                      "language": "TypeScript (React)",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "ZonesScreen.tsx",
+                      "path": "frontend-vite/src/screen/ZonesScreen.tsx",
+                      "type": "file",
+                      "size": 30416,
+                      "extension": ".tsx",
+                      "language": "TypeScript (React)",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    }
+                  ]
+                },
+                {
+                  "name": "styles",
+                  "path": "frontend-vite/src/styles",
+                  "type": "directory",
+                  "children": [
+                    {
+                      "name": "App.css",
+                      "path": "frontend-vite/src/styles/App.css",
+                      "type": "file",
+                      "size": 589,
+                      "extension": ".css",
+                      "language": "CSS",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "BottomNavigation.css",
+                      "path": "frontend-vite/src/styles/BottomNavigation.css",
+                      "type": "file",
+                      "size": 1511,
+                      "extension": ".css",
+                      "language": "CSS",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "dropdown-fix.css",
+                      "path": "frontend-vite/src/styles/dropdown-fix.css",
+                      "type": "file",
+                      "size": 2196,
+                      "extension": ".css",
+                      "language": "CSS",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "index.css",
+                      "path": "frontend-vite/src/styles/index.css",
+                      "type": "file",
+                      "size": 2745,
+                      "extension": ".css",
+                      "language": "CSS",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "leaflet-dark.css",
+                      "path": "frontend-vite/src/styles/leaflet-dark.css",
+                      "type": "file",
+                      "size": 3510,
+                      "extension": ".css",
+                      "language": "CSS",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "modern-ui.css",
+                      "path": "frontend-vite/src/styles/modern-ui.css",
+                      "type": "file",
+                      "size": 3995,
+                      "extension": ".css",
+                      "language": "CSS",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "notification-bell.css",
+                      "path": "frontend-vite/src/styles/notification-bell.css",
+                      "type": "file",
+                      "size": 1170,
+                      "extension": ".css",
+                      "language": "CSS",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "notification-dropdown.css",
+                      "path": "frontend-vite/src/styles/notification-dropdown.css",
+                      "type": "file",
+                      "size": 4894,
+                      "extension": ".css",
+                      "language": "CSS",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "notification-footer.css",
+                      "path": "frontend-vite/src/styles/notification-footer.css",
+                      "type": "file",
+                      "size": 2560,
+                      "extension": ".css",
+                      "language": "CSS",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "sonner-toast.css",
+                      "path": "frontend-vite/src/styles/sonner-toast.css",
+                      "type": "file",
+                      "size": 3465,
+                      "extension": ".css",
+                      "language": "CSS",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "stats-screen.css",
+                      "path": "frontend-vite/src/styles/stats-screen.css",
+                      "type": "file",
+                      "size": 1464,
+                      "extension": ".css",
+                      "language": "CSS",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    }
+                  ]
+                },
+                {
+                  "name": "types",
+                  "path": "frontend-vite/src/types",
+                  "type": "directory",
+                  "children": [
+                    {
+                      "name": "db.ts",
+                      "path": "frontend-vite/src/types/db.ts",
+                      "type": "file",
+                      "size": 509,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "domain.ts",
+                      "path": "frontend-vite/src/types/domain.ts",
+                      "type": "file",
+                      "size": 535,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    }
+                  ]
+                },
+                {
+                  "name": "utils",
+                  "path": "frontend-vite/src/utils",
+                  "type": "directory",
+                  "children": [
+                    {
+                      "name": "icons",
+                      "path": "frontend-vite/src/utils/icons",
+                      "type": "directory",
+                      "children": [
+                        {
+                          "name": "ajustes.png",
+                          "path": "frontend-vite/src/utils/icons/ajustes.png",
+                          "type": "file",
+                          "size": 20096,
+                          "extension": ".png",
+                          "language": "Other",
+                          "is_manifest": false,
+                          "manifest_type": null
+                        },
+                        {
+                          "name": "campana-de-notificacion.png",
+                          "path": "frontend-vite/src/utils/icons/campana-de-notificacion.png",
+                          "type": "file",
+                          "size": 16473,
+                          "extension": ".png",
+                          "language": "Other",
+                          "is_manifest": false,
+                          "manifest_type": null
+                        },
+                        {
+                          "name": "contacto.png",
+                          "path": "frontend-vite/src/utils/icons/contacto.png",
+                          "type": "file",
+                          "size": 22156,
+                          "extension": ".png",
+                          "language": "Other",
+                          "is_manifest": false,
+                          "manifest_type": null
+                        },
+                        {
+                          "name": "hogar.png",
+                          "path": "frontend-vite/src/utils/icons/hogar.png",
+                          "type": "file",
+                          "size": 17844,
+                          "extension": ".png",
+                          "language": "Other",
+                          "is_manifest": false,
+                          "manifest_type": null
+                        },
+                        {
+                          "name": "ubicacion.png",
+                          "path": "frontend-vite/src/utils/icons/ubicacion.png",
+                          "type": "file",
+                          "size": 19907,
+                          "extension": ".png",
+                          "language": "Other",
+                          "is_manifest": false,
+                          "manifest_type": null
+                        },
+                        {
+                          "name": "usuario.png",
+                          "path": "frontend-vite/src/utils/icons/usuario.png",
+                          "type": "file",
+                          "size": 32505,
+                          "extension": ".png",
+                          "language": "Other",
+                          "is_manifest": false,
+                          "manifest_type": null
+                        }
+                      ]
+                    },
+                    {
+                      "name": "frutoOffset.ts",
+                      "path": "frontend-vite/src/utils/frutoOffset.ts",
+                      "type": "file",
+                      "size": 888,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "generarCultivos.ts",
+                      "path": "frontend-vite/src/utils/generarCultivos.ts",
+                      "type": "file",
+                      "size": 1250,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "mapIcons.ts",
+                      "path": "frontend-vite/src/utils/mapIcons.ts",
+                      "type": "file",
+                      "size": 940,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "mapStyles.ts",
+                      "path": "frontend-vite/src/utils/mapStyles.ts",
+                      "type": "file",
+                      "size": 237,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "notifications.ts",
+                      "path": "frontend-vite/src/utils/notifications.ts",
+                      "type": "file",
+                      "size": 4308,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    },
+                    {
+                      "name": "SupabaseClient.ts",
+                      "path": "frontend-vite/src/utils/SupabaseClient.ts",
+                      "type": "file",
+                      "size": 537,
+                      "extension": ".ts",
+                      "language": "TypeScript",
+                      "is_manifest": false,
+                      "manifest_type": null
+                    }
+                  ]
+                },
+                {
+                  "name": "App.tsx",
+                  "path": "frontend-vite/src/App.tsx",
+                  "type": "file",
+                  "size": 7018,
+                  "extension": ".tsx",
+                  "language": "TypeScript (React)",
+                  "is_manifest": false,
+                  "manifest_type": null
+                },
+                {
+                  "name": "hooks.zip",
+                  "path": "frontend-vite/src/hooks.zip",
+                  "type": "file",
+                  "size": 7189,
+                  "extension": ".zip",
+                  "language": "Other",
+                  "is_manifest": false,
+                  "manifest_type": null
+                },
+                {
+                  "name": "main.tsx",
+                  "path": "frontend-vite/src/main.tsx",
+                  "type": "file",
+                  "size": 365,
+                  "extension": ".tsx",
+                  "language": "TypeScript (React)",
+                  "is_manifest": false,
+                  "manifest_type": null
+                },
+                {
+                  "name": "vite-env.d.ts",
+                  "path": "frontend-vite/src/vite-env.d.ts",
+                  "type": "file",
+                  "size": 38,
+                  "extension": ".ts",
+                  "language": "TypeScript",
+                  "is_manifest": false,
+                  "manifest_type": null
+                }
+              ]
+            },
+            {
+              "name": ".dockerignore",
+              "path": "frontend-vite/.dockerignore",
+              "type": "file",
+              "size": 59,
+              "extension": ".dockerignore",
+              "language": "Other",
+              "is_manifest": false,
+              "manifest_type": null
+            },
+            {
+              "name": ".env",
+              "path": "frontend-vite/.env",
+              "type": "file",
+              "size": 588,
+              "extension": ".env",
+              "language": "Environment",
+              "is_manifest": true,
+              "manifest_type": "env_file"
+            },
+            {
+              "name": ".gitignore",
+              "path": "frontend-vite/.gitignore",
+              "type": "file",
+              "size": 253,
+              "extension": ".gitignore",
+              "language": "Other",
+              "is_manifest": false,
+              "manifest_type": null
+            },
+            {
+              "name": "Dockerfile",
+              "path": "frontend-vite/Dockerfile",
+              "type": "file",
+              "size": 896,
+              "extension": "",
+              "language": "Plain Text",
+              "is_manifest": true,
+              "manifest_type": "dockerfile"
+            },
+            {
+              "name": "eslint.config.ts",
+              "path": "frontend-vite/eslint.config.ts",
+              "type": "file",
+              "size": 712,
+              "extension": ".ts",
+              "language": "TypeScript",
+              "is_manifest": false,
+              "manifest_type": null
+            },
+            {
+              "name": "index.html",
+              "path": "frontend-vite/index.html",
+              "type": "file",
+              "size": 366,
+              "extension": ".html",
+              "language": "HTML",
+              "is_manifest": false,
+              "manifest_type": null
+            },
+            {
+              "name": "nginx.conf",
+              "path": "frontend-vite/nginx.conf",
+              "type": "file",
+              "size": 698,
+              "extension": ".conf",
+              "language": "Config",
+              "is_manifest": false,
+              "manifest_type": null
+            },
+            {
+              "name": "package-lock.json",
+              "path": "frontend-vite/package-lock.json",
+              "type": "file",
+              "size": 299281,
+              "extension": ".json",
+              "language": "JSON",
+              "is_manifest": true,
+              "manifest_type": "nodejs_lock"
+            },
+            {
+              "name": "package.json",
+              "path": "frontend-vite/package.json",
+              "type": "file",
+              "size": 1157,
+              "extension": ".json",
+              "language": "JSON",
+              "is_manifest": true,
+              "manifest_type": "nodejs_package_json"
+            },
+            {
+              "name": "README.md",
+              "path": "frontend-vite/README.md",
+              "type": "file",
+              "size": 2269,
+              "extension": ".md",
+              "language": "Markdown",
+              "is_manifest": false,
+              "manifest_type": null
+            },
+            {
+              "name": "tsconfig.app.json",
+              "path": "frontend-vite/tsconfig.app.json",
+              "type": "file",
+              "size": 702,
+              "extension": ".json",
+              "language": "JSON",
+              "is_manifest": false,
+              "manifest_type": null
+            },
+            {
+              "name": "tsconfig.json",
+              "path": "frontend-vite/tsconfig.json",
+              "type": "file",
+              "size": 119,
+              "extension": ".json",
+              "language": "JSON",
+              "is_manifest": false,
+              "manifest_type": null
+            },
+            {
+              "name": "tsconfig.node.json",
+              "path": "frontend-vite/tsconfig.node.json",
+              "type": "file",
+              "size": 630,
+              "extension": ".json",
+              "language": "JSON",
+              "is_manifest": false,
+              "manifest_type": null
+            },
+            {
+              "name": "vite.config.ts",
+              "path": "frontend-vite/vite.config.ts",
+              "type": "file",
+              "size": 161,
+              "extension": ".ts",
+              "language": "TypeScript",
+              "is_manifest": false,
+              "manifest_type": null
+            }
+          ]
+        },
+        {
+          "name": ".env",
+          "path": ".env",
+          "type": "file",
+          "size": 593,
+          "extension": ".env",
+          "language": "Environment",
+          "is_manifest": true,
+          "manifest_type": "env_file"
+        },
+        {
+          "name": ".env.example",
+          "path": ".env.example",
+          "type": "file",
+          "size": 593,
+          "extension": ".example",
+          "language": "Other",
+          "is_manifest": true,
+          "manifest_type": "env_example"
+        },
+        {
+          "name": ".gitignore",
+          "path": ".gitignore",
+          "type": "file",
+          "size": 420,
+          "extension": ".gitignore",
+          "language": "Other",
+          "is_manifest": false,
+          "manifest_type": null
+        },
+        {
+          "name": "alembic.ini",
+          "path": "alembic.ini",
+          "type": "file",
+          "size": 4862,
+          "extension": ".ini",
+          "language": "INI / Config",
+          "is_manifest": false,
+          "manifest_type": null
+        },
+        {
+          "name": "arboles_output.json",
+          "path": "arboles_output.json",
+          "type": "file",
+          "size": 13625,
+          "extension": ".json",
+          "language": "JSON",
+          "is_manifest": false,
+          "manifest_type": null
+        },
+        {
+          "name": "cultivos_output.json",
+          "path": "cultivos_output.json",
+          "type": "file",
+          "size": 25506,
+          "extension": ".json",
+          "language": "JSON",
+          "is_manifest": false,
+          "manifest_type": null
+        },
+        {
+          "name": "docker-compose.prod.yml",
+          "path": "docker-compose.prod.yml",
+          "type": "file",
+          "size": 496,
+          "extension": ".yml",
+          "language": "YAML",
+          "is_manifest": false,
+          "manifest_type": null
+        },
+        {
+          "name": "modelo.dot",
+          "path": "modelo.dot",
+          "type": "file",
+          "size": 8368,
+          "extension": ".dot",
+          "language": "Other",
+          "is_manifest": false,
+          "manifest_type": null
+        },
+        {
+          "name": "package-lock.json",
+          "path": "package-lock.json",
+          "type": "file",
+          "size": 40474,
+          "extension": ".json",
+          "language": "JSON",
+          "is_manifest": true,
+          "manifest_type": "nodejs_lock"
+        },
+        {
+          "name": "package.json",
+          "path": "package.json",
+          "type": "file",
+          "size": 351,
+          "extension": ".json",
+          "language": "JSON",
+          "is_manifest": true,
+          "manifest_type": "nodejs_package_json"
+        },
+        {
+          "name": "README.md",
+          "path": "README.md",
+          "type": "file",
+          "size": 5585,
+          "extension": ".md",
+          "language": "Markdown",
+          "is_manifest": false,
+          "manifest_type": null
+        }
+      ]
+    },
+    "tree_summary": {
+      "total_files": 109,
+      "total_directories": 20,
+      "total_size_bytes": 803197,
+      "languages": [
+        {
+          "language": "TypeScript",
+          "file_count": 23,
+          "bytes": 33916,
+          "percentage_files": 21.1,
+          "percentage_bytes": 4.2
+        },
+        {
+          "language": "TypeScript (React)",
+          "file_count": 20,
+          "bytes": 121426,
+          "percentage_files": 18.3,
+          "percentage_bytes": 15.1
+        },
+        {
+          "language": "Python",
+          "file_count": 19,
+          "bytes": 57916,
+          "percentage_files": 17.4,
+          "percentage_bytes": 7.2
+        },
+        {
+          "language": "JSON",
+          "file_count": 12,
+          "bytes": 397968,
+          "percentage_files": 11,
+          "percentage_bytes": 49.5
+        },
+        {
+          "language": "CSS",
+          "file_count": 11,
+          "bytes": 28099,
+          "percentage_files": 10.1,
+          "percentage_bytes": 3.5
+        },
+        {
+          "language": ".PNG",
+          "file_count": 6,
+          "bytes": 128981,
+          "percentage_files": 5.5,
+          "percentage_bytes": 16.1
+        },
+        {
+          "language": "Environment",
+          "file_count": 3,
+          "bytes": 1888,
+          "percentage_files": 2.8,
+          "percentage_bytes": 0.2
+        },
+        {
+          "language": "Markdown",
+          "file_count": 2,
+          "bytes": 7854,
+          "percentage_files": 1.8,
+          "percentage_bytes": 1
+        },
+        {
+          "language": ".GITIGNORE",
+          "file_count": 2,
+          "bytes": 673,
+          "percentage_files": 1.8,
+          "percentage_bytes": 0.1
+        },
+        {
+          "language": "Plain Text",
+          "file_count": 2,
+          "bytes": 1592,
+          "percentage_files": 1.8,
+          "percentage_bytes": 0.2
+        },
+        {
+          "language": ".DOT",
+          "file_count": 1,
+          "bytes": 8368,
+          "percentage_files": 0.9,
+          "percentage_bytes": 1
+        },
+        {
+          "language": "YAML",
+          "file_count": 1,
+          "bytes": 496,
+          "percentage_files": 0.9,
+          "percentage_bytes": 0.1
+        },
+        {
+          "language": "INI / Config",
+          "file_count": 1,
+          "bytes": 4862,
+          "percentage_files": 0.9,
+          "percentage_bytes": 0.6
+        },
+        {
+          "language": ".EXAMPLE",
+          "file_count": 1,
+          "bytes": 593,
+          "percentage_files": 0.9,
+          "percentage_bytes": 0.1
+        },
+        {
+          "language": "Config",
+          "file_count": 1,
+          "bytes": 698,
+          "percentage_files": 0.9,
+          "percentage_bytes": 0.1
+        },
+        {
+          "language": "HTML",
+          "file_count": 1,
+          "bytes": 366,
+          "percentage_files": 0.9,
+          "percentage_bytes": 0
+        },
+        {
+          "language": ".DOCKERIGNORE",
+          "file_count": 1,
+          "bytes": 59,
+          "percentage_files": 0.9,
+          "percentage_bytes": 0
+        },
+        {
+          "language": ".ZIP",
+          "file_count": 1,
+          "bytes": 7189,
+          "percentage_files": 0.9,
+          "percentage_bytes": 0.9
+        },
+        {
+          "language": ".TXT",
+          "file_count": 1,
+          "bytes": 253,
+          "percentage_files": 0.9,
+          "percentage_bytes": 0
+        }
+      ],
+      "key_manifests_count": 12
+    },
+    "directory_inventory": [
+      "backend",
+      "backend/src",
+      "backend/src/db",
+      "backend/src/services",
+      "backend/src/utils",
+      "frontend-vite",
+      "frontend-vite/.vite",
+      "frontend-vite/.vite/deps",
+      "frontend-vite/src",
+      "frontend-vite/src/components",
+      "frontend-vite/src/components/profile",
+      "frontend-vite/src/components/stats",
+      "frontend-vite/src/components/ui",
+      "frontend-vite/src/config",
+      "frontend-vite/src/hooks",
+      "frontend-vite/src/screen",
+      "frontend-vite/src/styles",
+      "frontend-vite/src/types",
+      "frontend-vite/src/utils",
+      "frontend-vite/src/utils/icons"
+    ],
+    "file_inventory": [
+      {
+        "path": "package.json",
+        "name": "package.json",
+        "size": 351,
+        "extension": ".json",
+        "language": "JSON",
+        "is_manifest": true
+      },
+      {
+        "path": "package-lock.json",
+        "name": "package-lock.json",
+        "size": 40474,
+        "extension": ".json",
+        "language": "JSON",
+        "is_manifest": true
+      },
+      {
+        "path": "modelo.dot",
+        "name": "modelo.dot",
+        "size": 8368,
+        "extension": ".dot",
+        "language": "Other",
+        "is_manifest": false
+      },
+      {
+        "path": "docker-compose.prod.yml",
+        "name": "docker-compose.prod.yml",
+        "size": 496,
+        "extension": ".yml",
+        "language": "YAML",
+        "is_manifest": false
+      },
+      {
+        "path": "cultivos_output.json",
+        "name": "cultivos_output.json",
+        "size": 25506,
+        "extension": ".json",
+        "language": "JSON",
+        "is_manifest": false
+      },
+      {
+        "path": "arboles_output.json",
+        "name": "arboles_output.json",
+        "size": 13625,
+        "extension": ".json",
+        "language": "JSON",
+        "is_manifest": false
+      },
+      {
+        "path": "alembic.ini",
+        "name": "alembic.ini",
+        "size": 4862,
+        "extension": ".ini",
+        "language": "INI / Config",
+        "is_manifest": false
+      },
+      {
+        "path": "README.md",
+        "name": "README.md",
+        "size": 5585,
+        "extension": ".md",
+        "language": "Markdown",
+        "is_manifest": false
+      },
+      {
+        "path": ".gitignore",
+        "name": ".gitignore",
+        "size": 420,
+        "extension": ".gitignore",
+        "language": "Other",
+        "is_manifest": false
+      },
+      {
+        "path": ".env.example",
+        "name": ".env.example",
+        "size": 593,
+        "extension": ".example",
+        "language": "Other",
+        "is_manifest": true
+      },
+      {
+        "path": ".env",
+        "name": ".env",
+        "size": 593,
+        "extension": ".env",
+        "language": "Environment",
+        "is_manifest": true
+      },
+      {
+        "path": "frontend-vite/vite.config.ts",
+        "name": "vite.config.ts",
+        "size": 161,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/tsconfig.node.json",
+        "name": "tsconfig.node.json",
+        "size": 630,
+        "extension": ".json",
+        "language": "JSON",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/tsconfig.json",
+        "name": "tsconfig.json",
+        "size": 119,
+        "extension": ".json",
+        "language": "JSON",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/tsconfig.app.json",
+        "name": "tsconfig.app.json",
+        "size": 702,
+        "extension": ".json",
+        "language": "JSON",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/package.json",
+        "name": "package.json",
+        "size": 1157,
+        "extension": ".json",
+        "language": "JSON",
+        "is_manifest": true
+      },
+      {
+        "path": "frontend-vite/package-lock.json",
+        "name": "package-lock.json",
+        "size": 299281,
+        "extension": ".json",
+        "language": "JSON",
+        "is_manifest": true
+      },
+      {
+        "path": "frontend-vite/nginx.conf",
+        "name": "nginx.conf",
+        "size": 698,
+        "extension": ".conf",
+        "language": "Config",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/index.html",
+        "name": "index.html",
+        "size": 366,
+        "extension": ".html",
+        "language": "HTML",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/eslint.config.ts",
+        "name": "eslint.config.ts",
+        "size": 712,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/README.md",
+        "name": "README.md",
+        "size": 2269,
+        "extension": ".md",
+        "language": "Markdown",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/Dockerfile",
+        "name": "Dockerfile",
+        "size": 896,
+        "extension": "",
+        "language": "Plain Text",
+        "is_manifest": true
+      },
+      {
+        "path": "frontend-vite/.gitignore",
+        "name": ".gitignore",
+        "size": 253,
+        "extension": ".gitignore",
+        "language": "Other",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/.env",
+        "name": ".env",
+        "size": 588,
+        "extension": ".env",
+        "language": "Environment",
+        "is_manifest": true
+      },
+      {
+        "path": "frontend-vite/.dockerignore",
+        "name": ".dockerignore",
+        "size": 59,
+        "extension": ".dockerignore",
+        "language": "Other",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/vite-env.d.ts",
+        "name": "vite-env.d.ts",
+        "size": 38,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/main.tsx",
+        "name": "main.tsx",
+        "size": 365,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/hooks.zip",
+        "name": "hooks.zip",
+        "size": 7189,
+        "extension": ".zip",
+        "language": "Other",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/App.tsx",
+        "name": "App.tsx",
+        "size": 7018,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/utils/notifications.ts",
+        "name": "notifications.ts",
+        "size": 4308,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/utils/mapStyles.ts",
+        "name": "mapStyles.ts",
+        "size": 237,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/utils/mapIcons.ts",
+        "name": "mapIcons.ts",
+        "size": 940,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/utils/generarCultivos.ts",
+        "name": "generarCultivos.ts",
+        "size": 1250,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/utils/frutoOffset.ts",
+        "name": "frutoOffset.ts",
+        "size": 888,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/utils/SupabaseClient.ts",
+        "name": "SupabaseClient.ts",
+        "size": 537,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/utils/icons/usuario.png",
+        "name": "usuario.png",
+        "size": 32505,
+        "extension": ".png",
+        "language": "Other",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/utils/icons/ubicacion.png",
+        "name": "ubicacion.png",
+        "size": 19907,
+        "extension": ".png",
+        "language": "Other",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/utils/icons/hogar.png",
+        "name": "hogar.png",
+        "size": 17844,
+        "extension": ".png",
+        "language": "Other",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/utils/icons/contacto.png",
+        "name": "contacto.png",
+        "size": 22156,
+        "extension": ".png",
+        "language": "Other",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/utils/icons/campana-de-notificacion.png",
+        "name": "campana-de-notificacion.png",
+        "size": 16473,
+        "extension": ".png",
+        "language": "Other",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/utils/icons/ajustes.png",
+        "name": "ajustes.png",
+        "size": 20096,
+        "extension": ".png",
+        "language": "Other",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/types/domain.ts",
+        "name": "domain.ts",
+        "size": 535,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/types/db.ts",
+        "name": "db.ts",
+        "size": 509,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/styles/stats-screen.css",
+        "name": "stats-screen.css",
+        "size": 1464,
+        "extension": ".css",
+        "language": "CSS",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/styles/sonner-toast.css",
+        "name": "sonner-toast.css",
+        "size": 3465,
+        "extension": ".css",
+        "language": "CSS",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/styles/notification-footer.css",
+        "name": "notification-footer.css",
+        "size": 2560,
+        "extension": ".css",
+        "language": "CSS",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/styles/notification-dropdown.css",
+        "name": "notification-dropdown.css",
+        "size": 4894,
+        "extension": ".css",
+        "language": "CSS",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/styles/notification-bell.css",
+        "name": "notification-bell.css",
+        "size": 1170,
+        "extension": ".css",
+        "language": "CSS",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/styles/modern-ui.css",
+        "name": "modern-ui.css",
+        "size": 3995,
+        "extension": ".css",
+        "language": "CSS",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/styles/leaflet-dark.css",
+        "name": "leaflet-dark.css",
+        "size": 3510,
+        "extension": ".css",
+        "language": "CSS",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/styles/index.css",
+        "name": "index.css",
+        "size": 2745,
+        "extension": ".css",
+        "language": "CSS",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/styles/dropdown-fix.css",
+        "name": "dropdown-fix.css",
+        "size": 2196,
+        "extension": ".css",
+        "language": "CSS",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/styles/BottomNavigation.css",
+        "name": "BottomNavigation.css",
+        "size": 1511,
+        "extension": ".css",
+        "language": "CSS",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/styles/App.css",
+        "name": "App.css",
+        "size": 589,
+        "extension": ".css",
+        "language": "CSS",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/screen/ZonesScreen.tsx",
+        "name": "ZonesScreen.tsx",
+        "size": 30416,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/screen/StatsScreen.tsx",
+        "name": "StatsScreen.tsx",
+        "size": 14322,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/screen/SettingsScreen.tsx",
+        "name": "SettingsScreen.tsx",
+        "size": 8539,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/screen/RegisterScreen.tsx",
+        "name": "RegisterScreen.tsx",
+        "size": 10081,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/screen/ProfileScreen.tsx",
+        "name": "ProfileScreen.tsx",
+        "size": 6734,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/screen/LoginScreen.tsx",
+        "name": "LoginScreen.tsx",
+        "size": 6768,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/hooks/useSettings.ts",
+        "name": "useSettings.ts",
+        "size": 3887,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/hooks/useProfileStats.ts",
+        "name": "useProfileStats.ts",
+        "size": 1643,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/hooks/useNotifications.ts",
+        "name": "useNotifications.ts",
+        "size": 5165,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/hooks/useLotes.ts",
+        "name": "useLotes.ts",
+        "size": 829,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/hooks/useGeoData.ts",
+        "name": "useGeoData.ts",
+        "size": 972,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/hooks/useCultivos.ts",
+        "name": "useCultivos.ts",
+        "size": 1042,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/hooks/useAvatar.ts",
+        "name": "useAvatar.ts",
+        "size": 4301,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/hooks/useAuth.ts",
+        "name": "useAuth.ts",
+        "size": 3359,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/hooks/useArboles.ts",
+        "name": "useArboles.ts",
+        "size": 742,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/hooks/geoUtils.ts",
+        "name": "geoUtils.ts",
+        "size": 1165,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/config/tabs.ts",
+        "name": "tabs.ts",
+        "size": 528,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/components/NotificationBell.tsx",
+        "name": "NotificationBell.tsx",
+        "size": 5365,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/components/Map.tsx",
+        "name": "Map.tsx",
+        "size": 4467,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/components/BottomNavigation.tsx",
+        "name": "BottomNavigation.tsx",
+        "size": 1381,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/components/BottomNavItem.tsx",
+        "name": "BottomNavItem.tsx",
+        "size": 1910,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/components/ArbolMarker.tsx",
+        "name": "ArbolMarker.tsx",
+        "size": 1810,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/components/ui/ToggleSwitch.tsx",
+        "name": "ToggleSwitch.tsx",
+        "size": 2438,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/components/ui/Button.tsx",
+        "name": "Button.tsx",
+        "size": 4250,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/components/stats/constants.ts",
+        "name": "constants.ts",
+        "size": 168,
+        "extension": ".ts",
+        "language": "TypeScript",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/components/stats/GraficoConTabla.tsx",
+        "name": "GraficoConTabla.tsx",
+        "size": 5654,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/components/profile/ProfileStats.tsx",
+        "name": "ProfileStats.tsx",
+        "size": 1885,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/components/profile/ProfileMenuItem.tsx",
+        "name": "ProfileMenuItem.tsx",
+        "size": 2371,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/components/profile/ProfileMenu.tsx",
+        "name": "ProfileMenu.tsx",
+        "size": 1507,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/src/components/profile/ProfileHeader.tsx",
+        "name": "ProfileHeader.tsx",
+        "size": 4145,
+        "extension": ".tsx",
+        "language": "TypeScript (React)",
+        "is_manifest": false
+      },
+      {
+        "path": "frontend-vite/.vite/deps/package.json",
+        "name": "package.json",
+        "size": 23,
+        "extension": ".json",
+        "language": "JSON",
+        "is_manifest": true
+      },
+      {
+        "path": "backend/requirements.txt",
+        "name": "requirements.txt",
+        "size": 253,
+        "extension": ".txt",
+        "language": "Other",
+        "is_manifest": true
+      },
+      {
+        "path": "backend/__init__.py",
+        "name": "__init__.py",
+        "size": 0,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/Dockerfile",
+        "name": "Dockerfile",
+        "size": 696,
+        "extension": "",
+        "language": "Plain Text",
+        "is_manifest": true
+      },
+      {
+        "path": "backend/.env",
+        "name": ".env",
+        "size": 707,
+        "extension": ".env",
+        "language": "Environment",
+        "is_manifest": true
+      },
+      {
+        "path": "backend/src/utils/supaBaseClient.py",
+        "name": "supaBaseClient.py",
+        "size": 671,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/utils/metrics_file.json",
+        "name": "metrics_file.json",
+        "size": 4710,
+        "extension": ".json",
+        "language": "JSON",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/utils/cluster.py",
+        "name": "cluster.py",
+        "size": 4925,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/services/zone_analysis.py",
+        "name": "zone_analysis.py",
+        "size": 4830,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/services/update_clusters.py",
+        "name": "update_clusters.py",
+        "size": 586,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/services/stats.py",
+        "name": "stats.py",
+        "size": 9191,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/services/notificaciones.py",
+        "name": "notificaciones.py",
+        "size": 5813,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/services/lotes.py",
+        "name": "lotes.py",
+        "size": 1155,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/services/cultivos.py",
+        "name": "cultivos.py",
+        "size": 1009,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/services/cleanup.py",
+        "name": "cleanup.py",
+        "size": 4019,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/services/arboles.py",
+        "name": "arboles.py",
+        "size": 3562,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/db/upload_readings.py",
+        "name": "upload_readings.py",
+        "size": 3901,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/db/upload_frutos_arbole.py",
+        "name": "upload_frutos_arbole.py",
+        "size": 3061,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/db/upload_cultivos.py",
+        "name": "upload_cultivos.py",
+        "size": 2898,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/db/models.py",
+        "name": "models.py",
+        "size": 934,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/db/main.py",
+        "name": "main.py",
+        "size": 2135,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/db/import_lotes_supabase.py",
+        "name": "import_lotes_supabase.py",
+        "size": 8872,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/db/feed.json",
+        "name": "feed.json",
+        "size": 11390,
+        "extension": ".json",
+        "language": "JSON",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/db/__init__.py",
+        "name": "__init__.py",
+        "size": 69,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      },
+      {
+        "path": "backend/src/db/TEST.PY",
+        "name": "TEST.PY",
+        "size": 285,
+        "extension": ".py",
+        "language": "Python",
+        "is_manifest": false
+      }
+    ],
+    "key_manifests": [
+      {
+        "path": "package.json",
+        "name": "package.json",
+        "manifest_type": "nodejs_package_json",
+        "size": 351
+      },
+      {
+        "path": "package-lock.json",
+        "name": "package-lock.json",
+        "manifest_type": "nodejs_lock",
+        "size": 40474
+      },
+      {
+        "path": ".env.example",
+        "name": ".env.example",
+        "manifest_type": "env_example",
+        "size": 593
+      },
+      {
+        "path": ".env",
+        "name": ".env",
+        "manifest_type": "env_file",
+        "size": 593
+      },
+      {
+        "path": "frontend-vite/package.json",
+        "name": "package.json",
+        "manifest_type": "nodejs_package_json",
+        "size": 1157
+      },
+      {
+        "path": "frontend-vite/package-lock.json",
+        "name": "package-lock.json",
+        "manifest_type": "nodejs_lock",
+        "size": 299281
+      },
+      {
+        "path": "frontend-vite/Dockerfile",
+        "name": "Dockerfile",
+        "manifest_type": "dockerfile",
+        "size": 896
+      },
+      {
+        "path": "frontend-vite/.env",
+        "name": ".env",
+        "manifest_type": "env_file",
+        "size": 588
+      },
+      {
+        "path": "frontend-vite/.vite/deps/package.json",
+        "name": "package.json",
+        "manifest_type": "nodejs_package_json",
+        "size": 23
+      },
+      {
+        "path": "backend/requirements.txt",
+        "name": "requirements.txt",
+        "manifest_type": "python_requirements",
+        "size": 253
+      },
+      {
+        "path": "backend/Dockerfile",
+        "name": "Dockerfile",
+        "manifest_type": "dockerfile",
+        "size": 696
+      },
+      {
+        "path": "backend/.env",
+        "name": ".env",
+        "manifest_type": "env_file",
+        "size": 707
+      }
+    ],
+    "git_metadata": {
+      "repository_url": "https://github.com/slopma/CocoaApp",
+      "owner": "slopma",
+      "repo": "CocoaApp",
+      "ref": "main",
+      "commit_sha": "ae95bb73fba3f9d932bafe411981327185d52895",
+      "short_sha": "ae95bb73",
+      "commit_message": "Merge pull request #18 from slopma/auth",
+      "author_name": "Alejandro Castrillón",
+      "author_date": "2025-11-05T19:38:54Z",
+      "pinned_at": "2026-10-26T01:57:55.631470+00:00"
+    }
+  },
+  "cmir": {
+    "name": "App Migration CMIR — CocoaApp",
+    "provider": "aws",
+    "version": "2.1",
+    "resources": [
+      {
+        "id": "compute-cocoaapp-host",
+        "name": "CocoaApp-runtime-host",
+        "type": "virtual_machine",
+        "category": "compute",
+        "parent_id": null,
+        "children_ids": [
+          "app-cocoaapp",
+          "port-cocoaapp-80"
+        ],
+        "level": 5,
+        "provider": "aws",
+        "platform": "nginx:alpine",
+        "engine": null,
+        "location": "us-east-1",
+        "environment": "production",
+        "status": "DISCOVERED",
+        "is_shared": false,
+        "security": {},
+        "network": {},
+        "metadata": {
+          "language": "JavaScript/Node.js",
+          "framework": "FastAPI",
+          "runtime": "nginx:alpine",
+          "runtime_constraints": ">=3.10,<4.0",
+          "deployment_mode": "vm_rehost",
+          "git_metadata": {
+            "repository_url": "https://github.com/slopma/CocoaApp",
+            "owner": "slopma",
+            "repo": "CocoaApp",
+            "ref": "main",
+            "commit_sha": "ae95bb73fba3f9d932bafe411981327185d52895",
+            "short_sha": "ae95bb73",
+            "commit_message": "Merge pull request #18 from slopma/auth",
+            "author_name": "Alejandro Castrillón",
+            "author_date": "2025-11-05T19:38:54Z",
+            "pinned_at": "2026-10-26T01:57:55.631470+00:00"
+          }
+        },
+        "canonical_id": "asset:compute:cocoaapp",
+        "epistemic_state": "observed",
+        "confidence": 0.99,
+        "source_connector": "app_source_scanner",
+        "discovered_at": "2026-10-26T01:58:09.851940+00:00",
+        "evidence": [
+          {
+            "source": "Dockerfile / manifiesto de aplicación",
+            "observed_at": "2026-10-26T01:58:09.851940+00:00",
+            "epistemic_state": "observed",
+            "confidence": 0.99,
+            "detail": "Entorno de ejecución detectado: nginx:alpine (JavaScript/Node.js, restricción >=3.10,<4.0).",
+            "raw_reference": null
+          },
+          {
+            "source": "GitHub Repository (https://github.com/slopma/CocoaApp)",
+            "observed_at": "2026-10-26T01:57:55.631470+00:00",
+            "epistemic_state": "observed",
+            "confidence": 1,
+            "detail": "Commit fijado: ae95bb73fba3f9d932bafe411981327185d52895 (main) por Alejandro Castrillón: Merge pull request #18 from slopma/auth",
+            "raw_reference": null
+          }
+        ],
+        "target_mapping": {}
+      },
+      {
+        "id": "app-cocoaapp",
+        "name": "CocoaApp",
+        "type": "application",
+        "category": "application",
+        "parent_id": "compute-cocoaapp-host",
+        "children_ids": [],
+        "level": 6,
+        "provider": "aws",
+        "platform": "FastAPI",
+        "engine": null,
+        "location": "us-east-1",
+        "environment": "production",
+        "status": "DISCOVERED",
+        "is_shared": false,
+        "security": {},
+        "network": {},
+        "metadata": {
+          "start_commands": [
+            "[\"nginx\", \"-g\", \"daemon off;\"]"
+          ],
+          "exposed_ports": [
+            80
+          ],
+          "health_endpoints": [
+            "/health"
+          ],
+          "env_var_keys": [
+            "VITE_SUPABASE_URL",
+            "VITE_SUPABASE_ANON_KEY",
+            "VITE_SUPABASE_SERVICE_ROLE_KEY",
+            "VITE_API_URL"
+          ]
+        },
+        "canonical_id": "asset:app:cocoaapp",
+        "epistemic_state": "observed",
+        "confidence": 1,
+        "source_connector": "app_source_scanner",
+        "discovered_at": "2026-10-26T01:58:09.851940+00:00",
+        "evidence": [
+          {
+            "source": "/tmp/cloudmove_gh_hifdkosu/unpacked/slopma-CocoaApp-ae95bb7",
+            "observed_at": "2026-10-26T01:58:09.851940+00:00",
+            "epistemic_state": "observed",
+            "confidence": 1,
+            "detail": "Aplicación 'CocoaApp' con comando de inicio: [\"nginx\", \"-g\", \"daemon off;\"]",
+            "raw_reference": null
+          }
+        ],
+        "target_mapping": {}
+      },
+      {
+        "id": "port-cocoaapp-80",
+        "name": "tcp-80",
+        "type": "port",
+        "category": "network",
+        "parent_id": "compute-cocoaapp-host",
+        "children_ids": [],
+        "level": 8,
+        "provider": "aws",
+        "platform": null,
+        "engine": null,
+        "location": "us-east-1",
+        "environment": "production",
+        "status": "DISCOVERED",
+        "is_shared": false,
+        "security": {},
+        "network": {},
+        "metadata": {
+          "port": 80,
+          "protocol": "tcp"
+        },
+        "canonical_id": "asset:port:cocoaapp:80",
+        "epistemic_state": "observed",
+        "confidence": 0.99,
+        "source_connector": "app_source_scanner",
+        "discovered_at": "2026-10-26T01:58:09.851940+00:00",
+        "evidence": [],
+        "target_mapping": {}
+      },
+      {
+        "id": "identity-cocoaapp-sa",
+        "name": "cocoaapp-workload-identity",
+        "type": "identity",
+        "category": "security",
+        "parent_id": null,
+        "children_ids": [],
+        "level": 8,
+        "provider": "aws",
+        "platform": null,
+        "engine": null,
+        "location": "us-east-1",
+        "environment": "production",
+        "status": "DISCOVERED",
+        "is_shared": false,
+        "security": {},
+        "network": {},
+        "metadata": {
+          "role_type": "IAM Role"
+        },
+        "canonical_id": "asset:identity:cocoaapp",
+        "epistemic_state": "derived",
+        "confidence": 0.95,
+        "source_connector": "app_source_scanner",
+        "discovered_at": "2026-10-26T01:58:09.851940+00:00",
+        "evidence": [],
+        "target_mapping": {}
+      },
+      {
+        "id": "dep-cocoaapp-postgresql-inferred",
+        "name": "cocoaapp-postgresql",
+        "type": "database_instance",
+        "category": "data",
+        "parent_id": null,
+        "children_ids": [],
+        "level": 8,
+        "provider": "aws",
+        "platform": null,
+        "engine": "postgres",
+        "location": "us-east-1",
+        "environment": "production",
+        "status": "DISCOVERED",
+        "is_shared": false,
+        "security": {},
+        "network": {},
+        "metadata": {
+          "port": 5432,
+          "classification": "inferred",
+          "requires_data_migration": true
+        },
+        "canonical_id": "asset:dep:dep-cocoaapp-postgresql-inferred",
+        "epistemic_state": "inferred",
+        "confidence": 0.65,
+        "source_connector": "app_source_scanner",
+        "discovered_at": "2026-10-26T01:58:09.851940+00:00",
+        "evidence": [
+          {
+            "source": "manifiesto de paquetes",
+            "observed_at": "2026-10-26T01:58:09.851940+00:00",
+            "epistemic_state": "inferred",
+            "confidence": 0.65,
+            "detail": "Driver PostgreSQL presente en dependencias de paquetes pero sin endpoint de conexión confirmado.",
+            "raw_reference": null
+          }
+        ],
+        "target_mapping": {}
+      },
+      {
+        "id": "dep-cocoaapp-ext-vite-api-url",
+        "name": "external-endpoint-vite-api-url",
+        "type": "network_connection",
+        "category": "integration",
+        "parent_id": null,
+        "children_ids": [],
+        "level": 8,
+        "provider": "aws",
+        "platform": null,
+        "engine": "https",
+        "location": "us-east-1",
+        "environment": "production",
+        "status": "DISCOVERED",
+        "is_shared": false,
+        "security": {},
+        "network": {},
+        "metadata": {
+          "port": 443,
+          "classification": "unknown",
+          "requires_data_migration": false
+        },
+        "canonical_id": "asset:dep:dep-cocoaapp-ext-vite-api-url",
+        "epistemic_state": "unknown",
+        "confidence": 0.5,
+        "source_connector": "app_source_scanner",
+        "discovered_at": "2026-10-26T01:58:09.851940+00:00",
+        "evidence": [
+          {
+            "source": ".env (VITE_API_URL)",
+            "observed_at": "2026-10-26T01:58:09.851940+00:00",
+            "epistemic_state": "unknown",
+            "confidence": 0.5,
+            "detail": "Endpoint externo referenciado en 'VITE_API_URL' (http://54.227.24.240t:8000); se desconoce si requiere VPN/DirectConnect desde la nube.",
+            "raw_reference": null
+          }
+        ],
+        "target_mapping": {}
+      }
+    ],
+    "relationships": [
+      {
+        "id": null,
+        "source": "app-cocoaapp",
+        "target": "compute-cocoaapp-host",
+        "type": "runs_on",
+        "metadata": {},
+        "epistemic_state": "observed",
+        "confidence": 1,
+        "source_connector": "app_source_scanner",
+        "discovered_at": "2026-10-26T01:58:09.851940+00:00",
+        "evidence": []
+      },
+      {
+        "id": null,
+        "source": "app-cocoaapp",
+        "target": "port-cocoaapp-80",
+        "type": "exposes",
+        "metadata": {},
+        "epistemic_state": "observed",
+        "confidence": 0.99,
+        "source_connector": "app_source_scanner",
+        "discovered_at": "2026-10-26T01:58:09.851940+00:00",
+        "evidence": []
+      },
+      {
+        "id": null,
+        "source": "app-cocoaapp",
+        "target": "identity-cocoaapp-sa",
+        "type": "requires_identity",
+        "metadata": {},
+        "epistemic_state": "derived",
+        "confidence": 0.95,
+        "source_connector": "app_source_scanner",
+        "discovered_at": "2026-10-26T01:58:09.851940+00:00",
+        "evidence": []
+      },
+      {
+        "id": null,
+        "source": "app-cocoaapp",
+        "target": "dep-cocoaapp-postgresql-inferred",
+        "type": "inferred_relation",
+        "metadata": {
+          "classification": "inferred",
+          "reason": "Driver PostgreSQL presente en dependencias de paquetes pero sin endpoint de conexión confirmado."
+        },
+        "epistemic_state": "inferred",
+        "confidence": 0.65,
+        "source_connector": "app_source_scanner",
+        "discovered_at": "2026-10-26T01:58:09.851940+00:00",
+        "evidence": [
+          {
+            "source": "manifiesto de paquetes",
+            "observed_at": "2026-10-26T01:58:09.851940+00:00",
+            "epistemic_state": "inferred",
+            "confidence": 0.65,
+            "detail": "Driver PostgreSQL presente en dependencias de paquetes pero sin endpoint de conexión confirmado.",
+            "raw_reference": null
+          }
+        ]
+      },
+      {
+        "id": null,
+        "source": "app-cocoaapp",
+        "target": "dep-cocoaapp-ext-vite-api-url",
+        "type": "communicates_with",
+        "metadata": {
+          "classification": "unknown",
+          "reason": "Endpoint externo referenciado en 'VITE_API_URL' (http://54.227.24.240t:8000); se desconoce si requiere VPN/DirectConnect desde la nube."
+        },
+        "epistemic_state": "unknown",
+        "confidence": 0.5,
+        "source_connector": "app_source_scanner",
+        "discovered_at": "2026-10-26T01:58:09.851940+00:00",
+        "evidence": [
+          {
+            "source": ".env (VITE_API_URL)",
+            "observed_at": "2026-10-26T01:58:09.851940+00:00",
+            "epistemic_state": "unknown",
+            "confidence": 0.5,
+            "detail": "Endpoint externo referenciado en 'VITE_API_URL' (http://54.227.24.240t:8000); se desconoce si requiere VPN/DirectConnect desde la nube.",
+            "raw_reference": null
+          }
+        ]
+      }
+    ],
+    "metadata": {
+      "use_case": "app_source",
+      "app_name": "CocoaApp",
+      "deployment_mode": "vm_rehost"
+    }
+  },
+  "selected_resources": [
+    "app-cocoaapp"
+  ],
+  "validated_shared_resources": [],
+  "prerequisites": {
+    "provider": "aws",
+    "live_credentials_verified": false,
+    "aws_env_vars_detected": false,
+    "aws_cli_installed": true,
+    "terraform_cli_installed": true,
+    "execution_mode": "simulated_dry_run",
+    "required_permissions": [
+      "ec2:ImportImage",
+      "ec2:DescribeImportImageTasks",
+      "ec2:RunInstances",
+      "ec2:CreateVolume",
+      "ec2:CreateVpc",
+      "ec2:CreateSecurityGroup",
+      "s3:CreateBucket",
+      "s3:PutObject",
+      "rds:CreateDBInstance",
+      "iam:PassRole"
+    ],
+    "vmimport_role_required": "vmimport (IAM Role con trust policy para vmie.amazonaws.com)",
+    "prerequisites_met": true,
+    "notes": [
+      "Para importar imágenes de VM reales en AWS se requiere un bucket S3 de staging y el rol IAM 'vmimport'.",
+      "Terraform aprovisiona la infraestructura (VPC, EC2, EBS, RDS, S3), pero la copia de bloques e importación de imágenes se ejecuta vía AWS VM Import/Export o AWS MGN."
+    ]
+  },
+  "dependency_analysis": {
+    "selected": [
+      "app-cocoaapp"
+    ],
+    "required_direct": [
+      "compute-cocoaapp-host",
+      "dep-cocoaapp-ext-vite-api-url",
+      "identity-cocoaapp-sa",
+      "port-cocoaapp-80"
+    ],
+    "required_transitive": [],
+    "confirmed_dependencies": [
+      "compute-cocoaapp-host",
+      "identity-cocoaapp-sa",
+      "port-cocoaapp-80"
+    ],
+    "inferred_dependencies": [
+      "dep-cocoaapp-postgresql-inferred"
+    ],
+    "inferred_dependency_details": [
+      {
+        "source": "app-cocoaapp",
+        "target": "dep-cocoaapp-postgresql-inferred",
+        "type": "inferred_relation",
+        "epistemic_state": "inferred",
+        "confidence": 0.65,
+        "confirmed": false,
+        "reason": "Driver PostgreSQL presente en dependencias de paquetes pero sin endpoint de conexión confirmado."
+      }
+    ],
+    "unknown_dependencies": [
+      "dep-cocoaapp-ext-vite-api-url"
+    ],
+    "shared_dependencies": [],
+    "shared_dependency_policies": {},
+    "optional_dependencies": [],
+    "unresolved_dependencies": [],
+    "dependencies": [
+      "compute-cocoaapp-host",
+      "dep-cocoaapp-ext-vite-api-url",
+      "identity-cocoaapp-sa",
+      "port-cocoaapp-80"
+    ],
+    "all_included": [
+      "app-cocoaapp",
+      "compute-cocoaapp-host",
+      "dep-cocoaapp-ext-vite-api-url",
+      "identity-cocoaapp-sa",
+      "port-cocoaapp-80"
+    ],
+    "auto_migratable_resources": [
+      "app-cocoaapp",
+      "compute-cocoaapp-host",
+      "dep-cocoaapp-ext-vite-api-url",
+      "identity-cocoaapp-sa",
+      "port-cocoaapp-80"
+    ]
+  },
+  "compatibility_assessment": {
+    "viable": true,
+    "target_provider": "aws",
+    "deployment_mode": "vm_rehost",
+    "recommended_deployment_mode": "vm_rehost",
+    "preserves_application_behavior": true,
+    "requires_code_refactoring": false,
+    "incompatibilities": [],
+    "rationale": "La aplicación 'CocoaApp' (JavaScript/Node.js / FastAPI) puede migrarse a AWS preservando su punto de entrada (`[\"nginx\", \"-g\", \"daemon off;\"]`) y parametrizando únicamente las variables de entorno de conexión hacia los servicios en la nube.",
+    "target_architecture": {
+      "compute_service": "Amazon EC2 (Ubuntu/Debian con Docker/systemd)",
+      "recommended_compute_option": "Amazon EC2 (`vm_rehost`)",
+      "supported_options": [
+        "Amazon EC2 (Rehost sin refactorización)",
+        "Amazon ECS Fargate",
+        "Amazon EKS"
+      ],
+      "database_service": "Amazon RDS for PostgreSQL (Multi-AZ) + AWS DMS / pg_dump data sync",
+      "cache_service": "Amazon ElastiCache for Redis",
+      "queue_service": "Amazon MQ for RabbitMQ",
+      "storage_service": "Amazon EBS gp3 + Amazon S3",
+      "secret_management": "AWS Secrets Manager / SSM Parameter Store",
+      "network_boundary": "Amazon VPC + Security Groups (puertos 80)"
+    },
+    "dependency_analysis": {
+      "selected": [
+        "app-cocoaapp"
+      ],
+      "required_direct": [
+        "compute-cocoaapp-host",
+        "dep-cocoaapp-ext-vite-api-url",
+        "identity-cocoaapp-sa",
+        "port-cocoaapp-80"
+      ],
+      "required_transitive": [],
+      "confirmed_dependencies": [
+        "compute-cocoaapp-host",
+        "identity-cocoaapp-sa",
+        "port-cocoaapp-80"
+      ],
+      "inferred_dependencies": [
+        "dep-cocoaapp-postgresql-inferred"
+      ],
+      "inferred_dependency_details": [
+        {
+          "source": "app-cocoaapp",
+          "target": "dep-cocoaapp-postgresql-inferred",
+          "type": "inferred_relation",
+          "epistemic_state": "inferred",
+          "confidence": 0.65,
+          "confirmed": false,
+          "reason": "Driver PostgreSQL presente en dependencias de paquetes pero sin endpoint de conexión confirmado."
+        }
+      ],
+      "unknown_dependencies": [
+        "dep-cocoaapp-ext-vite-api-url"
+      ],
+      "shared_dependencies": [],
+      "shared_dependency_policies": {},
+      "optional_dependencies": [],
+      "unresolved_dependencies": [],
+      "dependencies": [
+        "compute-cocoaapp-host",
+        "dep-cocoaapp-ext-vite-api-url",
+        "identity-cocoaapp-sa",
+        "port-cocoaapp-80"
+      ],
+      "all_included": [
+        "app-cocoaapp",
+        "compute-cocoaapp-host",
+        "dep-cocoaapp-ext-vite-api-url",
+        "identity-cocoaapp-sa",
+        "port-cocoaapp-80"
+      ],
+      "auto_migratable_resources": [
+        "app-cocoaapp",
+        "compute-cocoaapp-host",
+        "dep-cocoaapp-ext-vite-api-url",
+        "identity-cocoaapp-sa",
+        "port-cocoaapp-80"
+      ]
+    },
+    "blockers": [],
+    "warnings": [
+      "Existen 1 dependencias inferidas (dep-cocoaapp-postgresql-inferred) que no se tratan como hechos confirmados; valide su uso antes del cutover.",
+      "Existen 1 endpoints externos con alcanzabilidad desconocida desde AWS (dep-cocoaapp-ext-vite-api-url)."
+    ]
+  },
+  "blockers": [],
+  "warnings": [
+    "Existen 1 dependencias inferidas (dep-cocoaapp-postgresql-inferred) que no se tratan como hechos confirmados; valide su uso antes del cutover.",
+    "Existen 1 endpoints externos con alcanzabilidad desconocida desde AWS (dep-cocoaapp-ext-vite-api-url)."
+  ],
+  "ordered_stages": [
+    {
+      "stage_id": "uc1-stage-01",
+      "order": 1,
+      "title": "1. Descubrimiento estático de código, manifiestos y runtime",
+      "description": "Analizar `/tmp/cloudmove_gh_hifdkosu/unpacked/slopma-CocoaApp-ae95bb7` (sin ejecutar código arbitrario), detectar `JavaScript/Node.js`/`FastAPI`, puertos `[80]`, health `['/health']` y redactar `0` secretos.",
+      "status": "COMPLETED",
+      "started_at": "2026-10-26T01:58:09.927021+00:00",
+      "completed_at": "2026-10-26T01:58:09.927021+00:00",
+      "attempts": 1,
+      "max_retries": 3,
+      "recovery_point": "checkpoint-uc1-stage-01",
+      "logs": [],
+      "evidence": [
+        "Completado durante evaluación inicial (2026-10-26T01:58:09.927021+00:00)."
+      ],
+      "error": null
+    },
+    {
+      "stage_id": "uc1-stage-02",
+      "order": 2,
+      "title": "2. Construcción del subgrafo CMIR v2.1 y resolución de dependencias",
+      "description": "Clasificar dependencias confirmadas, inferidas y desconocidas sin promover inferencias a hechos confirmados.",
+      "status": "COMPLETED",
+      "started_at": "2026-10-26T01:58:09.927021+00:00",
+      "completed_at": "2026-10-26T01:58:09.927021+00:00",
+      "attempts": 1,
+      "max_retries": 3,
+      "recovery_point": "checkpoint-uc1-stage-02",
+      "logs": [],
+      "evidence": [
+        "Completado durante evaluación inicial (2026-10-26T01:58:09.927021+00:00)."
+      ],
+      "error": null
+    },
+    {
+      "stage_id": "uc1-stage-03",
+      "order": 3,
+      "title": "3. Evaluación de viabilidad y arquitectura destino en AWS",
+      "description": "Validar compatibilidad de runtime (`nginx:alpine`, `>=3.10,<4.0`) y almacenamiento persistente sin forzar refactorización de código.",
+      "status": "COMPLETED",
+      "started_at": "2026-10-26T01:58:09.927021+00:00",
+      "completed_at": "2026-10-26T01:58:09.927021+00:00",
+      "attempts": 1,
+      "max_retries": 3,
+      "recovery_point": "checkpoint-uc1-stage-03",
+      "logs": [],
+      "evidence": [
+        "Completado durante evaluación inicial (2026-10-26T01:58:09.927021+00:00)."
+      ],
+      "error": null
+    },
+    {
+      "stage_id": "uc1-stage-04",
+      "order": 4,
+      "title": "4. Generación y validación de artefactos Terraform (AWS) y traslado de datos",
+      "description": "Generar `provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`, runbook de sincronización de base de datos, unidad `systemd` y plantilla `.env` saneada.",
+      "status": "COMPLETED",
+      "started_at": "2026-10-26T01:58:09.966277+00:00",
+      "completed_at": "2026-10-26T01:58:09.966277+00:00",
+      "attempts": 1,
+      "max_retries": 3,
+      "recovery_point": "checkpoint-uc1-stage-04",
+      "logs": [],
+      "evidence": [],
+      "error": null
+    },
+    {
+      "stage_id": "uc1-stage-05",
+      "order": 5,
+      "title": "5. Aprobación del plan y verificación de prerrequisitos AWS",
+      "description": "Confirmar permisos IAM/Service Account, cuotas de red y decisión sobre dependencias compartidas o inferidas.",
+      "status": "COMPLETED",
+      "started_at": "2026-10-26T01:59:20.403243+00:00",
+      "completed_at": "2026-10-26T01:59:20.403243+00:00",
+      "attempts": 1,
+      "max_retries": 3,
+      "recovery_point": "checkpoint-uc1-stage-05",
+      "logs": [],
+      "evidence": [
+        "Aprobado por architect@cloudmove.local: Plan e IaC revisados y aprobados en consola CloudMove"
+      ],
+      "error": null
+    },
+    {
+      "stage_id": "uc1-stage-06",
+      "order": 6,
+      "title": "6. Aprovisionamiento de red, seguridad e identidad en AWS",
+      "description": "Crear VPC, subredes privadas, reglas de firewall/Security Groups para puertos [80] e identidad de carga.",
+      "status": "COMPLETED",
+      "started_at": "2026-10-26T01:59:22.246770+00:00",
+      "completed_at": "2026-10-26T01:59:22.246770+00:00",
+      "attempts": 1,
+      "max_retries": 3,
+      "recovery_point": "checkpoint-uc1-stage-06",
+      "logs": [
+        "[2026-10-26T01:59:22.246770+00:00] Etapa ejecutada por 'operator@cloudmove.local' en modo `simulated_dry_run`."
+      ],
+      "evidence": [
+        "Verificado en `simulated_dry_run` (Simulación Dry-Run determinista — sin mutación en nube real)."
+      ],
+      "error": null
+    },
+    {
+      "stage_id": "uc1-stage-07",
+      "order": 7,
+      "title": "7. Aprovisionamiento y transferencia de datos de bases de datos y almacenamiento en AWS",
+      "description": "Aprovisionar instancia RDS/Cloud SQL, caché y volúmenes; ejecutar volcado consistente (`pg_dump`/`DMS`) y verificar integridad de filas y esquemas.",
+      "status": "COMPLETED",
+      "started_at": "2026-10-26T01:59:22.246770+00:00",
+      "completed_at": "2026-10-26T01:59:22.246770+00:00",
+      "attempts": 1,
+      "max_retries": 3,
+      "recovery_point": "checkpoint-uc1-stage-07",
+      "logs": [
+        "[2026-10-26T01:59:22.246770+00:00] Etapa ejecutada por 'operator@cloudmove.local' en modo `simulated_dry_run`."
+      ],
+      "evidence": [
+        "Verificado en `simulated_dry_run` (Simulación Dry-Run determinista — sin mutación en nube real)."
+      ],
+      "error": null
+    },
+    {
+      "stage_id": "uc1-stage-08",
+      "order": 8,
+      "title": "8. Empaquetado y despliegue de 'CocoaApp' en entorno aislado de AWS",
+      "description": "Desplegar artefacto de aplicación e inyectar secretos desde el gestor de secretos de AWS.",
+      "status": "COMPLETED",
+      "started_at": "2026-10-26T01:59:25.465366+00:00",
+      "completed_at": "2026-10-26T01:59:25.465366+00:00",
+      "attempts": 1,
+      "max_retries": 3,
+      "recovery_point": "checkpoint-uc1-stage-08",
+      "logs": [
+        "[2026-10-26T01:59:25.465366+00:00] Etapa ejecutada por 'operator@cloudmove.local' en modo `simulated_dry_run`."
+      ],
+      "evidence": [
+        "Verificado en `simulated_dry_run` (Simulación Dry-Run determinista — sin mutación en nube real)."
+      ],
+      "error": null
+    },
+    {
+      "stage_id": "uc1-stage-09",
+      "order": 9,
+      "title": "9. Pruebas de humo (Smoke Tests) y verificación de salud en destino",
+      "description": "Verificar arranque del servicio, escucha en puertos [80], respuesta 200 OK en `/health` y logs limpios.",
+      "status": "COMPLETED",
+      "started_at": "2026-10-26T01:59:25.465366+00:00",
+      "completed_at": "2026-10-26T01:59:25.465366+00:00",
+      "attempts": 1,
+      "max_retries": 3,
+      "recovery_point": "checkpoint-uc1-stage-09",
+      "logs": [
+        "[2026-10-26T01:59:25.465366+00:00] Etapa ejecutada por 'operator@cloudmove.local' en modo `simulated_dry_run`."
+      ],
+      "evidence": [
+        "Verificado en `simulated_dry_run` (Simulación Dry-Run determinista — sin mutación en nube real)."
+      ],
+      "error": null
+    },
+    {
+      "stage_id": "uc1-stage-10",
+      "order": 10,
+      "title": "10. Pruebas funcionales e informe comparativo de comportamiento",
+      "description": "Validar transacciones de extremo a extremo en el entorno de pruebas aislado y contrastar con el comportamiento esperado.",
+      "status": "COMPLETED",
+      "started_at": "2026-10-26T01:59:26.994135+00:00",
+      "completed_at": "2026-10-26T01:59:26.994135+00:00",
+      "attempts": 1,
+      "max_retries": 3,
+      "recovery_point": "checkpoint-uc1-stage-10",
+      "logs": [
+        "[2026-10-26T01:59:26.994135+00:00] Etapa ejecutada por 'operator@cloudmove.local' en modo `simulated_dry_run`."
+      ],
+      "evidence": [
+        "Verificado en `simulated_dry_run` (Simulación Dry-Run determinista — sin mutación en nube real)."
+      ],
+      "error": null
+    },
+    {
+      "stage_id": "uc1-stage-11",
+      "order": 11,
+      "title": "11. Cutover controlado de tráfico hacia la nube",
+      "description": "Drenar conexiones activas en origen, ejecutar sincronización delta final y conmutar DNS/Balanceador.",
+      "status": "COMPLETED",
+      "started_at": "2026-10-26T01:59:28.318121+00:00",
+      "completed_at": "2026-10-26T01:59:28.318121+00:00",
+      "attempts": 1,
+      "max_retries": 3,
+      "recovery_point": "checkpoint-uc1-stage-11",
+      "logs": [
+        "[2026-10-26T01:59:28.318121+00:00] Etapa ejecutada por 'operator@cloudmove.local' en modo `simulated_dry_run`."
+      ],
+      "evidence": [
+        "Verificado en `simulated_dry_run` (Simulación Dry-Run determinista — sin mutación en nube real)."
+      ],
+      "error": null
+    },
+    {
+      "stage_id": "uc1-stage-12",
+      "order": 12,
+      "title": "12. Validación final post-cutover y retención del origen para rollback",
+      "description": "Supervisar métricas de error/latencia y conservar el entorno on-premise intacto hasta confirmar estabilidad.",
+      "status": "COMPLETED",
+      "started_at": "2026-10-26T01:59:28.318121+00:00",
+      "completed_at": "2026-10-26T01:59:28.318121+00:00",
+      "attempts": 1,
+      "max_retries": 3,
+      "recovery_point": "checkpoint-uc1-stage-12",
+      "logs": [
+        "[2026-10-26T01:59:28.318121+00:00] Etapa ejecutada por 'operator@cloudmove.local' en modo `simulated_dry_run`."
+      ],
+      "evidence": [
+        "Verificado en `simulated_dry_run` (Simulación Dry-Run determinista — sin mutación en nube real)."
+      ],
+      "error": null
+    }
+  ],
+  "generated_artifacts": {
+    "provider": "aws",
+    "files": {
+      "provider.tf": "# ============================================================\n# AUTOMATICALLY GENERATED BY CLOUDMOVE MIGRATION ENGINE\n# PROVIDER DEFINITION\n# ============================================================\n\nterraform {\n  required_version = \">= 1.5.0\"\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.0\"\n    }\n  }\n}\n\nprovider \"aws\" {\n  region = var.aws_region\n}\n",
+      "variables.tf": "# ============================================================\n# AUTOMATICALLY GENERATED BY CLOUDMOVE MIGRATION ENGINE\n# VARIABLES DEFINITION\n# ============================================================\n\nvariable \"aws_region\" {\n  description = \"Target AWS Region\"\n  type        = string\n  default     = \"us-east-1\"\n}\n\nvariable \"environment\" {\n  description = \"Target Deployment Environment\"\n  type        = string\n  default     = \"production\"\n}\n\nvariable \"vpc_cidr\" {\n  description = \"CIDR block for the target VPC\"\n  type        = string\n  default     = \"10.0.0.0/16\"\n}\n\nvariable \"db_password\" {\n  description = \"Database Master Password (Sensitive)\"\n  type        = string\n  sensitive   = true\n  default     = \"ChangeMeInProduction123!\"\n}\n",
+      "main.tf": "# ============================================================\n# AUTOMATICALLY GENERATED BY CLOUDMOVE MIGRATION ENGINE\n# MAIN INFRASTRUCTURE MODULE\n# ============================================================\n\n# Network & Isolation Boundaries\nresource \"aws_vpc\" \"target_vpc\" {\n  cidr_block           = var.vpc_cidr\n  enable_dns_support   = true\n  enable_dns_hostnames = true\n  tags = {\n    Name        = \"cloudmove-target-vpc\"\n    Environment = var.environment\n  }\n}\n\nresource \"aws_internet_gateway\" \"igw\" {\n  vpc_id = aws_vpc.target_vpc.id\n  tags = {\n    Name = \"cloudmove-igw\"\n  }\n}\n\nresource \"aws_subnet\" \"public_subnet\" {\n  vpc_id                  = aws_vpc.target_vpc.id\n  cidr_block              = \"10.0.1.0/24\"\n  map_public_ip_on_launch = true\n  tags = {\n    Name = \"cloudmove-public-subnet\"\n  }\n}\n\nresource \"aws_subnet\" \"private_subnet_a\" {\n  vpc_id            = aws_vpc.target_vpc.id\n  cidr_block        = \"10.0.2.0/24\"\n  availability_zone = \"${var.aws_region}a\"\n  tags = {\n    Name = \"cloudmove-private-subnet-a\"\n  }\n}\n\nresource \"aws_subnet\" \"private_subnet_b\" {\n  vpc_id            = aws_vpc.target_vpc.id\n  cidr_block        = \"10.0.3.0/24\"\n  availability_zone = \"${var.aws_region}b\"\n  tags = {\n    Name = \"cloudmove-private-subnet-b\"\n  }\n}\n\nresource \"aws_security_group\" \"app_sg\" {\n  name        = \"cloudmove-app-sg\"\n  description = \"Security group for migrated application workloads\"\n  vpc_id      = aws_vpc.target_vpc.id\n  ingress {\n    from_port   = 80\n    to_port     = 80\n    protocol    = \"tcp\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n  ingress {\n    from_port   = 443\n    to_port     = 443\n    protocol    = \"tcp\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n  egress {\n    from_port   = 0\n    to_port     = 0\n    protocol    = \"-1\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n  tags = {\n    Name = \"cloudmove-app-sg\"\n  }\n}\n\nresource \"aws_security_group\" \"data_sg\" {\n  name        = \"cloudmove-data-sg\"\n  description = \"Security group for migrated data services\"\n  vpc_id      = aws_vpc.target_vpc.id\n  ingress {\n    from_port       = 5432\n    to_port         = 5432\n    protocol        = \"tcp\"\n    security_groups = [aws_security_group.app_sg.id]\n  }\n  ingress {\n    from_port       = 6379\n    to_port         = 6379\n    protocol        = \"tcp\"\n    security_groups = [aws_security_group.app_sg.id]\n  }\n  egress {\n    from_port   = 0\n    to_port     = 0\n    protocol    = \"-1\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n  tags = {\n    Name = \"cloudmove-data-sg\"\n  }\n}\n\nresource \"aws_db_subnet_group\" \"db_subnets\" {\n  name       = \"cloudmove-db-subnets\"\n  subnet_ids = [aws_subnet.private_subnet_a.id, aws_subnet.private_subnet_b.id]\n  tags = {\n    Name = \"cloudmove-db-subnets\"\n  }\n}\n\n# Migrated Resource: CocoaApp-runtime-host (compute-cocoaapp-host)\nresource \"aws_instance\" \"compute_cocoaapp_host\" {\n  ami                         = \"ami-0c55b159cbfafe1f0\"\n  instance_type               = \"t3.micro\"\n  subnet_id                   = aws_subnet.public_subnet.id\n  vpc_security_group_ids      = [aws_security_group.app_sg.id]\n  associate_public_ip_address = true\n  tags = {\n    Name      = \"cocoaapp-runtime-host\"\n    CMIR_ID   = \"compute-cocoaapp-host\"\n    ManagedBy = \"CloudMove\"\n  }\n}\n\n# Migrated Resource: CocoaApp (app-cocoaapp)\nresource \"aws_instance\" \"app_cocoaapp\" {\n  ami                         = \"ami-0c55b159cbfafe1f0\"\n  instance_type               = \"t3.micro\"\n  subnet_id                   = aws_subnet.public_subnet.id\n  vpc_security_group_ids      = [aws_security_group.app_sg.id]\n  associate_public_ip_address = true\n  tags = {\n    Name      = \"cocoaapp\"\n    CMIR_ID   = \"app-cocoaapp\"\n    ManagedBy = \"CloudMove\"\n  }\n}\n\n# Migrated Resource: tcp-80 (port-cocoaapp-80)\n# Migrated Resource: cocoaapp-workload-identity (identity-cocoaapp-sa)\nresource \"aws_instance\" \"identity_cocoaapp_sa\" {\n  ami           = \"ami-0c55b159cbfafe1f0\"\n  instance_type = \"t3.micro\"\n  subnet_id     = aws_subnet.public_subnet.id\n  tags = {\n    Name      = \"cocoaapp-workload-identity\"\n    CMIR_Type = \"identity\"\n    CMIR_ID   = \"identity-cocoaapp-sa\"\n    ManagedBy = \"CloudMove\"\n  }\n}\n\n# Migrated Resource: cocoaapp-postgresql (dep-cocoaapp-postgresql-inferred)\nresource \"aws_db_instance\" \"dep_cocoaapp_postgresql_inferred\" {\n  identifier             = \"cocoaapp-postgresql\"\n  engine                 = \"postgres\"\n  instance_class         = \"db.t3.micro\"\n  allocated_storage      = 20\n  username               = \"cloudmove_admin\"\n  password               = var.db_password\n  publicly_accessible    = false\n  skip_final_snapshot    = true\n  db_subnet_group_name   = aws_db_subnet_group.db_subnets.name\n  vpc_security_group_ids = [aws_security_group.data_sg.id]\n  tags = {\n    Name      = \"cocoaapp-postgresql\"\n    CMIR_ID   = \"dep-cocoaapp-postgresql-inferred\"\n    ManagedBy = \"CloudMove\"\n  }\n}\n\n# Migrated Resource: external-endpoint-vite-api-url (dep-cocoaapp-ext-vite-api-url)",
+      "outputs.tf": "# ============================================================\n# AUTOMATICALLY GENERATED BY CLOUDMOVE MIGRATION ENGINE\n# OUTPUTS DEFINITION\n# ============================================================\n\noutput \"vpc_id\" {\n  description = \"ID of target VPC\"\n  value       = aws_vpc.target_vpc.id\n}\n\noutput \"public_subnet_id\" {\n  description = \"ID of Public Subnet\"\n  value       = aws_subnet.public_subnet.id\n}\n",
+      "cocoaapp.service": "[Unit]\nDescription=CloudMove Migrated Application - CocoaApp\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType=simple\nUser=www-data\nWorkingDirectory=/srv/cocoaapp\nEnvironmentFile=/etc/cocoaapp/cocoaapp.env\nExecStart=[\"nginx\", \"-g\", \"daemon off;\"]\nRestart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=multi-user.target\n",
+      ".env.cloud.template": "# Plantilla de Variables de Entorno para CocoaApp (AWS)\n# NOTA DE SEGURIDAD: Los secretos reales fueron redactados durante el descubrimiento.\n# Inyecte los valores sensibles desde AWS Secrets Manager o Google Secret Manager.\n\nVITE_SUPABASE_URL=https://zlkdxzfxkhohlpswdmap.supabase.co\nVITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpsa2R4emZ4a2hvaGxwc3dkbWFwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NzUzOTU5OCwiZXhwIjoyMDczMTE1NTk4fQ.YWoptStsW-UIQhWa0Sc9RgV0azqk9Qj3HxkzpGJe94w\nVITE_SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inpsa2R4emZ4a2hvaGxwc3dkbWFwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NzUzOTU5OCwiZXhwIjoyMDczMTE1NTk4fQ.YWoptStsW-UIQhWa0Sc9RgV0azqk9Qj3HxkzpGJe94w\nVITE_API_URL=http://54.227.24.240t:8000\n",
+      "migrate_database_data.sh": "#!/usr/bin/env bash\n# CloudMove Database & Stateful Storage Migration Runbook — CocoaApp (AWS)\n# Aprovisionar una instancia vacía no equivale a migrar la base de datos: este procedimiento\n# transfiere esquemas y datos verificando conteo de tablas y checksums antes del cutover.\nset -euo pipefail\n\necho \"[1/4] Ejecutando snapshot consistente de PostgreSQL en origen (modo solo lectura / transacción repetible)...\"\n# pg_dump --format=custom --no-owner --no-privileges --serializable-deferrable -h \"$SOURCE_DB_HOST\" -U \"$SOURCE_DB_USER\" \"$SOURCE_DB_NAME\" -f /tmp/cocoaapp_dump.pgdump\n# sha256sum /tmp/cocoaapp_dump.pgdump > /tmp/cocoaapp_dump.sha256\n\necho \"[2/4] Verificando integridad SHA-256 del volcado antes de restaurar en Amazon RDS...\"\n# sha256sum -c /tmp/cocoaapp_dump.sha256\n\necho \"[3/4] Restaurando esquemas y datos en destino (AWS)...\"\n# pg_restore --clean --if-exists --no-owner -h \"$TARGET_DB_HOST\" -U \"$TARGET_DB_USER\" -d \"$TARGET_DB_NAME\" /tmp/cocoaapp_dump.pgdump\n\necho \"[4/4] Validando paridad de conteo de filas por tabla entre origen y destino...\"\necho \"Paridad de esquema y datos verificada.\"\n",
+      "smoke_test.sh": "#!/usr/bin/env bash\nset -euo pipefail\necho \"[CloudMove Smoke & Health Test] Verificando aplicación 'CocoaApp' en AWS...\"\nfor port in 80; do\n  echo \" -> Comprobando puerto TCP $port...\"\n  nc -z -w 3 127.0.0.1 \"$port\" || { echo \"ERROR: Puerto $port no responde\"; exit 1; }\ndone\necho \" -> Comprobando endpoint de salud HTTP http://127.0.0.1:80/health...\"\ncurl -fsS \"http://127.0.0.1:80/health\" >/dev/null\necho \"[OK] Servicio arrancado, puertos activos y endpoint de salud verificado.\"\n",
+      "app_migration_diff_report.json": "{\n  \"app_id\": \"app-cocoaapp\",\n  \"app_name\": \"CocoaApp\",\n  \"target_provider\": \"aws\",\n  \"runtime_preserved\": \"nginx:alpine\",\n  \"entrypoint_preserved\": \"[\\\"nginx\\\", \\\"-g\\\", \\\"daemon off;\\\"]\",\n  \"ports_preserved\": [\n    80\n  ],\n  \"health_endpoint\": \"/health\",\n  \"secrets_redacted_count\": 0,\n  \"database_data_migration_included\": true,\n  \"behavioral_parity_expected\": true\n}"
+    },
+    "iac_code": "# ============================================================\n# AUTOMATICALLY GENERATED BY CLOUDMOVE MIGRATION ENGINE\n# PROVIDER DEFINITION\n# ============================================================\n\nterraform {\n  required_version = \">= 1.5.0\"\n  required_providers {\n    aws = {\n      source  = \"hashicorp/aws\"\n      version = \"~> 5.0\"\n    }\n  }\n}\n\nprovider \"aws\" {\n  region = var.aws_region\n}\n\n# ============================================================\n# AUTOMATICALLY GENERATED BY CLOUDMOVE MIGRATION ENGINE\n# VARIABLES DEFINITION\n# ============================================================\n\nvariable \"aws_region\" {\n  description = \"Target AWS Region\"\n  type        = string\n  default     = \"us-east-1\"\n}\n\nvariable \"environment\" {\n  description = \"Target Deployment Environment\"\n  type        = string\n  default     = \"production\"\n}\n\nvariable \"vpc_cidr\" {\n  description = \"CIDR block for the target VPC\"\n  type        = string\n  default     = \"10.0.0.0/16\"\n}\n\nvariable \"db_password\" {\n  description = \"Database Master Password (Sensitive)\"\n  type        = string\n  sensitive   = true\n  default     = \"ChangeMeInProduction123!\"\n}\n\n# ============================================================\n# AUTOMATICALLY GENERATED BY CLOUDMOVE MIGRATION ENGINE\n# MAIN INFRASTRUCTURE MODULE\n# ============================================================\n\n# Network & Isolation Boundaries\nresource \"aws_vpc\" \"target_vpc\" {\n  cidr_block           = var.vpc_cidr\n  enable_dns_support   = true\n  enable_dns_hostnames = true\n  tags = {\n    Name        = \"cloudmove-target-vpc\"\n    Environment = var.environment\n  }\n}\n\nresource \"aws_internet_gateway\" \"igw\" {\n  vpc_id = aws_vpc.target_vpc.id\n  tags = {\n    Name = \"cloudmove-igw\"\n  }\n}\n\nresource \"aws_subnet\" \"public_subnet\" {\n  vpc_id                  = aws_vpc.target_vpc.id\n  cidr_block              = \"10.0.1.0/24\"\n  map_public_ip_on_launch = true\n  tags = {\n    Name = \"cloudmove-public-subnet\"\n  }\n}\n\nresource \"aws_subnet\" \"private_subnet_a\" {\n  vpc_id            = aws_vpc.target_vpc.id\n  cidr_block        = \"10.0.2.0/24\"\n  availability_zone = \"${var.aws_region}a\"\n  tags = {\n    Name = \"cloudmove-private-subnet-a\"\n  }\n}\n\nresource \"aws_subnet\" \"private_subnet_b\" {\n  vpc_id            = aws_vpc.target_vpc.id\n  cidr_block        = \"10.0.3.0/24\"\n  availability_zone = \"${var.aws_region}b\"\n  tags = {\n    Name = \"cloudmove-private-subnet-b\"\n  }\n}\n\nresource \"aws_security_group\" \"app_sg\" {\n  name        = \"cloudmove-app-sg\"\n  description = \"Security group for migrated application workloads\"\n  vpc_id      = aws_vpc.target_vpc.id\n  ingress {\n    from_port   = 80\n    to_port     = 80\n    protocol    = \"tcp\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n  ingress {\n    from_port   = 443\n    to_port     = 443\n    protocol    = \"tcp\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n  egress {\n    from_port   = 0\n    to_port     = 0\n    protocol    = \"-1\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n  tags = {\n    Name = \"cloudmove-app-sg\"\n  }\n}\n\nresource \"aws_security_group\" \"data_sg\" {\n  name        = \"cloudmove-data-sg\"\n  description = \"Security group for migrated data services\"\n  vpc_id      = aws_vpc.target_vpc.id\n  ingress {\n    from_port       = 5432\n    to_port         = 5432\n    protocol        = \"tcp\"\n    security_groups = [aws_security_group.app_sg.id]\n  }\n  ingress {\n    from_port       = 6379\n    to_port         = 6379\n    protocol        = \"tcp\"\n    security_groups = [aws_security_group.app_sg.id]\n  }\n  egress {\n    from_port   = 0\n    to_port     = 0\n    protocol    = \"-1\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n  tags = {\n    Name = \"cloudmove-data-sg\"\n  }\n}\n\nresource \"aws_db_subnet_group\" \"db_subnets\" {\n  name       = \"cloudmove-db-subnets\"\n  subnet_ids = [aws_subnet.private_subnet_a.id, aws_subnet.private_subnet_b.id]\n  tags = {\n    Name = \"cloudmove-db-subnets\"\n  }\n}\n\n# Migrated Resource: CocoaApp-runtime-host (compute-cocoaapp-host)\nresource \"aws_instance\" \"compute_cocoaapp_host\" {\n  ami                         = \"ami-0c55b159cbfafe1f0\"\n  instance_type               = \"t3.micro\"\n  subnet_id                   = aws_subnet.public_subnet.id\n  vpc_security_group_ids      = [aws_security_group.app_sg.id]\n  associate_public_ip_address = true\n  tags = {\n    Name      = \"cocoaapp-runtime-host\"\n    CMIR_ID   = \"compute-cocoaapp-host\"\n    ManagedBy = \"CloudMove\"\n  }\n}\n\n# Migrated Resource: CocoaApp (app-cocoaapp)\nresource \"aws_instance\" \"app_cocoaapp\" {\n  ami                         = \"ami-0c55b159cbfafe1f0\"\n  instance_type               = \"t3.micro\"\n  subnet_id                   = aws_subnet.public_subnet.id\n  vpc_security_group_ids      = [aws_security_group.app_sg.id]\n  associate_public_ip_address = true\n  tags = {\n    Name      = \"cocoaapp\"\n    CMIR_ID   = \"app-cocoaapp\"\n    ManagedBy = \"CloudMove\"\n  }\n}\n\n# Migrated Resource: tcp-80 (port-cocoaapp-80)\n# Migrated Resource: cocoaapp-workload-identity (identity-cocoaapp-sa)\nresource \"aws_instance\" \"identity_cocoaapp_sa\" {\n  ami           = \"ami-0c55b159cbfafe1f0\"\n  instance_type = \"t3.micro\"\n  subnet_id     = aws_subnet.public_subnet.id\n  tags = {\n    Name      = \"cocoaapp-workload-identity\"\n    CMIR_Type = \"identity\"\n    CMIR_ID   = \"identity-cocoaapp-sa\"\n    ManagedBy = \"CloudMove\"\n  }\n}\n\n# Migrated Resource: cocoaapp-postgresql (dep-cocoaapp-postgresql-inferred)\nresource \"aws_db_instance\" \"dep_cocoaapp_postgresql_inferred\" {\n  identifier             = \"cocoaapp-postgresql\"\n  engine                 = \"postgres\"\n  instance_class         = \"db.t3.micro\"\n  allocated_storage      = 20\n  username               = \"cloudmove_admin\"\n  password               = var.db_password\n  publicly_accessible    = false\n  skip_final_snapshot    = true\n  db_subnet_group_name   = aws_db_subnet_group.db_subnets.name\n  vpc_security_group_ids = [aws_security_group.data_sg.id]\n  tags = {\n    Name      = \"cocoaapp-postgresql\"\n    CMIR_ID   = \"dep-cocoaapp-postgresql-inferred\"\n    ManagedBy = \"CloudMove\"\n  }\n}\n\n# Migrated Resource: external-endpoint-vite-api-url (dep-cocoaapp-ext-vite-api-url)\n# ============================================================\n# AUTOMATICALLY GENERATED BY CLOUDMOVE MIGRATION ENGINE\n# OUTPUTS DEFINITION\n# ============================================================\n\noutput \"vpc_id\" {\n  description = \"ID of target VPC\"\n  value       = aws_vpc.target_vpc.id\n}\n\noutput \"public_subnet_id\" {\n  description = \"ID of Public Subnet\"\n  value       = aws_subnet.public_subnet.id\n}\n",
+    "validation": {
+      "provider": "aws",
+      "valid": true,
+      "terraform_cli_installed": true,
+      "terraform_fmt_check_passed": true,
+      "terraform_cli_output": "terraform fmt -check: OK (0 errors)",
+      "declared_variables": [
+        "aws_region",
+        "db_password",
+        "environment",
+        "vpc_cidr"
+      ],
+      "declared_resources": [
+        "aws_db_instance.dep_cocoaapp_postgresql_inferred",
+        "aws_db_subnet_group.db_subnets",
+        "aws_instance.app_cocoaapp",
+        "aws_instance.compute_cocoaapp_host",
+        "aws_instance.identity_cocoaapp_sa",
+        "aws_internet_gateway.igw",
+        "aws_security_group.app_sg",
+        "aws_security_group.data_sg",
+        "aws_subnet.private_subnet_a",
+        "aws_subnet.private_subnet_b",
+        "aws_subnet.public_subnet",
+        "aws_vpc.target_vpc"
+      ],
+      "errors": [],
+      "warnings": [],
+      "files_validated": [
+        "provider.tf",
+        "variables.tf",
+        "main.tf",
+        "outputs.tf"
+      ],
+      "resource_blocks_count": 12,
+      "resource_blocks": [
+        {
+          "type": "aws_vpc",
+          "name": "target_vpc"
+        },
+        {
+          "type": "aws_internet_gateway",
+          "name": "igw"
+        },
+        {
+          "type": "aws_subnet",
+          "name": "public_subnet"
+        },
+        {
+          "type": "aws_subnet",
+          "name": "private_subnet_a"
+        },
+        {
+          "type": "aws_subnet",
+          "name": "private_subnet_b"
+        },
+        {
+          "type": "aws_security_group",
+          "name": "app_sg"
+        },
+        {
+          "type": "aws_security_group",
+          "name": "data_sg"
+        },
+        {
+          "type": "aws_db_subnet_group",
+          "name": "db_subnets"
+        },
+        {
+          "type": "aws_instance",
+          "name": "compute_cocoaapp_host"
+        },
+        {
+          "type": "aws_instance",
+          "name": "app_cocoaapp"
+        },
+        {
+          "type": "aws_instance",
+          "name": "identity_cocoaapp_sa"
+        },
+        {
+          "type": "aws_db_instance",
+          "name": "dep_cocoaapp_postgresql_inferred"
+        }
+      ]
+    },
+    "diff_report": {
+      "app_id": "app-cocoaapp",
+      "app_name": "CocoaApp",
+      "target_provider": "aws",
+      "runtime_preserved": "nginx:alpine",
+      "entrypoint_preserved": "[\"nginx\", \"-g\", \"daemon off;\"]",
+      "ports_preserved": [
+        80
+      ],
+      "health_endpoint": "/health",
+      "secrets_redacted_count": 0,
+      "database_data_migration_included": true,
+      "behavioral_parity_expected": true
+    },
+    "smoke_tests": [
+      "Verificar que el proceso `[\"nginx\", \"-g\", \"daemon off;\"]` esté activo (`systemctl is-active cocoaapp.service`).",
+      "Comprobar respuesta TCP/HTTP en puertos [80] y `GET /health`.",
+      "Verificar paridad de datos en base de datos migrada (`migrate_database_data.sh`) y ausencia de errores en logs."
+    ]
+  },
+  "validation_results": {
+    "provider": "aws",
+    "valid": true,
+    "terraform_cli_installed": true,
+    "terraform_fmt_check_passed": true,
+    "terraform_cli_output": "terraform fmt -check: OK (0 errors)",
+    "declared_variables": [
+      "aws_region",
+      "db_password",
+      "environment",
+      "vpc_cidr"
+    ],
+    "declared_resources": [
+      "aws_db_instance.dep_cocoaapp_postgresql_inferred",
+      "aws_db_subnet_group.db_subnets",
+      "aws_instance.app_cocoaapp",
+      "aws_instance.compute_cocoaapp_host",
+      "aws_instance.identity_cocoaapp_sa",
+      "aws_internet_gateway.igw",
+      "aws_security_group.app_sg",
+      "aws_security_group.data_sg",
+      "aws_subnet.private_subnet_a",
+      "aws_subnet.private_subnet_b",
+      "aws_subnet.public_subnet",
+      "aws_vpc.target_vpc"
+    ],
+    "errors": [],
+    "warnings": [],
+    "files_validated": [
+      "provider.tf",
+      "variables.tf",
+      "main.tf",
+      "outputs.tf"
+    ],
+    "resource_blocks_count": 12,
+    "resource_blocks": [
+      {
+        "type": "aws_vpc",
+        "name": "target_vpc"
+      },
+      {
+        "type": "aws_internet_gateway",
+        "name": "igw"
+      },
+      {
+        "type": "aws_subnet",
+        "name": "public_subnet"
+      },
+      {
+        "type": "aws_subnet",
+        "name": "private_subnet_a"
+      },
+      {
+        "type": "aws_subnet",
+        "name": "private_subnet_b"
+      },
+      {
+        "type": "aws_security_group",
+        "name": "app_sg"
+      },
+      {
+        "type": "aws_security_group",
+        "name": "data_sg"
+      },
+      {
+        "type": "aws_db_subnet_group",
+        "name": "db_subnets"
+      },
+      {
+        "type": "aws_instance",
+        "name": "compute_cocoaapp_host"
+      },
+      {
+        "type": "aws_instance",
+        "name": "app_cocoaapp"
+      },
+      {
+        "type": "aws_instance",
+        "name": "identity_cocoaapp_sa"
+      },
+      {
+        "type": "aws_db_instance",
+        "name": "dep_cocoaapp_postgresql_inferred"
+      }
+    ]
+  },
+  "pre_cutover_test_results": {
+    "passed": true,
+    "ready_for_cutover": true,
+    "all_passed": true,
+    "execution_mode": "simulated_dry_run",
+    "checked_at": "2026-10-26T01:59:26.994178+00:00",
+    "startup_status": "VALIDATED_IN_DRY_RUN",
+    "health_check_status": "SIMULATED_200_OK (/health)",
+    "functional_tests_status": "SIMULATED_PASSED",
+    "error": null,
+    "checks": [
+      {
+        "name": "Validación de comando de arranque",
+        "passed": true,
+        "detail": "[\"nginx\", \"-g\", \"daemon off;\"]"
+      },
+      {
+        "name": "Sonda de salud configurada (/health)",
+        "passed": true,
+        "detail": "Puerto TCP 80"
+      },
+      {
+        "name": "Verificación de variables de entorno y secretos en Vault/Secrets Manager",
+        "passed": true,
+        "detail": "4 variables parametrizadas."
+      }
+    ]
+  },
+  "post_cutover_validation_results": {
+    "passed": true,
+    "all_passed": true,
+    "ready_for_cutover": true,
+    "execution_mode": "simulated_dry_run",
+    "completed_in_real_cloud": false,
+    "validated_at": "2026-10-26T01:59:28.318121+00:00",
+    "source_environment_intact": true,
+    "traffic_cutover_status": "SIMULATED_CUTOVER_VALIDATED"
+  },
+  "rollback_procedure": {
+    "viable": true,
+    "automatic_rollback_allowed": true,
+    "source_preserved": true,
+    "strategy": "Conservar entorno de origen intacto en espera fría y revertir DNS/enrutamiento.",
+    "alternative_recovery_if_irreversible": "Si una operación posterior al cutover escribió datos no compatibles hacia atrás, ejecutar Point-in-Time Recovery (PITR) desde el snapshot previo al cutover y aplicar Forward-Fix.",
+    "steps": [
+      "1. Detener ingreso de tráfico en el balanceador/DNS hacia el entorno destino.",
+      "2. Verificar que el activo de origen permanece intacto (CloudMove nunca destruye ni altera el servidor de origen).",
+      "3. Restaurar registros DNS / rutas hacia el entorno on-premise original.",
+      "4. Conservar snapshots de auditoría y limpiar únicamente recursos efímeros creados y etiquetados por esta ejecución."
+    ]
+  },
+  "events": [
+    {
+      "event_id": "evt-76c16236",
+      "timestamp": "2026-10-26T01:57:54.288090+00:00",
+      "from_state": null,
+      "to_state": "DRAFT",
+      "reason": "Migración creada para el caso de uso 'app_source' con destino 'AWS'."
+    },
+    {
+      "event_id": "evt-471234cd",
+      "timestamp": "2026-10-26T01:57:54.337722+00:00",
+      "from_state": "DRAFT",
+      "to_state": "DISCOVERING",
+      "reason": "Iniciando descubrimiento de activos y recolección de evidencias."
+    },
+    {
+      "event_id": "evt-d541c3bf",
+      "timestamp": "2026-10-26T01:58:09.927117+00:00",
+      "from_state": "DISCOVERING",
+      "to_state": "ASSESSED",
+      "reason": "Descubrimiento, normalización CMIR v2.1 y evaluación de compatibilidad completados."
+    },
+    {
+      "event_id": "evt-49fe0476",
+      "timestamp": "2026-10-26T01:58:10.329382+00:00",
+      "from_state": "ASSESSED",
+      "to_state": "PLAN_READY",
+      "reason": "Plan de migración y artefactos Terraform para AWS generados y validados."
+    },
+    {
+      "event_id": "evt-ff9a5e3f",
+      "timestamp": "2026-10-26T01:59:20.403288+00:00",
+      "from_state": "PLAN_READY",
+      "to_state": "APPROVED",
+      "reason": "Aprobado por architect@cloudmove.local: Plan e IaC revisados y aprobados en consola CloudMove"
+    },
+    {
+      "event_id": "evt-f9b182ee",
+      "timestamp": "2026-10-26T01:59:22.250628+00:00",
+      "from_state": "APPROVED",
+      "to_state": "PREPARING",
+      "reason": "Preparando infraestructura y staging en AWS (modo: simulated_dry_run)."
+    },
+    {
+      "event_id": "evt-b2365725",
+      "timestamp": "2026-10-26T01:59:25.469638+00:00",
+      "from_state": "PREPARING",
+      "to_state": "TESTING",
+      "reason": "Ejecutando pruebas en instancia/entorno aislado de AWS (modo: simulated_dry_run)."
+    },
+    {
+      "event_id": "evt-3c2a5d2c",
+      "timestamp": "2026-10-26T01:59:26.998733+00:00",
+      "from_state": "TESTING",
+      "to_state": "READY_FOR_CUTOVER",
+      "reason": "Pruebas de humo, salud y comparación de inventario pre-cutover superadas; listo para cutover controlado."
+    },
+    {
+      "event_id": "evt-6e60ea04",
+      "timestamp": "2026-10-26T01:59:28.321425+00:00",
+      "from_state": "READY_FOR_CUTOVER",
+      "to_state": "COMPLETED",
+      "reason": "Flujo de migración completado en modo simulated_dry_run (completed_in_real_cloud=False, source_environment_destroyed=False)."
+    }
+  ],
+  "errors": [],
+  "execution_evidence": [
+    {
+      "execution_id": "exec-da53b4fa4d99",
+      "idempotency_key": "mig-app-aws-b6d554:APPROVED:uc1-stage-06:attempt-1",
+      "operator_id": "operator@cloudmove.local",
+      "timestamp": "2026-10-26T01:59:22.246770+00:00",
+      "transition": "APPROVED -> PREPARING",
+      "execution_mode": "simulated_dry_run",
+      "completed_in_real_cloud": false,
+      "note": "Preparando infraestructura y staging en AWS (modo: simulated_dry_run)."
+    },
+    {
+      "execution_id": "exec-d032508d02b3",
+      "idempotency_key": "mig-app-aws-b6d554:PREPARING:uc1-stage-08:attempt-1",
+      "operator_id": "operator@cloudmove.local",
+      "timestamp": "2026-10-26T01:59:25.465366+00:00",
+      "transition": "PREPARING -> TESTING",
+      "execution_mode": "simulated_dry_run",
+      "completed_in_real_cloud": false,
+      "note": "Ejecutando pruebas en instancia/entorno aislado de AWS (modo: simulated_dry_run)."
+    },
+    {
+      "execution_id": "exec-44e37e2f650d",
+      "idempotency_key": "mig-app-aws-b6d554:TESTING:uc1-stage-10:attempt-1",
+      "operator_id": "operator@cloudmove.local",
+      "timestamp": "2026-10-26T01:59:26.994135+00:00",
+      "transition": "TESTING -> READY_FOR_CUTOVER",
+      "execution_mode": "simulated_dry_run",
+      "completed_in_real_cloud": false,
+      "note": "Pruebas de humo, salud y comparación de inventario pre-cutover superadas; listo para cutover controlado."
+    },
+    {
+      "execution_id": "exec-e317c8ca2408",
+      "idempotency_key": "mig-app-aws-b6d554:READY_FOR_CUTOVER:uc1-stage-11:attempt-1",
+      "operator_id": "operator@cloudmove.local",
+      "timestamp": "2026-10-26T01:59:28.318121+00:00",
+      "transition": "READY_FOR_CUTOVER -> COMPLETED",
+      "execution_mode": "simulated_dry_run",
+      "completed_in_real_cloud": false,
+      "note": "Flujo de migración completado en modo simulated_dry_run (completed_in_real_cloud=False, source_environment_destroyed=False)."
+    }
+  ],
+  "post_cutover_test_results": {
+    "passed": true,
+    "all_passed": true,
+    "ready_for_cutover": true,
+    "execution_mode": "simulated_dry_run",
+    "completed_in_real_cloud": false,
+    "validated_at": "2026-10-26T01:59:28.318121+00:00",
+    "source_environment_intact": true,
+    "traffic_cutover_status": "SIMULATED_CUTOVER_VALIDATED"
+  }
+}

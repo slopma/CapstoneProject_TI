@@ -26,6 +26,10 @@ AWS_OUTPUT_PATH = _path_from_env(
     "AWS_OUTPUT_PATH",
     PROJECT_ROOT / "generated" / "aws" / "main.tf",
 )
+GCP_OUTPUT_PATH = _path_from_env(
+    "GCP_OUTPUT_PATH",
+    PROJECT_ROOT / "generated" / "gcp" / "main.tf",
+)
 AZURE_OUTPUT_PATH = _path_from_env(
     "AZURE_OUTPUT_PATH",
     PROJECT_ROOT / "generated" / "azure" / "main.tf",

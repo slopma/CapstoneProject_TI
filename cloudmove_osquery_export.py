@@ -90,12 +90,13 @@ def run_query(binary: str, sql: str) -> Tuple[Optional[ list ], Optional[str]]:
 def collect_osquery_inventory(
     require_root: bool = False,
     on_progress: Optional[Callable[[str, int, int], None]] = None,
+    osquery_bin: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Ejecuta las 16 consultas de osquery en el dispositivo local y devuelve el
     documento JSON con esquema `cloudmove.discovery.v1`.
     """
-    binary = shutil.which("osqueryi")
+    binary = osquery_bin or shutil.which("osqueryi") or shutil.which("osqueryi.exe")
     if not binary:
         raise RuntimeError(
             "No se encontró 'osqueryi' en el PATH del sistema. Instala osquery (https://osquery.io/downloads) para escanear este dispositivo."
@@ -474,6 +475,16 @@ def main() -> int:
         help="Exigir ejecución con sudo/root",
     )
     parser.add_argument(
+        "--allow-non-root",
+        action="store_true",
+        help="Permitir ejecución sin privilegios de root/administrador (activo por defecto)",
+    )
+    parser.add_argument(
+        "--osquery-bin",
+        default=None,
+        help="Ruta explícita al ejecutable osqueryi",
+    )
+    parser.add_argument(
         "--analyze",
         action="store_true",
         help="Enviar automáticamente el inventario recolectado al backend de CloudMove y abrir el navegador",
@@ -490,8 +501,9 @@ def main() -> int:
 
     try:
         document = collect_osquery_inventory(
-            require_root=args.require_root,
+            require_root=args.require_root and not args.allow_non_root,
             on_progress=lambda name, idx, total: print(f"[{idx}/{total}] Consultando tabla osquery: {name}..."),
+            osquery_bin=args.osquery_bin,
         )
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

@@ -241,7 +241,7 @@ function DetailPanel({ node, allNodes, edges, onClose, onSelectNode, targetProvi
             <p className="help-text">Traducción dinámica IaC previa para <code>{(targetProvider || "AWS").toUpperCase()}</code>:</p>
             <pre className="code-block">
               <code>{`# HCL Spec para ${node.name} (${node.id})
-resource "${targetProvider === "azure" ? "azurerm_linux_virtual_machine" : "aws_instance"}" "${node.id.replace(/-/g, "_")}" {
+resource "${targetProvider === "gcp" ? "google_compute_instance" : "aws_instance"}" "${node.id.replace(/-/g, "_")}" {
   name        = "${node.name}"
   environment = "${node.environment || "production"}"
   cmir_level  = ${node.level || 8}

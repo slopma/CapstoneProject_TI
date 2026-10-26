@@ -1,0 +1,18 @@
+# VMDK DiskDescriptorFile (CloudMove Lab Fixture)
+version=1
+CID=fffffffe
+parentCID=ffffffff
+createType="monolithicSparse"
+
+# Extent description
+RW 104857600 SPARSE "debian12-erp-prod-disk1.vmdk"
+
+# The Disk Data Base
+#DDB
+ddb.virtualHWVersion = "19"
+ddb.geometry.cylinders = "6527"
+ddb.geometry.heads = "255"
+ddb.geometry.sectors = "63"
+ddb.adapterType = "lsilogic"
+ddb.firmware = "efi"
+ddb.guestOS = "debian12-64"

@@ -1,118 +1,184 @@
-@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap');
-
 :root {
-  /* Calibrated Architectural Palette — Mineral Paper & Tonal Surface Steps (Taste-skill) */
-  --color-bg-base: #f6f7f9;
-  --color-bg-canvas: #edf0f5;
-  --color-bg-surface: #ffffff;
-  --color-bg-surface-hover: #f1f4f9;
-  --color-bg-panel: #ffffff;
+  /* ==========================================================================
+     1. PRIMITIVE & SURFACE TOKENS — "Precision Infrastructure Control Room"
+     ========================================================================== */
+  --color-bg-base: #f4f6fa;
+  --color-bg-canvas: #edf1f7;
+  --color-bg-sidebar: #eef1f6;
   --color-bg-header: #ffffff;
-  --color-bg-sidebar: #f1f3f7;
+  --color-bg-drawer: #ffffff;
+  --color-bg-surface: #ffffff;
+  --color-bg-surface-hover: #f8fafc;
+  --color-bg-subtle: #f8fafc;
+  --color-bg-muted: #f1f5f9;
+  --color-bg-elevated: #ffffff;
+  --color-surface-elevated: #ffffff;
+  --color-surface-hover: #f1f5f9;
+  --color-surface-selected: #eff6ff;
+  --color-primary-light: #eff6ff;
 
-  /* Nested Container Tonal Steps — Separation by subtle tone shift over heavy lines */
-  --color-container-depth-0: rgba(255, 255, 255, 0.84);
-  --color-container-depth-1: rgba(246, 248, 252, 0.92);
-  --color-container-depth-2: rgba(239, 243, 249, 0.95);
-  --color-container-depth-3: rgba(230, 236, 245, 0.82);
+  /* Command Rail (Sidebar) & Code Terminal Surfaces */
+  --color-rail-bg: #0b1120;
+  --color-rail-surface: #131c31;
+  --color-rail-border: #1e293b;
+  --color-rail-text: #e2e8f0;
+  --color-rail-text-muted: #94a3b8;
+  --color-rail-active-bg: #1d4ed8;
+  --color-rail-active-text: #ffffff;
 
-  /* Borders & Interactive Tokens */
-  --color-border-subtle: #e2e7f0;
-  --color-border-medium: #cbd4e1;
-  --color-border-strong: #94a3b8;
-  --color-border-focus: #1d4ed8;
+  --color-terminal-bg: #0f172a;
+  --color-terminal-header: #1e293b;
+  --color-terminal-border: #334155;
+  --color-terminal-text: #f8fafc;
 
-  /* Typography Colors — Full ink primary, calibrated secondary tones (≥4.5:1 contrast) */
-  --color-text-primary: #0f172a;
-  --color-text-secondary: #334155;
-  --color-text-muted: #64748b;
-  --color-text-inverse: #ffffff;
+  /* ==========================================================================
+     2. TYPOGRAPHIC INK & CONTRAST TOKENS (WCAG AA/AAA Verified on Light)
+     ========================================================================== */
+  --color-text-primary: #0f172a;    /* 17.4:1 on white */
+  --color-text-secondary: #334155;  /* 9.8:1 on white */
+  --color-text-muted: #475569;      /* 7.0:1 on white (Replaced low-contrast #64748b) */
+  --color-text-on-brand: #ffffff;
 
-  /* Single Primary Action Accent */
+  /* ==========================================================================
+     3. BRAND & CLOUD PROVIDER ACCENTS (AWS & GCP Only — ADR-001)
+     ========================================================================== */
   --color-primary: #1d4ed8;
   --color-primary-hover: #1e40af;
   --color-primary-subtle: #eff6ff;
   --color-primary-border: #93c5fd;
 
-  /* Edge & Graph Tokens */
-  --color-edge-default: #64748b;
-  --color-edge-hierarchy: #94a3b8;
-  --color-edge-highlight: #1d4ed8;
-  --color-edge-dimmed: #cbd5e1;
-  --color-canvas-dots: #cbd4e1;
+  --color-aws-accent: #c2410c;
+  --color-aws-bg: #fff7ed;
+  --color-aws-border: #fdba74;
 
-  /* Semantic Status Colors */
+  --color-gcp-accent: #1d4ed8;
+  --color-gcp-bg: #eff6ff;
+  --color-gcp-border: #93c5fd;
+
+  --color-onprem-accent: #334155;
+  --color-onprem-bg: #f1f5f9;
+  --color-onprem-border: #cbd5e1;
+
+  /* ==========================================================================
+     4. EPISTEMIC PROVENANCE TOKENS (Observed vs Derived vs Inferred vs Unknown)
+     ========================================================================== */
+  --epistemic-observed-bg: #dcfce7;
+  --epistemic-observed-text: #166534;
+  --epistemic-observed-border: #86efac;
+
+  --epistemic-derived-bg: #dbeafe;
+  --epistemic-derived-text: #1e40af;
+  --epistemic-derived-border: #93c5fd;
+
+  --epistemic-inferred-bg: #fef3c7;
+  --epistemic-inferred-text: #92400e;
+  --epistemic-inferred-border: #f59e0b;
+
+  --epistemic-unknown-bg: #f1f5f9;
+  --epistemic-unknown-text: #334155;
+  --epistemic-unknown-border: #94a3b8;
+
+  /* ==========================================================================
+     5. OPERATIONAL & RISK STATE TOKENS
+     ========================================================================== */
   --color-health-healthy: #15803d;
+  --color-health-healthy-bg: #dcfce7;
+  --color-health-healthy-border: #86efac;
+
   --color-health-warning: #b45309;
+  --color-health-warning-bg: #fef3c7;
+  --color-health-warning-border: #fcd34d;
+
   --color-health-error: #b91c1c;
-  --color-health-info: #0369a1;
+  --color-health-error-bg: #fee2e2;
+  --color-health-error-border: #fca5a5;
 
-  /* Provider Semantic Accents */
-  --color-provider-aws: #b45309;
-  --color-provider-aws-bg: #fffbeb;
-  --color-provider-azure: #0369a1;
-  --color-provider-azure-bg: #f0f9ff;
-  --color-provider-k8s: #1d4ed8;
-  --color-provider-k8s-bg: #eff6ff;
-  --color-provider-onprem: #334155;
-  --color-provider-onprem-bg: #f1f5f9;
+  --color-info: #1d4ed8;
+  --color-info-bg: #eff6ff;
+  --color-info-border: #93c5fd;
 
-  /* Domain Semantic Accents */
-  --color-domain-network: #0369a1;
-  --color-domain-network-bg: #f0f9ff;
-  --color-domain-compute: #1d4ed8;
-  --color-domain-compute-bg: #eff6ff;
-  --color-domain-data: #0f766e;
-  --color-domain-data-bg: #f0fdfa;
-  --color-domain-infra: #334155;
-  --color-domain-infra-bg: #f1f5f9;
+  --color-shared-text: #9a3412;
+  --color-shared-bg: #ffedd5;
+  --color-shared-border: #fb923c;
 
-  /* Typography Fonts & Scale (Hanken Grotesk + system code font for literal <pre>/<code> blocks) */
-  --font-family-sans: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-family-code: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; /* taste-skill-ignore */
+  /* ==========================================================================
+     6. ARCHITECTURE DOMAIN ACCENTS
+     ========================================================================== */
+  --domain-infra-border: #475569;
+  --domain-infra-bg: #f1f5f9;
+  --domain-infra-icon: #334155;
 
-  --font-size-title-page: 22px;
-  --font-size-title-section: 15px;
-  --font-size-node-title: 13px;
-  --font-size-body: 14px;
-  --font-size-label: 12px;
-  --font-size-micro: 11px;
+  --domain-compute-border: #2563eb;
+  --domain-compute-bg: #eff6ff;
+  --domain-compute-icon: #1d4ed8;
 
-  /* Backwards Compatibility Tokens */
-  --font-size-title-app: 15px;
-  --font-size-meta: 12px;
-  --font-size-sm: 12px;
+  --domain-data-border: #059669;
+  --domain-data-bg: #ecfdf5;
+  --domain-data-icon: #047857;
 
-  /* Spacing System */
+  --domain-network-border: #4f46e5;
+  --domain-network-bg: #eef2ff;
+  --domain-network-icon: #4338ca;
+
+  --domain-security-border: #d97706;
+  --domain-security-bg: #fffbeb;
+  --domain-security-icon: #b45309;
+
+  --domain-storage-border: #0284c7;
+  --domain-storage-bg: #f0f9ff;
+  --domain-storage-icon: #0369a1;
+
+  /* ==========================================================================
+     7. BORDERS, SHADOWS, RADII & SPACING SCALE
+     ========================================================================== */
+  --color-border-subtle: #e2e8f0;
+  --color-border-medium: #cbd5e1;
+  --color-border-default: #cbd5e1;
+  --color-border-strong: #94a3b8;
+  --color-border-focus: #1d4ed8;
+  --color-border-selected: #2563eb;
+
   --spacing-2xs: 4px;
   --spacing-xs: 8px;
   --spacing-sm: 12px;
   --spacing-md: 16px;
   --spacing-lg: 24px;
   --spacing-xl: 32px;
+  --spacing-2xl: 48px;
 
-  /* Border Radius (6px controls, 12px leaf cards, 16px boundary containers) */
+  --radius-xs: 4px;
   --radius-sm: 6px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
 
-  /* Shadows & Elevation (Offset + soft blur; zero-shadow at rest on cards) */
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-md: 0 8px 20px -6px rgba(15, 23, 42, 0.08), 0 2px 6px -1px rgba(15, 23, 42, 0.04);
-  --shadow-lg: 0 16px 32px -8px rgba(15, 23, 42, 0.12), 0 4px 12px -2px rgba(15, 23, 42, 0.05);
-  --shadow-selected: 0 10px 24px -6px rgba(29, 78, 216, 0.16), 0 2px 6px -1px rgba(15, 23, 42, 0.05);
+  /* ==========================================================================
+     8. TYPOGRAPHY & MOTION TOKENS
+     ========================================================================== */
+  --font-display: "Plus Jakarta Sans", "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --font-family-sans: var(--font-sans);
+  --font-family-mono: var(--font-mono);
 
-  /* Emil Kowalski Physical Easing Curves & Sub-300ms Durations */
-  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
-  --ease-spring: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
-  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --font-size-title-section: 15px;
+  --font-size-node-title: 13px;
+  --font-size-body: 13px;
+  --font-size-meta: 11px;
 
-  --duration-press: 120ms;
-  --duration-fast: 170ms;
-  --duration-normal: 230ms;
+  --line-height-tight: 1.25;
+  --line-height-body: 1.5;
 
-  /* Explicit transition timing tokens */
-  --transition-fast: 170ms cubic-bezier(0.23, 1, 0.32, 1);
-  --transition-normal: 230ms cubic-bezier(0.16, 1, 0.3, 1);
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 12px -2px rgba(15, 23, 42, 0.08), 0 2px 4px -2px rgba(15, 23, 42, 0.04);
+  --shadow-lg: 0 12px 28px -6px rgba(15, 23, 42, 0.14), 0 4px 10px -4px rgba(15, 23, 42, 0.06);
+  --shadow-focus: 0 0 0 3px rgba(29, 78, 216, 0.28);
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --duration-press: 90ms;
+  --duration-fast: 150ms;
+  --duration-normal: 220ms;
+  --duration-slow: 320ms;
 }

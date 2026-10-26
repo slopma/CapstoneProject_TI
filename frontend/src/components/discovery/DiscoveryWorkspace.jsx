@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { getApiBase } from "../../utils/apiClient";
 import DiscoveryDiagramCanvas from "./DiscoveryDiagramCanvas";
+import CloudMoveDiscovery from "./CloudMoveDiscovery";
+import DataCenterCampaignPanel from "./DataCenterCampaignPanel";
 import {
   SummarySection,
   HardwareSection,
@@ -37,6 +40,16 @@ const SECTION_NAV = [
       { id: "aws-terraform-traceability", label: "3. Trazabilidad JSON → HCL" },
       { id: "aws-terraform-files", label: "4. Código Terraform (.tf)" },
       { id: "aws-archify-explanations", label: "5. Justificación técnica" },
+    ],
+  },
+  {
+    id: "datacenter-campaigns",
+    label: "I. Campañas Data Center",
+    subtitle: "Descubrimiento masivo 1-clic",
+    subsections: [
+      { id: "dc-sites-collectors", label: "Colectores por sitio y CIDR" },
+      { id: "dc-nodes-matrix", label: "Matriz de nodos y 8 controles" },
+      { id: "dc-task-queues", label: "Colas de tareas e idempotencia" },
     ],
   },
   {
@@ -110,18 +123,18 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
   const [importing, setImporting] = useState(false);
   const [errorBanner, setErrorBanner] = useState("");
   const [statusBanner, setStatusBanner] = useState("");
-  const [resolvedApiBase, setResolvedApiBase] = useState(apiUrl || "http://localhost:8000");
+  const [resolvedApiBase, setResolvedApiBase] = useState(apiUrl || getApiBase() || "");
   const fileInputRef = useRef(null);
 
   const fetchWithFallback = useCallback(
     async (path, options = {}) => {
       const candidates = Array.from(
         new Set([
-          "http://localhost:8000",
-          "http://localhost:8001",
-          resolvedApiBase,
           apiUrl,
-        ].filter(Boolean))
+          resolvedApiBase,
+          getApiBase(),
+          "",
+        ].filter((c) => c !== undefined && c !== null))
       );
 
       let lastError = null;
@@ -129,7 +142,9 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
 
       for (const base of candidates) {
         try {
-          const res = await fetch(`${base}${path}`, options);
+          const cleanPath = path.startsWith("/") ? path : `/${path}`;
+          const targetUrl = base ? `${base.replace(/\/+$/, "")}${cleanPath}` : cleanPath;
+          const res = await fetch(targetUrl, options);
           // Vite proxy returns 502/504 or 500 empty when target is ECONNREFUSED
           if (res.status === 502 || res.status === 504) {
             lastResponse = res;
@@ -346,11 +361,29 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
           <button
             type="button"
             className="tech-btn primary"
+            onClick={() => setShowCollectorModal((v) => !v)}
+            title="Detectar sistema operativo del PC, preparar/instalar osquery automáticamente, probar el binario y escanear el equipo"
+          >
+            {showCollectorModal ? "Ocultar Descubrimiento de Equipo" : "Descubrir Equipo (Instalar osquery + Escanear)"}
+          </button>
+
+          <button
+            type="button"
+            className="toolbar-btn"
+            onClick={() => setActiveSection("datacenter-campaigns")}
+            title="Abrir tablero de Descubrimiento Completo del Data Center (Campañas masivas en 4 modos)"
+          >
+            Campaña Data Center (Masivo)
+          </button>
+
+          <button
+            type="button"
+            className="toolbar-btn"
             disabled={importing}
             onClick={handleCollectLiveDevice}
-            title="Ejecutar cloudmove_osquery_export.py directamente en este equipo y analizar su infraestructura"
+            title="Ejecutar escaneo rápido de este dispositivo"
           >
-            {scanningDevice ? "Escaneando dispositivo..." : "Escanear Este Dispositivo (osquery en vivo)"}
+            {scanningDevice ? "Escaneando..." : "Escaneo Rápido"}
           </button>
 
           <button
@@ -370,15 +403,6 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
             title="Cargar y analizar docs/cloudmove-osquery-inventory.json"
           >
             Recargar inventario local (Kali Linux)
-          </button>
-
-          <button
-            type="button"
-            className="toolbar-btn"
-            onClick={() => setShowCollectorModal((v) => !v)}
-            title="Ejecutar cloudmove_osquery_export.py con interfaz propia en cualquier dispositivo"
-          >
-            {showCollectorModal ? "Ocultar Agente (.py)" : "Agente Recolector (.py)"}
           </button>
 
           {sessionsList.length > 0 && (
@@ -451,46 +475,17 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
       </header>
 
       {showCollectorModal && (
-        <div
-          className="disc-banner"
-          style={{
-            background: "rgba(15, 23, 42, 0.96)",
-            borderBottom: "1px solid rgba(56, 189, 248, 0.35)",
-            padding: "14px 20px",
-            display: "flex",
-            flexWrap: "wrap",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "12px",
+        <CloudMoveDiscovery
+          apiBaseUrl={resolvedApiBase}
+          onInventoryDiscovered={async (sessionPayload) => {
+            setSessionData(sessionPayload);
+            await fetchSessionsList();
+            setStatusBanner(
+              `Equipo '${sessionPayload.hostname}' descubierto y analizado automáticamente (Sesión: ${sessionPayload.session_id}).`
+            );
           }}
-        >
-          <div style={{ maxWidth: "78%" }}>
-            <strong style={{ color: "#38bdf8", display: "block", marginBottom: "4px" }}>
-              Agente Autónomo con Interfaz Web Propia (`cloudmove_osquery_export.py`)
-            </strong>
-            <span style={{ fontSize: "0.85rem", color: "#cbd5e1" }}>
-              Puede escanear este equipo con 1 clic usando{" "}
-              <strong>"Escanear Este Dispositivo"</strong> arriba, o abrir la interfaz gráfica independiente del
-              script ejecutando:{" "}
-              <code style={{ background: "#090d16", padding: "2px 6px", borderRadius: "4px", color: "#fde047" }}>
-                python3 cloudmove_osquery_export.py --ui
-              </code>{" "}
-              (abre <code>http://127.0.0.1:8765</code>) o{" "}
-              <code style={{ background: "#090d16", padding: "2px 6px", borderRadius: "4px", color: "#86efac" }}>
-                python3 cloudmove_osquery_export.py --analyze
-              </code>{" "}
-              para recolectar y enviar automáticamente el inventario a CloudMove.
-            </span>
-          </div>
-          <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-            <button type="button" className="tech-btn primary" onClick={handleDownloadCollectorScript}>
-              Descargar cloudmove_osquery_export.py
-            </button>
-            <button type="button" className="toolbar-btn" onClick={() => setShowCollectorModal(false)}>
-              Cerrar
-            </button>
-          </div>
-        </div>
+          onClose={() => setShowCollectorModal(false)}
+        />
       )}
 
       {errorBanner && (
@@ -603,6 +598,9 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
             )}
             {activeSection === "aws-archify" && (
               <AwsSuggestedDiagramSection data={sessionData} apiUrl={resolvedApiBase} />
+            )}
+            {activeSection === "datacenter-campaigns" && (
+              <DataCenterCampaignPanel apiBaseUrl={resolvedApiBase} />
             )}
             {activeSection === "summary" && (
               <SummarySection

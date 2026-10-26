@@ -1,29 +1,39 @@
 import React from "react";
 
 function MigrationPanel({ node, targetProvider }) {
+  const provider = (targetProvider || "aws").toLowerCase() === "gcp" ? "gcp" : "aws";
+  const epistemic = node.epistemic_state || node.metadata?.data_state || "observed";
+  const confidence = typeof node.confidence === "number" ? `${Math.round(node.confidence * 100)}%` : "100%";
+
   return (
     <div className="inspector-tab-content">
       <div className="tech-box">
-        <h4 className="tech-box-title">Granular Migration Scope Readiness</h4>
+        <h4 className="tech-box-title">Preparación de Migración CMIR v2.1</h4>
         <div className="prop-row">
-          <span className="prop-key">Target Ecosystem</span>
-          <span className="prop-val highlight">{(targetProvider || "AWS").toUpperCase()}</span>
+          <span className="prop-key">Proveedor Destino</span>
+          <span className="prop-val highlight">{provider.toUpperCase()}</span>
         </div>
         <div className="prop-row">
-          <span className="prop-key">CMIR Model Neutrality</span>
-          <span className="prop-val">100% Compatible</span>
+          <span className="prop-key">Estado de Evidencia</span>
+          <span className="prop-val mono">{epistemic.toUpperCase()} ({confidence})</span>
         </div>
         <div className="prop-row">
-          <span className="prop-key">Target Adapter</span>
+          <span className="prop-key">ID Canónico</span>
+          <span className="prop-val mono">{node.canonical_id || node.id}</span>
+        </div>
+        <div className="prop-row">
+          <span className="prop-key">Adaptador Destino</span>
           <span className="prop-val mono">
-            {targetProvider === "azure" ? "AzureAdapter (azurerm)" : targetProvider === "kubernetes" ? "KubernetesAdapter (YAML)" : "AWSAdapter (hashicorp/aws)"}
+            {provider === "gcp" ? "GCPAdapter (hashicorp/google)" : "AWSAdapter (hashicorp/aws)"}
           </span>
         </div>
 
         {node.is_shared && (
           <div className="tech-alert warning">
-            <strong>Shared Dependency Detected:</strong>
-            <p>This component is referenced by external services outside the current scope. Connectivity rules will be preserved or duplicated in the target IaC.</p>
+            <strong>Dependencia Compartida Protegida:</strong>
+            <p>
+              Este componente es utilizado por múltiples cargas fuera de la selección actual. No se migrará automáticamente sin validación explícita.
+            </p>
           </div>
         )}
       </div>

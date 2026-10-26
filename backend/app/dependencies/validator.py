@@ -28,7 +28,24 @@ def validate_migration_subgraph(
     # Check for shared resources warning
     shared_deps = dependency_analysis.get("shared_dependencies", [])
     if shared_deps:
-        warnings.append(f"Atención: Los siguientes recursos son compartidos con otros sistemas no seleccionados: {', '.join(shared_deps)}. Verifique si debe clonarlos o mantener la conexión existente.")
+        warnings.append(
+            f"Atención: Los siguientes recursos son compartidos con otros sistemas no seleccionados: {', '.join(shared_deps)}. "
+            "No deben migrarse ni apagarse automáticamente sin validación previa."
+        )
+
+    # Check for inferred dependencies that have not been confirmed
+    inferred_deps = dependency_analysis.get("inferred_dependencies", [])
+    if inferred_deps:
+        warnings.append(
+            f"Se detectaron dependencias inferidas (no confirmadas como hechos): {', '.join(inferred_deps)}. "
+            "Valide su evidencia antes del cutover."
+        )
+
+    unknown_deps = dependency_analysis.get("unknown_dependencies", [])
+    if unknown_deps:
+        warnings.append(
+            f"Existen dependencias con estado desconocido o externo: {', '.join(unknown_deps)}."
+        )
 
     # Check for target provider compatibility
     for res in selected_cmir.resources:
@@ -43,6 +60,8 @@ def validate_migration_subgraph(
         "errors": errors,
         "warnings": warnings,
         "missing_requirements": missing_requirements,
+        "inferred_dependencies": inferred_deps,
+        "shared_dependency_policies": dependency_analysis.get("shared_dependency_policies", {}),
         "selected_count": len(selected_cmir.resources),
         "target_provider": target_provider,
     }
