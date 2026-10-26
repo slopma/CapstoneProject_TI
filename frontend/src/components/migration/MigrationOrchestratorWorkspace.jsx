@@ -104,7 +104,7 @@ export default function MigrationOrchestratorWorkspace({
   const [showAdvancedGithub, setShowAdvancedGithub] = useState(false);
 
   // Case 2 specific options
-  const [uc2SourceMode, setUc2SourceMode] = useState("live_capture"); // "live_capture" | "file_path"
+  const [uc2SourceMode, setUc2SourceMode] = useState("file_path"); // "file_path" | "live_capture"
   const [uc2OutputFormat, setUc2OutputFormat] = useState("QCOW2");
   const [uc2TargetHost, setUc2TargetHost] = useState("local_host");
   const [imagePath, setImagePath] = useState("");
@@ -303,12 +303,6 @@ export default function MigrationOrchestratorWorkspace({
       setLoading(false);
     }
   };
-
-  useEffect(() => {
-    if (newUseCase === "vm_image" && uc2SourceMode === "live_capture" && !hostDevicesData && !queryingDevices) {
-      handleQueryLiveDevices();
-    }
-  }, [newUseCase, uc2SourceMode, hostDevicesData, queryingDevices, handleQueryLiveDevices]);
 
   // Pre-inspection handler for Case 1 (Steps 1–4 before creating or executing plan)
   const handleInspectUseCase1 = async () => {
@@ -1163,15 +1157,35 @@ export default function MigrationOrchestratorWorkspace({
                         </p>
                       </div>
 
-                      <button
-                        type="button"
-                        className="cm-btn secondary sm"
-                        onClick={() => handleQueryLiveDevices(true)}
-                        disabled={queryingDevices}
-                        style={{ whiteSpace: "nowrap" }}
-                      >
-                        {queryingDevices ? "Consultando lsblk..." : "Consultar Dispositivos en Caliente"}
-                      </button>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <button
+                          type="button"
+                          className="cm-btn secondary sm"
+                          onClick={() => handleQueryLiveDevices(true)}
+                          disabled={queryingDevices}
+                          style={{ whiteSpace: "nowrap" }}
+                        >
+                          {queryingDevices
+                            ? "Consultando lsblk..."
+                            : hostDevicesData
+                            ? "Re-consultar Dispositivos"
+                            : "Consultar Dispositivos del Equipo en Vivo"}
+                        </button>
+                        {hostDevicesData && (
+                          <button
+                            type="button"
+                            className="cm-btn sm"
+                            onClick={() => {
+                              setHostDevicesData(null);
+                              setSelectedStorageDevice("");
+                            }}
+                            style={{ fontSize: 11, padding: "4px 8px" }}
+                            title="Limpiar datos detectados del host"
+                          >
+                            Limpiar Consulta
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {hostDevicesData?.host && (
@@ -1283,8 +1297,10 @@ export default function MigrationOrchestratorWorkspace({
                         })}
                       </div>
                     ) : (
-                      <div style={{ fontSize: 12, color: "#64748b", fontStyle: "italic" }}>
-                        {queryingDevices ? "Ejecutando consulta de hardware en tiempo real..." : "Haz clic en 'Consultar Dispositivos en Caliente' para escanear el subsistema de almacenamiento con lsblk."}
+                      <div style={{ fontSize: 12.5, color: "#64748b", padding: "16px 12px", textAlign: "center", backgroundColor: "#f8fafc", borderRadius: 6, border: "1px dashed #cbd5e1" }}>
+                        {queryingDevices
+                          ? "Ejecutando consulta de hardware en tiempo real con lsblk..."
+                          : "Sin datos precargados. Haz clic en 'Consultar Dispositivos del Equipo en Vivo' para escanear el subsistema de almacenamiento de este equipo en tiempo real."}
                       </div>
                     )}
                   </div>
