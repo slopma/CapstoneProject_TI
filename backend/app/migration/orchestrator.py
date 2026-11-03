@@ -399,7 +399,13 @@ class MigrationOrchestrator:
                     github_token=src_cfg.get("github_token"),
                 )
                 deployment_mode = src_cfg.get("deployment_mode", "vm_rehost")
-                cmir_obj = build_application_cmir(app_disc, target_provider=provider, deployment_mode=deployment_mode)
+                user_decisions = src_cfg.get("user_decisions")
+                cmir_obj = build_application_cmir(
+                    app_disc,
+                    target_provider=provider,
+                    deployment_mode=deployment_mode,
+                    user_decisions=user_decisions,
+                )
                 viability = evaluate_app_migration_viability(
                     app_disc, cmir_obj, target_provider=provider, deployment_mode=deployment_mode
                 )
@@ -1054,6 +1060,72 @@ class MigrationOrchestrator:
             raise ValueError("No se puede cancelar una migración que ya está en estado COMPLETED.")
         self._transition(job, MigrationState.CANCELLED, reason)
         return self._save_job(job, expected_version=expected_version)
+
+    def update_architecture_decisions(
+        self,
+        migration_id: str,
+        user_decisions: Dict[str, str],
+        actor_id: str = "architect@cloudmove.local",
+    ) -> Dict[str, Any]:
+        """
+        Update user transformation decisions for a Case 1 (`app_source`) migration job,
+        rebuild the CMIR v2.1 graph, re-evaluate viability, and regenerate all Terraform IaC
+        and deployment artifacts in real time.
+        """
+        job = self.get_migration(migration_id)
+        if job.get("use_case") != "app_source":
+            raise ValueError("La personalización de decisiones GitHub -> Nube aplica al Caso 1 (app_source).")
+
+        provider = job["target_provider"]
+        src_cfg = dict(job.get("source_config") or {})
+        merged_decisions = dict(src_cfg.get("user_decisions") or {})
+        merged_decisions.update(user_decisions or {})
+        src_cfg["user_decisions"] = merged_decisions
+        job["source_config"] = src_cfg
+
+        app_disc = dict(job.get("source_environment") or {})
+        deployment_mode = src_cfg.get("deployment_mode", "vm_rehost")
+
+        cmir_obj = build_application_cmir(
+            app_disc,
+            target_provider=provider,
+            deployment_mode=deployment_mode,
+            user_decisions=merged_decisions,
+        )
+        viability = evaluate_app_migration_viability(
+            app_disc, cmir_obj, target_provider=provider, deployment_mode=deployment_mode
+        )
+        job["source_environment"] = app_disc
+        job["cmir"] = cmir_obj.model_dump()
+        job["dependency_analysis"] = viability["dependency_analysis"]
+        job["compatibility_assessment"] = viability
+
+        artifacts = generate_app_migration_artifacts(app_disc, cmir_obj, target_provider=provider)
+        from app.migration.deployment_guide_generator import generate_deployment_guide
+
+        guide_md = generate_deployment_guide(
+            use_case="app_source",
+            target_provider=provider,
+            job_name=job.get("name", "migrated-workload"),
+            migration_id=migration_id,
+            source_environment=app_disc,
+            artifacts_files=artifacts.get("files", {}) or {},
+            target_config=job.get("target_config", {}) or {},
+        )
+        artifacts["files"]["DEPLOYMENT_INSTRUCTIONS.md"] = guide_md
+        artifacts["deployment_guide"] = guide_md
+        job["deployment_guide"] = guide_md
+        job["generated_artifacts"] = artifacts
+        job["validation_results"] = artifacts.get("validation", {})
+        job["updated_at"] = _utc_now()
+        job["events"].append({
+            "event_id": f"evt-{uuid.uuid4().hex[:8]}",
+            "timestamp": job["updated_at"],
+            "from_state": job["state"],
+            "to_state": job["state"],
+            "reason": f"Decisiones de transformación GitHub -> {provider.upper()} actualizadas y Terraform regenerado ({len(merged_decisions)} elecciones).",
+        })
+        return self._save_job(job, actor_id=actor_id)
 
     def get_migration(self, migration_id: str) -> Dict[str, Any]:
         self._ensure_seeded()

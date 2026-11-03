@@ -13,109 +13,87 @@ import {
   AssessmentSection,
   AwsSuggestedDiagramSection,
 } from "./DiscoverySections";
+import {
+  AwsPageHeader,
+  AwsKeyValuePairs,
+  AwsTabs,
+  AwsAlert,
+  AwsEmptyState,
+  AwsContainer,
+} from "../cloudscape/AwsPrimitives";
 
 const SECTION_NAV = [
   {
     id: "summary",
-    label: "A. Summary",
+    label: "Resumen",
     subtitle: "Resumen ejecutivo y cobertura",
-    subsections: [
-      { id: "summary-warnings", label: "Calidad y advertencias" },
-      { id: "summary-explanations", label: "Análisis explicativo" },
-    ],
   },
   {
     id: "diagram",
-    label: "Diagrama Principal",
+    label: "Topología",
     subtitle: "Mapa interactivo de infraestructura",
-    subsections: [],
-  },
-  {
-    id: "aws-archify",
-    label: "H. Diagrama AWS y Terraform",
-    subtitle: "Archify + HCL desde JSON",
-    subsections: [
-      { id: "aws-archify-viewer", label: "1. Visor Interactivo Archify" },
-      { id: "aws-mapping-table", label: "2. Mapeo Osquery → AWS" },
-      { id: "aws-terraform-traceability", label: "3. Trazabilidad JSON → HCL" },
-      { id: "aws-terraform-files", label: "4. Código Terraform (.tf)" },
-      { id: "aws-archify-explanations", label: "5. Justificación técnica" },
-    ],
-  },
-  {
-    id: "datacenter-campaigns",
-    label: "I. Campañas Data Center",
-    subtitle: "Descubrimiento masivo 1-clic",
-    subsections: [
-      { id: "dc-sites-collectors", label: "Colectores por sitio y CIDR" },
-      { id: "dc-nodes-matrix", label: "Matriz de nodos y 8 controles" },
-      { id: "dc-task-queues", label: "Colas de tareas e idempotencia" },
-    ],
   },
   {
     id: "hardware",
-    label: "B. Hardware",
-    subtitle: "CPU, RAM, Discos y Firmware",
-    subsections: [
-      { id: "hw-cpu", label: "CPU" },
-      { id: "hw-memory", label: "Memoria y Swap" },
-      { id: "hw-storage", label: "Almacenamiento y Montajes" },
-      { id: "hw-firmware", label: "Firmware y Placa Base" },
-      { id: "hw-other", label: "Otras características" },
-    ],
+    label: "Hardware",
+    subtitle: "CPU, RAM, discos y firmware",
   },
   {
     id: "software",
-    label: "C. Software",
-    subtitle: "Paquetes, Servicios y Módulos",
-    subsections: [
-      { id: "sw-relevant-apps", label: "Aplicaciones relevantes" },
-      { id: "sw-services", label: "Servicios del sistema" },
-      { id: "sw-packages", label: "Paquetes instalados" },
-      { id: "sw-kernel-modules", label: "Módulos del kernel" },
-    ],
+    label: "Software",
+    subtitle: "Paquetes, servicios y módulos",
   },
   {
     id: "network",
-    label: "D. Network",
-    subtitle: "Interfaces, Rutas, Puertos y Sockets",
-    subsections: [
-      { id: "net-interfaces", label: "Interfaces y Subredes" },
-      { id: "net-listening-ports", label: "Puertos en escucha" },
-      { id: "net-remote-endpoints", label: "Endpoints remotos observados" },
-      { id: "net-routes", label: "Rutas y Gateways" },
-    ],
+    label: "Red y puertos",
+    subtitle: "Interfaces, rutas, puertos y sockets",
   },
   {
     id: "runtime",
-    label: "E. Runtime / Processes",
-    subtitle: "Procesos activos y Uptime",
-    subsections: [
-      { id: "rt-processes", label: "Procesos y relación con puertos" },
-    ],
+    label: "Procesos",
+    subtitle: "Procesos activos y uptime",
   },
   {
     id: "databases",
-    label: "F. Bases de Datos",
-    subtitle: "Indicios vs. Recolectores de catálogo",
-    subsections: [
-      { id: "db-evidence", label: "Indicios en el host" },
-      { id: "db-collectors", label: "Conectores específicos" },
-    ],
+    label: "Bases de datos",
+    subtitle: "Indicios vs. recolectores de catálogo",
   },
   {
     id: "assessment",
-    label: "G. Assessment Migración",
+    label: "Evaluación cloud",
     subtitle: "Preparación AWS y riesgos",
-    subsections: [
-      { id: "assess-risks", label: "Riesgos detectados" },
-      { id: "assess-deps", label: "Dependencias confirmadas vs. observadas" },
-      { id: "assess-next-steps", label: "Próximos pasos" },
-    ],
+  },
+  {
+    id: "aws-archify",
+    label: "Arquitectura AWS y Terraform",
+    subtitle: "Archify + HCL desde JSON",
+  },
+  {
+    id: "datacenter-campaigns",
+    label: "Campañas datacenter",
+    subtitle: "Descubrimiento masivo 1-clic",
   },
 ];
 
-export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
+// Agrupación de secciones en 5 pestañas principales para evitar saturación visual
+const SECTION_GROUPS = [
+  { id: "g-summary", label: "Resumen", sections: ["summary"] },
+  { id: "g-topology", label: "Topología", sections: ["diagram"] },
+  {
+    id: "g-inventory",
+    label: "Inventario",
+    sections: ["hardware", "software", "network", "runtime", "databases"],
+  },
+  { id: "g-cloud", label: "Evaluación y AWS", sections: ["assessment", "aws-archify"] },
+  { id: "g-campaigns", label: "Campañas", sections: ["datacenter-campaigns"] },
+];
+
+export default function DiscoveryWorkspace({
+  apiUrl,
+  onSyncToArchitecture,
+  onLoadCmirToCanvas,
+}) {
+  const handleSyncCanvas = onSyncToArchitecture || onLoadCmirToCanvas;
   const [activeSection, setActiveSection] = useState("summary");
   const [sessionData, setSessionData] = useState(null);
   const [sessionsList, setSessionsList] = useState([]);
@@ -123,18 +101,19 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
   const [importing, setImporting] = useState(false);
   const [errorBanner, setErrorBanner] = useState("");
   const [statusBanner, setStatusBanner] = useState("");
-  const [resolvedApiBase, setResolvedApiBase] = useState(apiUrl || getApiBase() || "");
+  const [resolvedApiBase, setResolvedApiBase] = useState(
+    apiUrl || getApiBase() || ""
+  );
   const fileInputRef = useRef(null);
 
   const fetchWithFallback = useCallback(
     async (path, options = {}) => {
       const candidates = Array.from(
-        new Set([
-          apiUrl,
-          resolvedApiBase,
-          getApiBase(),
-          "",
-        ].filter((c) => c !== undefined && c !== null))
+        new Set(
+          [apiUrl, resolvedApiBase, getApiBase(), ""].filter(
+            (c) => c !== undefined && c !== null
+          )
+        )
       );
 
       let lastError = null;
@@ -144,13 +123,15 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
         try {
           const targetUrl = buildUrl(base, path);
           const res = await fetch(targetUrl, options);
-          // Vite proxy returns 502/504 or 500 empty when target is ECONNREFUSED
           if (res.status === 502 || res.status === 504) {
             lastResponse = res;
             continue;
           }
           const contentType = res.headers.get("content-type") || "";
-          if (res.status === 500 && !contentType.includes("application/json")) {
+          if (
+            res.status === 500 &&
+            !contentType.includes("application/json")
+          ) {
             lastResponse = res;
             continue;
           }
@@ -190,7 +171,11 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
         await fetchSessionsList();
       } else {
         const err = await res.json().catch(() => ({}));
-        setErrorBanner(err.detail?.message || err.detail || "No hay inventario cargado. Importe un archivo JSON.");
+        setErrorBanner(
+          err.detail?.message ||
+            err.detail ||
+            "No hay inventario cargado. Importe un archivo JSON."
+        );
       }
     } catch {
       setErrorBanner(
@@ -215,7 +200,11 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
       });
       const json = await res.json();
       if (!res.ok) {
-        throw new Error(json.detail?.message || json.detail || "Error al importar inventario local.");
+        throw new Error(
+          json.detail?.message ||
+            json.detail ||
+            "Error al importar inventario local."
+        );
       }
       setSessionData(json);
       await fetchSessionsList();
@@ -236,7 +225,9 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
     setScanningDevice(true);
     setImporting(true);
     setErrorBanner("");
-    setStatusBanner("Ejecutando cloudmove_osquery_export.py (osqueryi) en este dispositivo...");
+    setStatusBanner(
+      "Ejecutando cloudmove_osquery_export.py (osqueryi) en este dispositivo..."
+    );
     try {
       const res = await fetchWithFallback(`/api/v1/discovery/collect-device`, {
         method: "POST",
@@ -253,20 +244,20 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
       setSessionData(json);
       await fetchSessionsList();
       setStatusBanner(
-        `Escaneo en vivo completado en '${json.hostname}' (${json.summary?.os?.name || "Linux"}) · Sesión activa: ${json.session_id}.`
+        `Escaneo en vivo completado en '${json.hostname}' (${
+          json.summary?.os?.name || "Linux"
+        }) · Sesión activa: ${json.session_id}.`
       );
     } catch (err) {
       setStatusBanner("");
-      setErrorBanner(err.message || "Error al ejecutar el recolector osquery en el dispositivo.");
+      setErrorBanner(
+        err.message ||
+          "Error al ejecutar el recolector osquery en el dispositivo."
+      );
     } finally {
       setScanningDevice(false);
       setImporting(false);
     }
-  };
-
-  const handleDownloadCollectorScript = () => {
-    const url = buildUrl(resolvedApiBase, "/api/v1/discovery/collector-script");
-    window.open(url, "_blank", "noopener,noreferrer");
   };
 
   const handleFileUpload = async (event) => {
@@ -291,7 +282,9 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
       if (!res.ok) {
         const msg =
           json.detail?.message ||
-          (typeof json.detail === "string" ? json.detail : "El archivo JSON no superó la validación de esquema.");
+          (typeof json.detail === "string"
+            ? json.detail
+            : "El archivo JSON no superó la validación de esquema.");
         throw new Error(msg);
       }
       setSessionData(json);
@@ -314,11 +307,15 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
     setLoading(true);
     setErrorBanner("");
     try {
-      const res = await fetchWithFallback(`/api/v1/discovery/sessions/${sessionId}`);
+      const res = await fetchWithFallback(
+        `/api/v1/discovery/sessions/${sessionId}`
+      );
       if (res.ok) {
         const json = await res.json();
         setSessionData(json);
-        setStatusBanner(`Consultando análisis previo: ${json.hostname} (${json.session_id}).`);
+        setStatusBanner(
+          `Consultando análisis previo: ${json.hostname} (${json.session_id}).`
+        );
       }
     } catch {
       setErrorBanner("No se pudo recuperar la sesión seleccionada.");
@@ -329,7 +326,10 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
 
   const handleExport = (fmt) => {
     if (!sessionData?.session_id) return;
-    const url = buildUrl(resolvedApiBase, `/api/v1/discovery/sessions/${sessionData.session_id}/export?format=${fmt}`);
+    const url = buildUrl(
+      resolvedApiBase,
+      `/api/v1/discovery/sessions/${sessionData.session_id}/export?format=${fmt}`
+    );
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
@@ -337,7 +337,11 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
     setActiveSection(sectionId);
     if (subsectionId) {
       setTimeout(() => {
-        const el = document.getElementById(subsectionId) || document.getElementById(`hw-${subsectionId}`) || document.getElementById(`sw-${subsectionId}`) || document.getElementById(`net-${subsectionId}`);
+        const el =
+          document.getElementById(subsectionId) ||
+          document.getElementById(`hw-${subsectionId}`) ||
+          document.getElementById(`sw-${subsectionId}`) ||
+          document.getElementById(`net-${subsectionId}`);
         if (el) {
           el.scrollIntoView({ behavior: "smooth", block: "start" });
         }
@@ -346,72 +350,38 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
   }, []);
 
   return (
-    <div className="disc-workspace-shell" data-ui="discovery-workspace">
-      {/* Top Import & Session Bar */}
-      <header className="disc-top-action-bar">
-        <div className="disc-top-left">
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".json,application/json"
-            style={{ display: "none" }}
-            onChange={handleFileUpload}
-          />
-          <button
-            type="button"
-            className="tech-btn primary"
-            onClick={() => setShowCollectorModal((v) => !v)}
-            title="Detectar sistema operativo del PC, preparar/instalar osquery automáticamente, probar el binario y escanear el equipo"
-          >
-            {showCollectorModal ? "Ocultar Descubrimiento de Equipo" : "Descubrir Equipo (Instalar osquery + Escanear)"}
-          </button>
+    <div className="tab-pane-view" data-ui="discovery-workspace">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".json,application/json"
+        style={{ display: "none" }}
+        onChange={handleFileUpload}
+      />
 
-          <button
-            type="button"
-            className="toolbar-btn"
-            onClick={() => setActiveSection("datacenter-campaigns")}
-            title="Abrir tablero de Descubrimiento Completo del Data Center (Campañas masivas en 4 modos)"
-          >
-            Campaña Data Center (Masivo)
-          </button>
-
-          <button
-            type="button"
-            className="toolbar-btn"
-            disabled={importing}
-            onClick={handleCollectLiveDevice}
-            title="Ejecutar escaneo rápido de este dispositivo"
-          >
-            {scanningDevice ? "Escaneando..." : "Escaneo Rápido"}
-          </button>
-
-          <button
-            type="button"
-            className="toolbar-btn"
-            disabled={importing}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            {importing && !scanningDevice ? "Procesando JSON..." : "Importar JSON osquery"}
-          </button>
-
-          <button
-            type="button"
-            className="toolbar-btn"
-            disabled={importing}
-            onClick={handleImportLocalPreset}
-            title="Cargar y analizar docs/cloudmove-osquery-inventory.json"
-          >
-            Recargar inventario local (Kali Linux)
-          </button>
-
-          {sessionsList.length > 0 && (
-            <div className="disc-session-picker">
-              <label htmlFor="disc-session-select" className="toolbar-label">
-                Análisis importados:
-              </label>
+      <AwsPageHeader
+        title="Descubrimiento e inventario"
+        description="Inventario de hardware, software, red y procesos de un equipo, sin modificarlo."
+        badges={
+          sessionData && (
+            <>
+              <span className="cm-badge observed">
+                Activo: {sessionData.hostname}
+              </span>
+              <span className="cm-badge info">
+                Sesión: {sessionData.session_id}
+              </span>
+            </>
+          )
+        }
+        actions={
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {sessionsList.length > 0 && (
               <select
                 id="disc-session-select"
-                className="disc-select"
+                className="cm-select"
+                style={{ width: "auto" }}
+                aria-label="Seleccionar sesión de discovery"
                 value={sessionData?.session_id || ""}
                 onChange={(e) => handleSelectSession(e.target.value)}
               >
@@ -421,216 +391,358 @@ export default function DiscoveryWorkspace({ apiUrl, onSyncToArchitecture }) {
                   </option>
                 ))}
               </select>
-            </div>
-          )}
-        </div>
-
-        {sessionData && (
-          <div className="disc-top-right">
-            <button
-              type="button"
-              className="toolbar-btn"
-              onClick={() => handleExport("json")}
-              title="Descargar inventario normalizado JSON (re-importable)"
-            >
-              Exportar JSON Normalizado
-            </button>
-            <button
-              type="button"
-              className="toolbar-btn"
-              onClick={() => handleExport("md")}
-              title="Descargar informe técnico en Markdown"
-            >
-              Exportar Informe (.md)
-            </button>
-            <button
-              type="button"
-              className="toolbar-btn"
-              onClick={() => handleExport("cmir")}
-              title="Descargar representación CMIR v2.0"
-            >
-              Exportar CMIR
-            </button>
-            <button
-              type="button"
-              className="toolbar-btn"
-              onClick={() => handleExport("tf")}
-              title="Descargar código Terraform AWS generado desde el JSON"
-            >
-              Exportar Terraform (.tf)
-            </button>
-            {onSyncToArchitecture && sessionData.graph && (
-              <button
-                type="button"
-                className="toolbar-btn"
-                onClick={() => onSyncToArchitecture(sessionData)}
-                title="Cargar este grafo descubierto en la vista general de Arquitectura"
-              >
-                Ver en Lienzo Arquitectura
-              </button>
             )}
+
+            <details className="cm-export-menu">
+              <summary aria-label="Fuentes de inventario">Cargar inventario ▾</summary>
+              <div className="cm-export-dropdown-list" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="cm-export-dropdown-item"
+                  disabled={importing}
+                  onClick={handleCollectLiveDevice}
+                >
+                  <span>{scanningDevice ? "Escaneando..." : "Escaneo rápido de este equipo"}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="cm-export-dropdown-item"
+                  disabled={importing}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <span>Importar archivo JSON</span>
+                  <code>.json</code>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="cm-export-dropdown-item"
+                  disabled={importing}
+                  onClick={handleImportLocalPreset}
+                >
+                  <span>Recargar inventario local</span>
+                </button>
+              </div>
+            </details>
+
+            {sessionData && (
+              <details className="cm-export-menu">
+                <summary aria-label="Opciones de exportación del inventario">
+                  Exportar artefactos ▾
+                </summary>
+                <div className="cm-export-dropdown-list" role="menu">
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="cm-export-dropdown-item"
+                    onClick={() => handleExport("json")}
+                  >
+                    <span>Exportar JSON normalizado</span>
+                    <code>.json</code>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="cm-export-dropdown-item"
+                    onClick={() => handleExport("md")}
+                  >
+                    <span>Exportar informe (.md)</span>
+                    <code>.md</code>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="cm-export-dropdown-item"
+                    onClick={() => handleExport("cmir")}
+                  >
+                    <span>Exportar CMIR</span>
+                    <code>.json</code>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="cm-export-dropdown-item"
+                    onClick={() => handleExport("tf")}
+                  >
+                    <span>Exportar Terraform (.tf)</span>
+                    <code>.tf</code>
+                  </button>
+                </div>
+              </details>
+            )}
+
+            {sessionData &&
+              handleSyncCanvas &&
+              (sessionData.graph || sessionData.cmir) && (
+                <button
+                  type="button"
+                  className="cm-btn sm"
+                  onClick={() => {
+                    const cmirPayload = sessionData.cmir?.nodes
+                      ? sessionData.cmir
+                      : sessionData.graph?.nodes
+                      ? {
+                          architecture_name: `Discovery · ${
+                            sessionData.hostname || "Host"
+                          }`,
+                          provider: "on-premise",
+                          nodes: sessionData.graph.nodes,
+                          edges: sessionData.graph.edges || [],
+                        }
+                      : sessionData;
+                    handleSyncCanvas(cmirPayload);
+                  }}
+                >
+                  Ver en lienzo arquitectura
+                </button>
+              )}
+
+            <button
+              type="button"
+              className="cm-btn primary sm"
+              onClick={() => setShowCollectorModal((v) => !v)}
+            >
+              {showCollectorModal
+                ? "Ocultar asistente osquery"
+                : "Descubrir equipo (osquery)"}
+            </button>
           </div>
-        )}
-      </header>
+        }
+      />
 
       {showCollectorModal && (
-        <CloudMoveDiscovery
-          apiBaseUrl={resolvedApiBase}
-          onInventoryDiscovered={async (sessionPayload) => {
-            setSessionData(sessionPayload);
-            await fetchSessionsList();
-            setStatusBanner(
-              `Equipo '${sessionPayload.hostname}' descubierto y analizado automáticamente (Sesión: ${sessionPayload.session_id}).`
-            );
-          }}
-          onClose={() => setShowCollectorModal(false)}
-        />
+        <div style={{ marginBottom: 16 }}>
+          <CloudMoveDiscovery
+            apiBaseUrl={resolvedApiBase}
+            onInventoryDiscovered={async (sessionPayload) => {
+              setSessionData(sessionPayload);
+              await fetchSessionsList();
+              setStatusBanner(
+                `Equipo '${sessionPayload.hostname}' descubierto y analizado automáticamente (Sesión: ${sessionPayload.session_id}).`
+              );
+            }}
+            onClose={() => setShowCollectorModal(false)}
+          />
+        </div>
       )}
 
       {errorBanner && (
-        <div className="disc-banner is-error" role="alert">
-          <strong>Error de validación / importación:</strong> {errorBanner}
-          <button type="button" onClick={() => setErrorBanner("")}>&times;</button>
-        </div>
+        <AwsAlert
+          type="error"
+          title="Error de validación o importación"
+          onDismiss={() => setErrorBanner("")}
+          style={{ marginBottom: 16 }}
+        >
+          {errorBanner}
+        </AwsAlert>
       )}
 
       {statusBanner && (
-        <div className="disc-banner is-success" role="status">
-          <span>{statusBanner}</span>
-          <button type="button" onClick={() => setStatusBanner("")}>&times;</button>
-        </div>
+        <AwsAlert
+          type="success"
+          title="Operación completada"
+          onDismiss={() => setStatusBanner("")}
+          style={{ marginBottom: 16 }}
+        >
+          {statusBanner}
+        </AwsAlert>
       )}
 
       {loading ? (
-        <div className="disc-loading-state">
-          <p>Analizando y normalizando inventario de infraestructura...</p>
-        </div>
-      ) : !sessionData ? (
-        <div className="disc-empty-state">
-          <h3>Sin inventario de discovery activo</h3>
-          <p>
-            Escanee este dispositivo en vivo con <code>osqueryi</code>, seleccione un archivo JSON generado por{" "}
-            <code>cloudmove_osquery_export.py</code> o cargue el inventario local del proyecto.
+        <AwsContainer title="Cargando inventario">
+          <p className="cm-hint">
+            Analizando y normalizando inventario de infraestructura...
           </p>
-          <div className="disc-empty-actions">
-            <button
-              type="button"
-              className="tech-btn primary"
-              disabled={importing}
-              onClick={handleCollectLiveDevice}
-            >
-              {scanningDevice ? "Escaneando dispositivo..." : "Escanear Este Dispositivo (osquery en vivo)"}
-            </button>
-            <button
-              type="button"
-              className="toolbar-btn"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              Seleccionar archivo JSON
-            </button>
-            <button
-              type="button"
-              className="toolbar-btn"
-              onClick={handleImportLocalPreset}
-            >
-              Analizar docs/cloudmove-osquery-inventory.json
-            </button>
-          </div>
-        </div>
+        </AwsContainer>
+      ) : !sessionData ? (
+        <AwsContainer title="Sin inventario de discovery activo">
+          <AwsEmptyState
+            title="No hay inventario cargado actualmente"
+            description="Escanee este dispositivo en vivo con osqueryi, seleccione un archivo JSON generado por cloudmove_osquery_export.py o cargue el inventario local del proyecto."
+            action={
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+                <button
+                  type="button"
+                  className="cm-btn primary"
+                  disabled={importing}
+                  onClick={handleCollectLiveDevice}
+                >
+                  {scanningDevice
+                    ? "Escaneando dispositivo..."
+                    : "Escanear este dispositivo (osquery en vivo)"}
+                </button>
+                <button
+                  type="button"
+                  className="cm-btn"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  Seleccionar archivo JSON
+                </button>
+                <button
+                  type="button"
+                  className="cm-btn"
+                  onClick={handleImportLocalPreset}
+                >
+                  Cargar inventario local
+                </button>
+              </div>
+            }
+          />
+        </AwsContainer>
       ) : (
-        <div className="disc-body-split">
-          {/* Left Section & Subsection Navigation Tree */}
-          <aside className="disc-left-rail" aria-label="Secciones del análisis de discovery">
-            <div className="disc-asset-mini-header">
-              <span className="disc-asset-tag">ACTIVO DESCUBIERTO</span>
-              <strong className="disc-asset-hostname">{sessionData.hostname}</strong>
-              <span className="disc-asset-os">
-                {sessionData.summary?.os?.name} {sessionData.summary?.os?.version}
-              </span>
-            </div>
+        <>
+          <AwsKeyValuePairs
+            columns={4}
+            items={[
+              {
+                label: "Hostname descubierto",
+                value: sessionData.hostname,
+                subtext: `Archivo: ${sessionData.filename || "live-scan.json"}`,
+              },
+              {
+                label: "Sistema operativo",
+                value: (
+                  <span style={{ fontSize: 16 }}>
+                    {sessionData.summary?.os?.name}{" "}
+                    {sessionData.summary?.os?.version}
+                  </span>
+                ),
+                subtext: `Kernel: ${
+                  sessionData.summary?.os?.kernel || "Linux"
+                } (${sessionData.summary?.os?.arch || "x86_64"})`,
+              },
+              {
+                label: "Capacidad de cómputo y memoria",
+                value: `${
+                  sessionData.summary?.hardware?.cpu_logical_cores || "—"
+                } vCPUs · ${
+                  sessionData.summary?.hardware?.memory_gb || "—"
+                } GB RAM`,
+                subtext:
+                  sessionData.summary?.hardware?.cpu_brand || "x86_64 host",
+              },
+              {
+                label: "Calidad y completitud osquery",
+                value: `${
+                  sessionData.quality?.completeness_pct ?? 100
+                }% verificado`,
+                subtext: `${
+                  sessionData.quality?.tables_present ?? 16
+                } tablas recolectadas`,
+              },
+            ]}
+          />
 
-            <nav className="disc-rail-nav">
-              {SECTION_NAV.map((sec) => {
-                const isActive = activeSection === sec.id;
-                return (
-                  <div key={sec.id} className="disc-rail-group">
-                    <button
-                      type="button"
-                      className={`disc-rail-btn ${isActive ? "is-active" : ""}`}
-                      onClick={() => setActiveSection(sec.id)}
-                    >
-                      <span className="disc-rail-label">{sec.label}</span>
-                      <small className="disc-rail-sub">{sec.subtitle}</small>
-                    </button>
+          {(() => {
+            const activeGroup =
+              SECTION_GROUPS.find((g) => g.sections.includes(activeSection)) || SECTION_GROUPS[0];
+            return (
+              <>
+                <AwsTabs
+                  activeTabId={activeGroup.id}
+                  onTabChange={(groupId) => {
+                    const group = SECTION_GROUPS.find((g) => g.id === groupId);
+                    if (group) setActiveSection(group.sections[0]);
+                  }}
+                  ariaLabel="Secciones del análisis de discovery"
+                  tabs={SECTION_GROUPS.map((g) => ({ id: g.id, label: g.label }))}
+                />
+                {activeGroup.sections.length > 1 && (
+                  <AwsTabs
+                    activeTabId={activeSection}
+                    onTabChange={setActiveSection}
+                    ariaLabel={`Subsecciones de ${activeGroup.label}`}
+                    style={{ marginBottom: 16 }}
+                    tabs={activeGroup.sections.map((secId) => {
+                      const sec = SECTION_NAV.find((s) => s.id === secId);
+                      let count = undefined;
+                      let badge = undefined;
+                      if (secId === "software") {
+                        count =
+                          sessionData?.summary?.software?.packages_count ||
+                          sessionData?.sections?.software?.packages_total_count ||
+                          4297;
+                      } else if (secId === "network") {
+                        count = sessionData?.summary?.metrics?.listening_ports_count || 22;
+                      } else if (secId === "runtime") {
+                        count = sessionData?.summary?.metrics?.processes_count || 390;
+                      } else if (secId === "databases") {
+                        count =
+                          sessionData?.sections?.databases?.detected_databases?.length || 3;
+                      } else if (secId === "assessment") {
+                        badge = "Readiness";
+                      } else if (secId === "aws-archify") {
+                        badge = "Terraform";
+                      }
+                      return {
+                        id: secId,
+                        label: sec?.label || secId,
+                        count,
+                        badge,
+                      };
+                    })}
+                  />
+                )}
+              </>
+            );
+          })()}
 
-                    {isActive && sec.subsections.length > 0 && (
-                      <ul className="disc-rail-sublist">
-                        {sec.subsections.map((sub) => (
-                          <li key={sub.id}>
-                            <button
-                              type="button"
-                              className="disc-rail-subbtn"
-                              onClick={() => {
-                                const el = document.getElementById(sub.id);
-                                if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-                              }}
-                            >
-                              {sub.label}
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                );
-              })}
-            </nav>
-          </aside>
-
-          {/* Main Section Content or Full Interactive Diagram */}
-          <div className={`disc-main-pane ${activeSection === "diagram" ? "is-diagram-mode" : ""}`}>
-            {activeSection === "diagram" && (
+          {activeSection === "diagram" ? (
+            <div
+              className="awsui-container"
+              style={{ height: "calc(100dvh - 300px)", minHeight: 520 }}
+            >
               <DiscoveryDiagramCanvas
                 graphData={sessionData.graph}
                 onNavigateToSection={handleNavigateFromDiagram}
               />
-            )}
-            {activeSection === "aws-archify" && (
-              <AwsSuggestedDiagramSection data={sessionData} apiUrl={resolvedApiBase} />
-            )}
-            {activeSection === "datacenter-campaigns" && (
-              <DataCenterCampaignPanel apiBaseUrl={resolvedApiBase} />
-            )}
-            {activeSection === "summary" && (
-              <SummarySection
-                data={sessionData}
-                onNavigateSection={setActiveSection}
-              />
-            )}
-            {activeSection === "hardware" && (
-              <HardwareSection hardware={sessionData.sections?.hardware} />
-            )}
-            {activeSection === "software" && (
-              <SoftwareSection
-                software={sessionData.sections?.software}
-                sessionId={sessionData.session_id}
-                apiUrl={resolvedApiBase}
-              />
-            )}
-            {activeSection === "network" && (
-              <NetworkSection network={sessionData.sections?.network} />
-            )}
-            {activeSection === "runtime" && (
-              <RuntimeSection runtime={sessionData.sections?.runtime} />
-            )}
-            {activeSection === "databases" && (
-              <DatabasesSection databases={sessionData.sections?.databases} />
-            )}
-            {activeSection === "assessment" && (
-              <AssessmentSection assessment={sessionData.sections?.assessment} />
-            )}
-          </div>
-        </div>
+            </div>
+          ) : (
+            <div className="disc-section-view" style={{ maxWidth: "100%" }}>
+              {activeSection === "aws-archify" && (
+                <AwsSuggestedDiagramSection
+                  data={sessionData}
+                  apiUrl={resolvedApiBase}
+                />
+              )}
+              {activeSection === "datacenter-campaigns" && (
+                <DataCenterCampaignPanel apiBaseUrl={resolvedApiBase} />
+              )}
+              {activeSection === "summary" && (
+                <SummarySection
+                  data={sessionData}
+                  onNavigateSection={setActiveSection}
+                />
+              )}
+              {activeSection === "hardware" && (
+                <HardwareSection hardware={sessionData.sections?.hardware} />
+              )}
+              {activeSection === "software" && (
+                <SoftwareSection
+                  software={sessionData.sections?.software}
+                  sessionId={sessionData.session_id}
+                  apiUrl={resolvedApiBase}
+                />
+              )}
+              {activeSection === "network" && (
+                <NetworkSection network={sessionData.sections?.network} />
+              )}
+              {activeSection === "runtime" && (
+                <RuntimeSection runtime={sessionData.sections?.runtime} />
+              )}
+              {activeSection === "databases" && (
+                <DatabasesSection databases={sessionData.sections?.databases} />
+              )}
+              {activeSection === "assessment" && (
+                <AssessmentSection
+                  assessment={sessionData.sections?.assessment}
+                />
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

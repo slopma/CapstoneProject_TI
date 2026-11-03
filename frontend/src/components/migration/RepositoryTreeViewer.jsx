@@ -41,34 +41,27 @@ function TreeNode({ node, depth = 0, filter = "" }) {
 
     return (
       <div style={{ marginLeft: depth > 0 ? 14 : 0, userSelect: "none" }}>
-        <div
+        <button
+          type="button"
+          className="cm-tree-folder-btn"
+          aria-expanded={expanded}
           onClick={() => setExpanded(!expanded)}
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "3px 6px",
-            borderRadius: 4,
-            cursor: "pointer",
-            fontSize: 12,
-            fontWeight: 600,
-            color: "#1e293b",
             backgroundColor: expanded ? "rgba(241, 245, 249, 0.7)" : "transparent",
-            transition: "background-color 0.1s ease",
           }}
           title={node.path || "Directorio raíz"}
         >
-          <span style={{ fontSize: 10, color: "#64748b", width: 12 }}>
+          <span style={{ fontSize: 12.5, color: "#475569", width: 12 }} aria-hidden="true">
             {hasChildren ? (expanded ? "▼" : "▶") : "•"}
           </span>
-          <span style={{ fontSize: 11, fontWeight: 700, color: "#475569", fontFamily: "monospace" }}>
+          <span style={{ fontSize: 13, fontWeight: 700, color: "#475569", fontFamily: "monospace" }} aria-hidden="true">
             {expanded ? "[-]" : "[+]"}
           </span>
           <span style={{ fontFamily: "monospace" }}>{node.name || "root"}</span>
-          <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 400 }}>
+          <span style={{ fontSize: 12.5, color: "var(--color-text-muted)", fontWeight: 500 }}>
             ({(node.children || []).length} elementos)
           </span>
-        </div>
+        </button>
 
         {expanded && hasChildren && (
           <div style={{ borderLeft: "1px dashed #cbd5e1", marginLeft: 8, paddingLeft: 4 }}>
@@ -98,7 +91,7 @@ function TreeNode({ node, depth = 0, filter = "" }) {
         gap: 8,
         padding: "2px 6px",
         marginLeft: depth > 0 ? 14 : 0,
-        fontSize: 12,
+        fontSize: 13.5,
         borderRadius: 4,
       }}
       title={node.path}
@@ -106,7 +99,7 @@ function TreeNode({ node, depth = 0, filter = "" }) {
       <div style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, overflow: "hidden" }}>
         <span
           style={{
-            fontSize: 9,
+            fontSize: 12.5,
             fontWeight: 700,
             padding: "1px 4px",
             borderRadius: 3,
@@ -133,7 +126,7 @@ function TreeNode({ node, depth = 0, filter = "" }) {
         {node.is_manifest && (
           <span
             style={{
-              fontSize: 9.5,
+              fontSize: 12.5,
               fontWeight: 700,
               padding: "1px 5px",
               borderRadius: 3,
@@ -146,9 +139,9 @@ function TreeNode({ node, depth = 0, filter = "" }) {
           </span>
         )}
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, fontSize: 11, color: "#64748b" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0, fontSize: 13, color: "#64748b" }}>
         {node.language && node.language !== "Other" && node.language !== "Plain Text" && (
-          <span style={{ fontSize: 10, color: "#475569", backgroundColor: "#f8fafc", padding: "1px 4px", borderRadius: 3 }}>
+          <span style={{ fontSize: 12.5, color: "#475569", backgroundColor: "#f8fafc", padding: "1px 4px", borderRadius: 3 }}>
             {node.language}
           </span>
         )}
@@ -181,28 +174,23 @@ export default function RepositoryTreeViewer({ treeData, title = "Explorador del
       }}
     >
       {/* Header Bar */}
-      <div
+      <button
+        type="button"
+        className="cm-tree-header-btn"
+        aria-expanded={isOpen}
         onClick={() => setIsOpen(!isOpen)}
         style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          flexWrap: "wrap",
-          padding: "9px 12px",
-          backgroundColor: "#f8fafc",
-          cursor: "pointer",
           borderBottom: isOpen ? "1px solid #e2e8f0" : "none",
-          userSelect: "none",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 13, color: "#475569" }}>{isOpen ? "▼" : "▶"}</span>
-          <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1e293b" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 14, color: "#475569" }} aria-hidden="true">{isOpen ? "▼" : "▶"}</span>
+          <span style={{ fontSize: 14, fontWeight: 700, color: "#1e293b" }}>
             {title}
           </span>
           <span
             style={{
-              fontSize: 11,
+              fontSize: 13,
               fontWeight: 600,
               padding: "2px 7px",
               borderRadius: 12,
@@ -213,12 +201,12 @@ export default function RepositoryTreeViewer({ treeData, title = "Explorador del
             {summary.total_files ?? 0} archivos · {summary.total_directories ?? 0} carpetas
           </span>
           {summary.total_size_bytes > 0 && (
-            <span style={{ fontSize: 11, color: "#64748b" }}>
+            <span style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
               ({formatBytes(summary.total_size_bytes)})
             </span>
           )}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
           {keyManifests.length > 0 && (
             <span style={{ color: "#15803d", fontWeight: 600 }}>
               ✓ {keyManifests.length} manifiesto(s) detectado(s)
@@ -228,7 +216,7 @@ export default function RepositoryTreeViewer({ treeData, title = "Explorador del
             {isOpen ? "Ocultar árbol ▲" : "Ver carpetas y archivos ▼"}
           </span>
         </div>
-      </div>
+      </button>
 
       {/* Expanded Content */}
       {isOpen && (
@@ -236,7 +224,7 @@ export default function RepositoryTreeViewer({ treeData, title = "Explorador del
           {/* Languages Breakdown Bar */}
           {languages.length > 0 && (
             <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: "#475569", marginBottom: 6 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#475569", marginBottom: 6 }}>
                 Distribución Tecnológica y Lenguajes en el Repositorio:
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -244,7 +232,7 @@ export default function RepositoryTreeViewer({ treeData, title = "Explorador del
                   <div
                     key={lang.language}
                     style={{
-                      fontSize: 11,
+                      fontSize: 13,
                       padding: "3px 8px",
                       borderRadius: 4,
                       backgroundColor: "#f1f5f9",
@@ -264,19 +252,12 @@ export default function RepositoryTreeViewer({ treeData, title = "Explorador del
           {/* Search Filter */}
           <div style={{ marginBottom: 10 }}>
             <input
-              type="text"
+              type="search"
+              className="cm-input"
+              aria-label="Filtrar carpetas, subcarpetas o archivos en el árbol del repositorio"
               placeholder="Filtrar carpetas, subcarpetas o archivos..."
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "6px 10px",
-                fontSize: 12,
-                borderRadius: 4,
-                border: "1px solid #cbd5e1",
-                outline: "none",
-                boxSizing: "border-box",
-              }}
             />
           </div>
 
@@ -294,7 +275,7 @@ export default function RepositoryTreeViewer({ treeData, title = "Explorador del
             {rootNode ? (
               <TreeNode node={rootNode} depth={0} filter={filter} />
             ) : (
-              <div style={{ fontSize: 12, color: "#94a3b8", textAlign: "center", padding: 12 }}>
+              <div style={{ fontSize: 13.5, color: "var(--color-text-muted)", textAlign: "center", padding: 12 }}>
                 No se pudo construir la jerarquía del árbol.
               </div>
             )}

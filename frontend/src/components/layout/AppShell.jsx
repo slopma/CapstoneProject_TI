@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import Sidebar from "./Sidebar";
-import Header from "./Header";
+import Header, { TAB_LABELS } from "./Header";
 
 export default function AppShell({
   activeTab,
@@ -16,6 +16,7 @@ export default function AppShell({
   children,
 }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   useEffect(() => {
     const handleKeyDown = (e) => {
@@ -27,113 +28,112 @@ export default function AppShell({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [mobileNavOpen]);
 
-  const {
-    activeHost,
-    activeCampaign,
-    activeMigrationJob,
-    persistenceEngine,
-    jobsCount,
-  } = workContext;
+  const { activeMigrationJob, jobsCount } = workContext;
+  const currentServiceLabel = TAB_LABELS[activeTab] || "Consola operativa";
 
   return (
-    <div className="enterprise-app-shell">
-      <Sidebar
+    <div
+      className={`enterprise-app-shell awsui-app-layout ${
+        sidebarCollapsed ? "is-sidebar-collapsed" : ""
+      }`}
+    >
+      <a href="#main-workspace-content" className="skip-link">
+        Saltar al contenido principal
+      </a>
+
+      <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        mobileOpen={mobileNavOpen}
-        onCloseMobile={() => setMobileNavOpen(false)}
-        systemStats={{ jobsCount }}
+        architectureName={architectureName}
+        searchQuery={searchQuery}
+        setSearchQuery={setSearchQuery}
+        selectedCount={selectedCount}
+        onPrepareMigration={onPrepareMigration}
+        targetProvider={targetProvider}
+        setTargetProvider={setTargetProvider}
+        onToggleMobileNav={() => setMobileNavOpen((prev) => !prev)}
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebarCollapse={() => setSidebarCollapsed((prev) => !prev)}
       />
-      <div className="shell-main-wrapper">
-        <Header
+
+      <div className="awsui-app-body">
+        <Sidebar
           activeTab={activeTab}
-          architectureName={architectureName}
-          searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
-          selectedCount={selectedCount}
-          onPrepareMigration={onPrepareMigration}
-          targetProvider={targetProvider}
-          setTargetProvider={setTargetProvider}
-          onToggleMobileNav={() => setMobileNavOpen((prev) => !prev)}
+          setActiveTab={setActiveTab}
+          mobileOpen={mobileNavOpen}
+          onCloseMobile={() => setMobileNavOpen(false)}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed((prev) => !prev)}
+          systemStats={{ jobsCount }}
         />
 
-        {/* Barra de Contexto Persistente: Permite volver en 1 clic a la sesión de discovery, campaña o migración activa */}
-        <div className="cm-context-bar" role="region" aria-label="Contexto de trabajo activo">
-          <div className="cm-context-items">
-            <span style={{ fontWeight: 700, color: "var(--color-text-primary)", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em" }}>
-              Contexto Activo:
-            </span>
-
-            {activeHost && (
+        <div className="shell-main-wrapper">
+          {/* AWS Cloudscape BreadcrumbGroup */}
+          <div
+            className="cm-context-bar awsui-breadcrumb-strip"
+            role="region"
+            aria-label="Ruta de navegación"
+          >
+            <nav
+              className="awsui-global-breadcrumbs"
+              aria-label="Ruta de navegación de la consola"
+            >
               <button
                 type="button"
-                className="cm-context-chip"
-                onClick={() => setActiveTab("discovery")}
-                title="Volver al inventario del host descubierto"
+                className="awsui-crumb-link"
+                onClick={() => setActiveTab("overview")}
               >
-                <span>Host Discovery:</span>
-                <strong>{activeHost}</strong>
+                CloudMove Console
               </button>
-            )}
-
-            {activeCampaign && (
-              <button
-                type="button"
-                className="cm-context-chip"
-                onClick={() => setActiveTab("campaigns")}
-                title="Volver a la campaña de datacenter activa"
-              >
-                <span>Campaña DC:</span>
-                <strong>{activeCampaign.campaign_id}</strong>
-                <span className={`cm-badge ${activeCampaign.status === "completed" ? "validated" : "warning"}`} style={{ padding: "1px 5px", fontSize: 10 }}>
-                  {activeCampaign.status}
-                </span>
-              </button>
-            )}
-
-            {activeMigrationJob && (
-              <button
-                type="button"
-                className="cm-context-chip"
-                onClick={() => setActiveTab("migration")}
-                title="Volver al plan de migración activo en el orquestador"
-              >
-                <span>Migración Activa:</span>
-                <strong>{activeMigrationJob.name}</strong>
-                <span className={`cm-badge ${activeMigrationJob.target_provider === "gcp" ? "gcp" : "aws"}`} style={{ padding: "1px 5px", fontSize: 10 }}>
-                  {activeMigrationJob.target_provider?.toUpperCase()} · {activeMigrationJob.state}
-                </span>
-              </button>
-            )}
-
-            {selectedCount > 0 && (
-              <button
-                type="button"
-                className="cm-context-chip"
-                onClick={() => setActiveTab("architecture")}
-                title="Ver recursos seleccionados en el Grafo de Arquitectura"
-              >
-                <span>Selección en Grafo:</span>
-                <strong>{selectedCount} activo(s)</strong>
-              </button>
-            )}
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {persistenceEngine && (
-              <span className="cm-badge observed" title="Motor de persistencia transaccional ACID">
-                BD ACID: {persistenceEngine}
+              <span className="awsui-crumb-sep" aria-hidden="true">
+                /
               </span>
-            )}
-            <span className="cm-badge info" title="Nubes soportadas oficialmente según ADR-001">
-              AWS · GCP
-            </span>
-          </div>
-        </div>
+              <span className="awsui-crumb-current">{currentServiceLabel}</span>
+            </nav>
 
-        <main className="shell-content" style={{ padding: activeTab === "architecture" ? "10px 14px" : 0 }}>
-          {children}
-        </main>
+            <div className="cm-context-items">
+              {activeMigrationJob && activeTab !== "migration" && (
+                <button
+                  type="button"
+                  className="cm-context-chip"
+                  onClick={() => setActiveTab("migration")}
+                  title="Ir al plan de migración activo"
+                >
+                  <span>Plan activo:</span>
+                  <strong>{activeMigrationJob.name}</strong>
+                  <span
+                    className={`cm-badge ${
+                      activeMigrationJob.target_provider === "gcp" ? "gcp" : "aws"
+                    }`}
+                  >
+                    {activeMigrationJob.target_provider?.toUpperCase()} ·{" "}
+                    {activeMigrationJob.state}
+                  </span>
+                </button>
+              )}
+
+              {selectedCount > 0 && (
+                <button
+                  type="button"
+                  className="cm-context-chip"
+                  onClick={() => setActiveTab("architecture")}
+                >
+                  <span>Selección:</span>
+                  <strong>{selectedCount} nodo(s)</strong>
+                </button>
+              )}
+            </div>
+          </div>
+
+          <main
+            id="main-workspace-content"
+            tabIndex={-1}
+            className="shell-content"
+            style={{ padding: activeTab === "architecture" ? "10px 16px" : 0 }}
+          >
+            {children}
+          </main>
+        </div>
       </div>
     </div>
   );

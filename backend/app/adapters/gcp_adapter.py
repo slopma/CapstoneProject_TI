@@ -63,6 +63,8 @@ GCP_RESOURCE_MAP = {
     "role": "google_service_account",
     "permission": "google_project_iam_member",
     "secret": "google_secret_manager_secret",
+    "service_mesh_link": "service_mesh_link",
+    "external_baas": "external_baas",
 }
 
 VALID_GCP_REGIONS = {
@@ -79,6 +81,18 @@ class GCPAdapter(BaseProviderAdapter):
     def translate_node(self, node: CMIRNode) -> Dict[str, Any]:
         node_type_lower = node.type.lower()
         target_type = GCP_RESOURCE_MAP.get(node_type_lower, "google_compute_instance")
+        meta = dict(node.metadata or {})
+        engine_lower = str(node.engine or "").lower()
+
+        if meta.get("user_decision") == "keep_external":
+            target_type = "external_baas"
+        elif meta.get("user_decision") == "self_hosted_container" or meta.get("run_in_compose_container") is True:
+            target_type = "containerized_in_compose"
+        elif node_type_lower in ("database", "database_instance", "database_schema"):
+            if meta.get("force_cloud_managed") is True:
+                target_type = "google_sql_database_instance"
+            elif "supabase" in engine_lower or "firebase" in engine_lower or meta.get("is_external_baas") is True:
+                target_type = "external_baas"
 
         safe_name = node.name.lower().replace(" ", "-").replace("_", "-").replace("/", "-").replace(".", "-")
         safe_id = node.id.lower().replace("-", "_").replace(".", "_").replace(":", "_").replace("/", "_")
@@ -93,6 +107,7 @@ class GCPAdapter(BaseProviderAdapter):
             "safe_name": safe_name,
             "cmir_type": node.type,
             "type": target_type,
+            "parent_id": node.parent_id,
             "engine": node.engine,
             "platform": node.platform,
             "location": location,
@@ -101,7 +116,7 @@ class GCPAdapter(BaseProviderAdapter):
             "confidence": node.confidence,
             "security": node.security or {},
             "network": node.network or {},
-            "metadata": node.metadata or {},
+            "metadata": meta,
         }
 
     def translate_cmir(self, cmir: CMIR) -> List[Dict[str, Any]]:

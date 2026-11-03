@@ -3,53 +3,53 @@ import { NavIcon } from "../architecture/TechnicalIcons";
 
 export const CLOUDMOVE_NAV_GROUPS = [
   {
-    group: "Visibilidad y Descubrimiento",
+    group: "Descubrimiento y topología",
     items: [
       {
         id: "overview",
-        label: "Resumen del Entorno",
-        hint: "Salud global, inventario y accesos",
+        label: "Resumen del entorno",
+        hint: "Panel general, métricas y accesos rápidos",
         icon: "architecture",
       },
       {
         id: "discovery",
-        label: "Discovery e Inventario",
-        hint: "Agente osquery, procesos, red y BDs",
+        label: "Discovery e inventario",
+        hint: "Agente osquery, procesos, red y bases de datos",
         icon: "discovery",
       },
       {
         id: "campaigns",
-        label: "Campañas de Datacenter",
-        hint: "Descubrimiento masivo y oleadas",
+        label: "Campañas de datacenter",
+        hint: "Descubrimiento masivo y oleadas por sitio",
         icon: "dependencies",
       },
       {
         id: "architecture",
-        label: "Grafo de Arquitectura",
-        hint: "Topología CMIR v2.1 y dependencias",
+        label: "Grafo de arquitectura",
+        hint: "Topología CMIR v2.1 y análisis de alcance",
         icon: "architecture",
       },
     ],
   },
   {
-    group: "Planificación y Ejecución Cloud",
+    group: "Migración y gobernanza",
     items: [
       {
         id: "migration",
-        label: "Migraciones y Planes",
-        hint: "Casos 1 (App), 2 (Imagen) y 3 (DC)",
+        label: "Migraciones y planes",
+        hint: "Casos 1 (App/GitHub), 2 (Imagen VM) y 3 (Datacenter)",
         icon: "migration",
       },
       {
         id: "sources-targets",
-        label: "Orígenes y Destinos",
-        hint: "Conectores, AWS/GCP y compatibilidad",
+        label: "Orígenes y destinos",
+        hint: "Conectores, agentes y compatibilidad AWS/GCP",
         icon: "settings",
       },
       {
         id: "executions-audit",
-        label: "Ejecuciones, IaC y Auditoría",
-        hint: "Terraform HCL, checkpoints y trazas",
+        label: "Auditoría y Terraform",
+        hint: "Terraform HCL, pruebas pre/post y bitácora ACID",
         icon: "audit",
       },
     ],
@@ -61,6 +61,8 @@ export default function Sidebar({
   setActiveTab,
   mobileOpen = false,
   onCloseMobile,
+  collapsed = false,
+  onToggleCollapse,
   systemStats = {},
 }) {
   const handleSelect = (id) => {
@@ -76,35 +78,51 @@ export default function Sidebar({
         aria-hidden="true"
       />
       <aside
-        className={`enterprise-sidebar ${mobileOpen ? "mobile-open" : ""}`}
-        aria-label="Navegación principal de CloudMove"
+        className={`enterprise-sidebar awsui-side-navigation ${mobileOpen ? "mobile-open" : ""} ${
+          collapsed ? "is-collapsed" : ""
+        }`}
+        aria-label="Navegación de servicios de CloudMove"
       >
         <div className="sidebar-brand">
-          <div className="sidebar-brand-group">
-            <div className="brand-logo-mark" aria-hidden="true">
-              CM
+          {!collapsed && (
+            <div className="sidebar-brand-group">
+              <div>
+                <span className="brand-name">Migration Hub</span>
+              </div>
             </div>
-            <div>
-              <span className="brand-name">CLOUDMOVE</span>
-              <span className="brand-subtitle">On-Premise → AWS · GCP</span>
-            </div>
-          </div>
-          {onCloseMobile && (
-            <button
-              type="button"
-              className="sidebar-close-btn"
-              onClick={onCloseMobile}
-              aria-label="Cerrar menú de navegación"
-            >
-              ×
-            </button>
           )}
+          <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: collapsed ? "auto" : 0, marginRight: collapsed ? "auto" : 0 }}>
+            {onToggleCollapse && (
+              <button
+                type="button"
+                className="awsui-side-collapse-btn"
+                onClick={onToggleCollapse}
+                title={collapsed ? "Expandir navegación lateral" : "Contraer navegación lateral"}
+                aria-label={collapsed ? "Expandir navegación lateral" : "Contraer navegación lateral"}
+              >
+                {collapsed ? "»" : "«"}
+              </button>
+            )}
+            {onCloseMobile && (
+              <button
+                type="button"
+                className="sidebar-close-btn"
+                onClick={onCloseMobile}
+                aria-label="Cerrar menú de navegación"
+              >
+                ×
+              </button>
+            )}
+          </div>
         </div>
 
-        <nav className="sidebar-nav" aria-label="Áreas operativas">
-          {CLOUDMOVE_NAV_GROUPS.map((group) => (
-            <React.Fragment key={group.group}>
-              <div className="sidebar-group-label">{group.group}</div>
+        <nav className="sidebar-nav" aria-label="Secciones de la consola">
+          {CLOUDMOVE_NAV_GROUPS.map((group, idx) => (
+            <div key={group.group} className="awsui-nav-section">
+              {idx > 0 && <div className="awsui-nav-divider" />}
+              {!collapsed && (
+                <div className="sidebar-group-label">{group.group}</div>
+              )}
               {group.items.map((item) => {
                 const isActive = activeTab === item.id;
                 return (
@@ -115,33 +133,36 @@ export default function Sidebar({
                     className={`sidebar-nav-btn ${isActive ? "active" : ""}`}
                     aria-current={isActive ? "page" : undefined}
                     data-nav-id={item.id}
+                    title={item.hint}
                   >
                     <span className="nav-icon-wrapper" aria-hidden="true">
                       <NavIcon type={item.icon} />
                     </span>
-                    <span className="sidebar-nav-meta">
-                      <span className="sidebar-nav-label">{item.label}</span>
-                      <span className="sidebar-nav-hint">{item.hint}</span>
-                    </span>
+                    {!collapsed && (
+                      <span className="sidebar-nav-meta">
+                        <span className="sidebar-nav-label">{item.label}</span>
+                      </span>
+                    )}
                   </button>
                 );
               })}
-            </React.Fragment>
+            </div>
           ))}
         </nav>
 
-        <div className="sidebar-footer">
-          <div className="system-status-indicator">
-            <span className="status-dot healthy" aria-hidden="true" />
-            <span>CMIR v2.1 · Motor Activo</span>
-          </div>
-          <div className="sidebar-footer-sub">
-            Destinos: <strong>AWS · GCP</strong> (Azure excluido ADR-001)
+        {!collapsed && (
+          <div className="sidebar-footer">
+            <div className="system-status-indicator">
+              <span className="status-dot healthy" aria-hidden="true" />
+              <span>CMIR v2.1 · AWS / GCP</span>
+            </div>
             {typeof systemStats.jobsCount === "number" && (
-              <> · {systemStats.jobsCount} planes</>
+              <div className="sidebar-footer-sub">
+                {systemStats.jobsCount} planes registrados
+              </div>
             )}
           </div>
-        </div>
+        )}
       </aside>
     </>
   );

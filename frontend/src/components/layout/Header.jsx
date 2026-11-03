@@ -1,19 +1,18 @@
 import React from "react";
-import { ActionIcon } from "../architecture/TechnicalIcons";
 
-const TAB_LABELS = {
-  overview: "Resumen del Entorno",
-  discovery: "Discovery e Inventario",
-  campaigns: "Campañas de Datacenter",
-  architecture: "Grafo de Arquitectura",
-  migration: "Migraciones y Planes",
-  "sources-targets": "Orígenes y Destinos",
-  "executions-audit": "Ejecuciones, IaC y Auditoría",
+export const TAB_LABELS = {
+  overview: "Resumen del entorno",
+  discovery: "Discovery e inventario",
+  campaigns: "Campañas de datacenter",
+  architecture: "Grafo de arquitectura",
+  migration: "Migraciones y planes",
+  "sources-targets": "Orígenes y destinos",
+  "executions-audit": "Ejecuciones, IaC y auditoría",
 };
 
 export default function Header({
   activeTab,
-  architectureName,
+  setActiveTab,
   searchQuery,
   setSearchQuery,
   selectedCount,
@@ -21,17 +20,17 @@ export default function Header({
   targetProvider = "aws",
   setTargetProvider,
   onToggleMobileNav,
+  sidebarCollapsed,
+  onToggleSidebarCollapse,
 }) {
-  const areaLabel = TAB_LABELS[activeTab] || "Consola Operativa";
-
   return (
-    <header className="enterprise-header">
+    <header className="enterprise-header awsui-top-navigation" role="banner">
       <div className="header-left">
         <button
           type="button"
           className="mobile-nav-toggle"
           onClick={onToggleMobileNav}
-          aria-label="Abrir navegación principal"
+          aria-label="Abrir menú de navegación"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
             <line x1="3" y1="6" x2="21" y2="6" />
@@ -39,20 +38,45 @@ export default function Header({
             <line x1="3" y1="18" x2="21" y2="18" />
           </svg>
         </button>
-        <div className="header-meta-group">
-          <span className="env-badge">{areaLabel}</span>
-          <span className="meta-separator" aria-hidden="true">/</span>
-          <h1 className="active-arch-title" title={architectureName || "onpremise-datacenter-enterprise"}>
-            {architectureName || "onpremise-datacenter-enterprise"}
-          </h1>
-        </div>
+
+        {onToggleSidebarCollapse && (
+          <button
+            type="button"
+            className="awsui-top-icon-btn"
+            onClick={onToggleSidebarCollapse}
+            title={sidebarCollapsed ? "Expandir menú lateral" : "Contraer menú lateral"}
+            aria-label="Alternar panel lateral"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <line x1="9" y1="3" x2="9" y2="21" />
+            </svg>
+          </button>
+        )}
+
+        <button
+          type="button"
+          className="awsui-brand-identity"
+          onClick={() => setActiveTab && setActiveTab("overview")}
+          title="Ir al Resumen del entorno de CloudMove Console"
+        >
+          <span className="awsui-brand-cube" aria-hidden="true">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FF9900" strokeWidth="2.2">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" />
+              <path d="M2 17l10 5 10-5" />
+              <path d="M2 12l10 5 10-5" />
+            </svg>
+          </span>
+          <span className="awsui-brand-title">CloudMove</span>
+          <span className="awsui-brand-tag">AWS · GCP Console</span>
+        </button>
       </div>
 
-      <div className="header-right">
+      <div className="awsui-top-center">
         <div className="header-search-box">
           <svg
-            width="14"
-            height="14"
+            width="15"
+            height="15"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
@@ -66,43 +90,47 @@ export default function Header({
           <input
             type="search"
             name="architecture-search"
-            aria-label="Buscar activos por nombre, IP o tipo en el grafo"
-            placeholder="Buscar recurso, IP, servicio..."
+            className="header-search-input"
+            aria-label="Buscar recursos, IPs, servicios o planes"
+            placeholder="Buscar servicios, recursos o planes..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
         </div>
+      </div>
 
+      <div className="header-right">
         {setTargetProvider && (
-          <select
-            aria-label="Proveedor cloud destino activo"
-            value={targetProvider}
-            onChange={(e) => setTargetProvider(e.target.value)}
-            className="cm-select"
-            style={{ width: "auto", minHeight: 32, padding: "4px 10px", fontSize: 12, fontWeight: 600 }}
-          >
-            <option value="aws">Destino: AWS</option>
-            <option value="gcp">Destino: GCP</option>
-          </select>
+          <div className="awsui-top-util-select">
+            <select
+              aria-label="Proveedor cloud destino activo"
+              value={targetProvider}
+              onChange={(e) => setTargetProvider(e.target.value)}
+              className="awsui-squid-select"
+            >
+              <option value="aws">AWS · us-east-1</option>
+              <option value="gcp">GCP · us-central1</option>
+            </select>
+          </div>
         )}
 
-        <button
-          type="button"
-          className="header-action-btn primary"
-          disabled={selectedCount === 0}
-          onClick={onPrepareMigration}
-          title={
-            selectedCount === 0
-              ? "Selecciona recursos en el Grafo de Arquitectura para analizar dependencias y generar IaC"
-              : `Analizar dependencias y generar IaC para ${selectedCount} recurso(s)`
-          }
-        >
-          Preparar Migración ({selectedCount})
-        </button>
-
-        <div className="user-profile-badge" title="Arquitecto Cloud / DevOps Senior">
-          <span>ARQ</span>
-        </div>
+        {selectedCount > 0 ? (
+          <button
+            type="button"
+            className="header-action-btn primary"
+            onClick={onPrepareMigration}
+          >
+            Generar IaC ({selectedCount})
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="header-action-btn primary"
+            onClick={() => setActiveTab && setActiveTab("migration")}
+          >
+            Nueva migración
+          </button>
+        )}
       </div>
     </header>
   );

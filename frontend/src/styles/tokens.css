@@ -1,184 +1,234 @@
 :root {
   /* ==========================================================================
-     1. PRIMITIVE & SURFACE TOKENS — "Precision Infrastructure Control Room"
+     1. AWS CLOUDSCAPE v3 DESIGN SYSTEM TOKENS
      ========================================================================== */
-  --color-bg-base: #f4f6fa;
-  --color-bg-canvas: #edf1f7;
-  --color-bg-sidebar: #eef1f6;
-  --color-bg-header: #ffffff;
+  /* Top Navigation (Squid Ink) */
+  --aws-squid-ink: #232f3e;
+  --aws-squid-ink-dark: #16191f;
+  --aws-squid-ink-border: #414d5c;
+  --aws-squid-ink-text: #ffffff;
+  --aws-squid-ink-muted: #d5dbdb;
+
+  /* Brand & Interactive Accents */
+  --aws-orange: #ff9900;
+  --aws-orange-hover: #ec7211;
+  --aws-orange-active: #eb5f07;
+  --aws-blue: #0972d3;
+  --aws-blue-hover: #033160;
+  --aws-blue-tint: #f2f8fd;
+  --aws-blue-border: #539fe5;
+
+  /* Canvas & Surface Tokens */
+  --color-bg-base: #f2f3f3;
+  --color-bg-canvas: #f2f3f3;
+  --color-bg-sidebar: #ffffff;
+  --color-bg-header: #232f3e;
   --color-bg-drawer: #ffffff;
   --color-bg-surface: #ffffff;
-  --color-bg-surface-hover: #f8fafc;
-  --color-bg-subtle: #f8fafc;
-  --color-bg-muted: #f1f5f9;
+  --color-bg-surface-hover: #f2f8fd;
+  --color-bg-subtle: #fafafa;
+  --color-bg-muted: #f2f3f3;
   --color-bg-elevated: #ffffff;
   --color-surface-elevated: #ffffff;
-  --color-surface-hover: #f1f5f9;
-  --color-surface-selected: #eff6ff;
-  --color-primary-light: #eff6ff;
+  --color-surface-hover: #f2f8fd;
+  --color-surface-selected: #f2f8fd;
+  --color-primary-light: #f2f8fd;
 
-  /* Command Rail (Sidebar) & Code Terminal Surfaces */
-  --color-rail-bg: #0b1120;
-  --color-rail-surface: #131c31;
-  --color-rail-border: #1e293b;
-  --color-rail-text: #e2e8f0;
-  --color-rail-text-muted: #94a3b8;
-  --color-rail-active-bg: #1d4ed8;
-  --color-rail-active-text: #ffffff;
+  /* Container Depth Surfaces (Canvas Hierarchy) */
+  --color-container-depth-0: rgba(250, 250, 250, 0.95);
+  --color-container-depth-1: rgba(242, 243, 243, 0.95);
+  --color-container-depth-2: rgba(255, 255, 255, 0.98);
+  --color-container-depth-3: rgba(242, 248, 253, 0.98);
 
-  --color-terminal-bg: #0f172a;
-  --color-terminal-header: #1e293b;
-  --color-terminal-border: #334155;
-  --color-terminal-text: #f8fafc;
+  /* SideNavigation (Cloudscape White Drawer) & Code Terminal Surfaces */
+  --color-rail-bg: #ffffff;
+  --color-rail-surface: #f2f8fd;
+  --color-rail-border: #e9ebed;
+  --color-rail-text: #000716;
+  --color-rail-text-muted: #545b64;
+  --color-rail-active-bg: #f2f8fd;
+  --color-rail-active-text: #0972d3;
+
+  --color-terminal-bg: #16191f;
+  --color-terminal-header: #232f3e;
+  --color-terminal-border: #414d5c;
+  --color-terminal-text: #f2f3f3;
 
   /* ==========================================================================
-     2. TYPOGRAPHIC INK & CONTRAST TOKENS (WCAG AA/AAA Verified on Light)
+     2. TYPOGRAPHIC INK & CONTRAST TOKENS (Cloudscape Ink Scale)
      ========================================================================== */
-  --color-text-primary: #0f172a;    /* 17.4:1 on white */
-  --color-text-secondary: #334155;  /* 9.8:1 on white */
-  --color-text-muted: #475569;      /* 7.0:1 on white (Replaced low-contrast #64748b) */
-  --color-text-on-brand: #ffffff;
+  --color-text-primary: #000716;
+  --color-text-secondary: #545b64;
+  --color-text-muted: #545b64;
+  --color-text-disabled: #879596;
+  --color-text-on-brand: #000716;
 
   /* ==========================================================================
      3. BRAND & CLOUD PROVIDER ACCENTS (AWS & GCP Only — ADR-001)
      ========================================================================== */
-  --color-primary: #1d4ed8;
-  --color-primary-hover: #1e40af;
-  --color-primary-subtle: #eff6ff;
-  --color-primary-border: #93c5fd;
+  --color-primary: #0972d3;
+  --color-primary-hover: #033160;
+  --color-primary-subtle: #f2f8fd;
+  --color-primary-border: #539fe5;
 
-  --color-aws-accent: #c2410c;
-  --color-aws-bg: #fff7ed;
-  --color-aws-border: #fdba74;
+  --color-aws-accent: #ec7211;
+  --color-aws-bg: #fff8f0;
+  --color-aws-border: #ff9900;
 
-  --color-gcp-accent: #1d4ed8;
-  --color-gcp-bg: #eff6ff;
-  --color-gcp-border: #93c5fd;
+  --color-gcp-accent: #0972d3;
+  --color-gcp-bg: #f2f8fd;
+  --color-gcp-border: #539fe5;
 
-  --color-onprem-accent: #334155;
-  --color-onprem-bg: #f1f5f9;
-  --color-onprem-border: #cbd5e1;
+  --color-onprem-accent: #545b64;
+  --color-onprem-bg: #f2f3f3;
+  --color-onprem-border: #d5dbdb;
 
   /* ==========================================================================
-     4. EPISTEMIC PROVENANCE TOKENS (Observed vs Derived vs Inferred vs Unknown)
+     4. EPISTEMIC PROVENANCE & SEMANTIC STATUS TOKENS (Cloudscape StatusIndicator)
      ========================================================================== */
-  --epistemic-observed-bg: #dcfce7;
-  --epistemic-observed-text: #166534;
-  --epistemic-observed-border: #86efac;
+  --epistemic-observed-bg: #f2f8f0;
+  --epistemic-observed-text: #037f0c;
+  --epistemic-observed-border: #037f0c;
 
-  --epistemic-derived-bg: #dbeafe;
-  --epistemic-derived-text: #1e40af;
-  --epistemic-derived-border: #93c5fd;
+  --epistemic-derived-bg: #f2f8fd;
+  --epistemic-derived-text: #0972d3;
+  --epistemic-derived-border: #0972d3;
 
-  --epistemic-inferred-bg: #fef3c7;
-  --epistemic-inferred-text: #92400e;
-  --epistemic-inferred-border: #f59e0b;
+  --epistemic-inferred-bg: #fffef0;
+  --epistemic-inferred-text: #8d6605;
+  --epistemic-inferred-border: #8d6605;
 
-  --epistemic-unknown-bg: #f1f5f9;
-  --epistemic-unknown-text: #334155;
-  --epistemic-unknown-border: #94a3b8;
+  --epistemic-unknown-bg: #f2f3f3;
+  --epistemic-unknown-text: #545b64;
+  --epistemic-unknown-border: #879596;
 
   /* ==========================================================================
      5. OPERATIONAL & RISK STATE TOKENS
      ========================================================================== */
-  --color-health-healthy: #15803d;
-  --color-health-healthy-bg: #dcfce7;
-  --color-health-healthy-border: #86efac;
+  --color-health-healthy: #037f0c;
+  --color-health-healthy-bg: #f2f8f0;
+  --color-health-healthy-border: #037f0c;
 
-  --color-health-warning: #b45309;
-  --color-health-warning-bg: #fef3c7;
-  --color-health-warning-border: #fcd34d;
+  --color-health-warning: #8d6605;
+  --color-health-warning-bg: #fffef0;
+  --color-health-warning-border: #8d6605;
 
-  --color-health-error: #b91c1c;
-  --color-health-error-bg: #fee2e2;
-  --color-health-error-border: #fca5a5;
+  --color-health-error: #d91515;
+  --color-health-error-bg: #fdf3f1;
+  --color-health-error-border: #d91515;
 
-  --color-info: #1d4ed8;
-  --color-info-bg: #eff6ff;
-  --color-info-border: #93c5fd;
+  --color-info: #0972d3;
+  --color-info-bg: #f2f8fd;
+  --color-info-border: #0972d3;
 
-  --color-shared-text: #9a3412;
-  --color-shared-bg: #ffedd5;
-  --color-shared-border: #fb923c;
+  --color-shared-text: #8d6605;
+  --color-shared-bg: #fffef0;
+  --color-shared-border: #8d6605;
 
   /* ==========================================================================
      6. ARCHITECTURE DOMAIN ACCENTS
      ========================================================================== */
-  --domain-infra-border: #475569;
-  --domain-infra-bg: #f1f5f9;
-  --domain-infra-icon: #334155;
+  --domain-infra-border: #545b64;
+  --domain-infra-bg: #f2f3f3;
+  --domain-infra-icon: #232f3e;
 
-  --domain-compute-border: #2563eb;
-  --domain-compute-bg: #eff6ff;
-  --domain-compute-icon: #1d4ed8;
+  --domain-compute-border: #0972d3;
+  --domain-compute-bg: #f2f8fd;
+  --domain-compute-icon: #0972d3;
 
-  --domain-data-border: #059669;
-  --domain-data-bg: #ecfdf5;
-  --domain-data-icon: #047857;
+  --domain-data-border: #037f0c;
+  --domain-data-bg: #f2f8f0;
+  --domain-data-icon: #037f0c;
 
-  --domain-network-border: #4f46e5;
-  --domain-network-bg: #eef2ff;
-  --domain-network-icon: #4338ca;
+  --domain-network-border: #0972d3;
+  --domain-network-bg: #f2f8fd;
+  --domain-network-icon: #033160;
 
-  --domain-security-border: #d97706;
-  --domain-security-bg: #fffbeb;
-  --domain-security-icon: #b45309;
+  --domain-security-border: #8d6605;
+  --domain-security-bg: #fffef0;
+  --domain-security-icon: #8d6605;
 
-  --domain-storage-border: #0284c7;
-  --domain-storage-bg: #f0f9ff;
-  --domain-storage-icon: #0369a1;
+  --domain-storage-border: #0972d3;
+  --domain-storage-bg: #f2f8fd;
+  --domain-storage-icon: #0972d3;
+
+  --color-domain-data: var(--domain-data-icon);
+  --color-domain-data-bg: var(--domain-data-bg);
+  --color-domain-network: var(--domain-network-icon);
+  --color-domain-network-bg: var(--domain-network-bg);
+  --color-domain-compute: var(--domain-compute-icon);
+  --color-domain-compute-bg: var(--domain-compute-bg);
+
+  --color-provider-aws: var(--color-aws-accent);
+  --color-provider-aws-bg: var(--color-aws-bg);
+  --color-provider-gcp: var(--color-gcp-accent);
+  --color-provider-gcp-bg: var(--color-gcp-bg);
+  --color-provider-azure: #0972d3;
+  --color-provider-azure-bg: #f2f8fd;
+  --color-provider-k8s: #0972d3;
+  --color-provider-k8s-bg: #f2f8fd;
+  --color-provider-onprem: var(--color-onprem-accent);
+  --color-provider-onprem-bg: var(--color-onprem-bg);
 
   /* ==========================================================================
-     7. BORDERS, SHADOWS, RADII & SPACING SCALE
+     7. BORDERS, SHADOWS, RADII & SPACING SCALE (Cloudscape Precision)
      ========================================================================== */
-  --color-border-subtle: #e2e8f0;
-  --color-border-medium: #cbd5e1;
-  --color-border-default: #cbd5e1;
-  --color-border-strong: #94a3b8;
-  --color-border-focus: #1d4ed8;
-  --color-border-selected: #2563eb;
+  --color-border-subtle: #e9ebed;
+  --color-border-medium: #d5dbdb;
+  --color-border-default: #d5dbdb;
+  --color-border-strong: #7d8998;
+  --color-border-input: #7d8998;
+  --color-border-focus: #0972d3;
+  --color-border-selected: #0972d3;
 
   --spacing-2xs: 4px;
   --spacing-xs: 8px;
   --spacing-sm: 12px;
   --spacing-md: 16px;
-  --spacing-lg: 24px;
-  --spacing-xl: 32px;
-  --spacing-2xl: 48px;
+  --spacing-lg: 20px;
+  --spacing-xl: 28px;
+  --spacing-2xl: 40px;
 
   --radius-xs: 4px;
-  --radius-sm: 6px;
+  --radius-sm: 4px;
   --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-pill: 20px;
 
   /* ==========================================================================
-     8. TYPOGRAPHY & MOTION TOKENS
+     8. TYPOGRAPHY & MOTION TOKENS (Amazon Ember / Open Sans / Monaco)
      ========================================================================== */
-  --font-display: "Plus Jakarta Sans", "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  --font-display: "Amazon Ember", "Open Sans", "Helvetica Neue", "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-sans: "Amazon Ember", "Open Sans", "Helvetica Neue", "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "Monaco", "Menlo", "Consolas", "JetBrains Mono", monospace;
   --font-family-sans: var(--font-sans);
   --font-family-mono: var(--font-mono);
+  --font-family-code: var(--font-mono);
 
-  --font-size-title-section: 15px;
+  --font-size-page-header: 22px;
+  --font-size-container-header: 18px;
+  --font-size-title-section: 16px;
   --font-size-node-title: 13px;
   --font-size-body: 13px;
-  --font-size-meta: 11px;
+  --font-size-meta: 12px;
 
   --line-height-tight: 1.25;
-  --line-height-body: 1.5;
+  --line-height-body: 1.45;
 
-  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
-  --shadow-md: 0 4px 12px -2px rgba(15, 23, 42, 0.08), 0 2px 4px -2px rgba(15, 23, 42, 0.04);
-  --shadow-lg: 0 12px 28px -6px rgba(15, 23, 42, 0.14), 0 4px 10px -4px rgba(15, 23, 42, 0.06);
-  --shadow-focus: 0 0 0 3px rgba(29, 78, 216, 0.28);
+  --shadow-xs: 0 1px 1px 0 rgba(0, 28, 36, 0.1), 1px 1px 1px 0 rgba(0, 28, 36, 0.06);
+  --shadow-sm: 0 1px 1px 0 rgba(0, 28, 36, 0.1), 1px 1px 1px 0 rgba(0, 28, 36, 0.08);
+  --shadow-md: 0 4px 12px 0 rgba(0, 28, 36, 0.12);
+  --shadow-lg: 0 8px 24px 0 rgba(0, 28, 36, 0.18);
+  --shadow-focus: 0 0 0 2px #0972d3;
+  --shadow-selected: 0 0 0 2px #0972d3;
 
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
-  --duration-press: 90ms;
-  --duration-fast: 150ms;
-  --duration-normal: 220ms;
-  --duration-slow: 320ms;
+  --ease-spring: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-drawer: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-press: 80ms;
+  --duration-fast: 120ms;
+  --duration-normal: 180ms;
+  --duration-slow: 250ms;
 }

@@ -48,6 +48,17 @@ function ResourceInspector({
     };
   }, [isResizing]);
 
+  useEffect(() => {
+    if (!node || !onClose) return;
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") {
+        onClose();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [node, onClose]);
+
   if (!node) return null;
 
   const provider = resolveProviderMeta(node);
@@ -63,8 +74,9 @@ function ResourceInspector({
     .map((e) => allNodes.find((n) => n.id === e.source))
     .filter(Boolean);
 
-  const children = allNodes.filter((n) => n.parent_id === node.id);
-  const parentNode = allNodes.find((n) => n.id === node.parent_id);
+  const parentRefId = node.parent_id || node.parent;
+  const children = allNodes.filter((n) => (n.parent_id || n.parent) === node.id);
+  const parentNode = parentRefId ? allNodes.find((n) => n.id === parentRefId) : null;
 
   const totalDeps = directDependencies.length + directDependents.length;
   const hasChildren = children.length > 0;
@@ -155,11 +167,13 @@ function ResourceInspector({
         </div>
       </header>
 
-      <nav className="drawer-nav-tabs" aria-label="Secciones del inspector">
+      <nav className="drawer-nav-tabs" role="tablist" aria-label="Secciones del inspector">
         {availableTabs.map((tab) => (
           <button
             key={tab.id}
             type="button"
+            role="tab"
+            aria-selected={currentTab === tab.id}
             className={currentTab === tab.id ? "active" : ""}
             onClick={() => setActiveTab(tab.id)}
           >

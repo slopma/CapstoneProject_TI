@@ -74,6 +74,34 @@ const VALID_TABS = new Set([
   "executions-audit",
 ]);
 
+class ViewErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null, info: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    this.setState({ error, info });
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="cm-alert error" role="alert" style={{ margin: 20 }}>
+          <strong>Error en renderizado de vista:</strong> {String(this.state.error?.message || this.state.error)}
+          <pre style={{ fontSize: 11, whiteSpace: "pre-wrap", marginTop: 8 }}>
+            {String(this.state.error?.stack || "")}
+            {"\n"}
+            {String(this.state.info?.componentStack || "")}
+          </pre>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function getInitialTabFromUrl() {
   try {
     const params = new URLSearchParams(window.location.search);
@@ -452,6 +480,7 @@ function App() {
         jobsCount,
       }}
     >
+      <ViewErrorBoundary key={activeTab}>
       {loading ? (
         <div className="loading-state-overlay">
           <div className="spinner-ring" />
@@ -595,6 +624,7 @@ function App() {
           onSelectMigrationInOrchestrator={handleQuickStartUseCase}
         />
       )}
+      </ViewErrorBoundary>
 
       {showMigrationModal && (
         <MigrationPreviewModal

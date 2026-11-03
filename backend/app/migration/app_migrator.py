@@ -82,9 +82,10 @@ DEFAULT_INLINE_APP: Dict[str, str] = {
 }
 
 SECRET_KEY_PATTERNS = re.compile(
-    r"(SECRET|PASSWORD|PASSWD|TOKEN|API_KEY|PRIVATE_KEY|CREDENTIAL|AUTH_KEY|CLIENT_SECRET|DB_PASS)",
+    r"(SECRET|PASSWORD|PASSWD|TOKEN|API_KEY|PRIVATE_KEY|CREDENTIAL|AUTH_KEY|CLIENT_SECRET|DB_PASS|ANON_KEY|SERVICE_ROLE_KEY|SUPABASE_KEY|_KEY$)",
     re.IGNORECASE,
 )
+JWT_VALUE_PATTERN = re.compile(r"^eyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$")
 URL_CREDENTIAL_PATTERN = re.compile(r"([a-zA-Z0-9+.-]+://[^:/\s]+:)([^@\s]+)(@)")
 
 
@@ -100,11 +101,11 @@ def _slug(value: str) -> str:
 def redact_env_value(key: str, raw_value: str) -> Dict[str, Any]:
     """
     Preserve the environment variable name and structural classification while
-    redacting any credential, password, token, private key, or connection URI password.
+    redacting any credential, password, token, private key, JWT, or connection URI password.
     Never stores raw `.env` secret values in CMIR or discovery outputs.
     """
     val = str(raw_value or "").strip().strip('"').strip("'")
-    is_secret = bool(SECRET_KEY_PATTERNS.search(key))
+    is_secret = bool(SECRET_KEY_PATTERNS.search(key)) or bool(JWT_VALUE_PATTERN.match(val))
     contains_inline_cred = bool(URL_CREDENTIAL_PATTERN.search(val))
     contains_pem = "PRIVATE KEY" in val.upper()
 
@@ -890,6 +891,7 @@ def _analyze_source_payload(
             "epistemic_state": "observed",
             "confidence": 0.99,
             "requires_data_migration": False,
+            "is_external_baas": True,
             "evidence": [
                 {
                     "source": "SDK Supabase (@supabase/supabase-js, supabase-py) + endpoint verificado",
@@ -1156,23 +1158,662 @@ def _analyze_source_payload(
 
     if git_meta:
         out["git_metadata"] = git_meta
+    out["transformation_catalog"] = build_github_to_cloud_transformation_catalog(
+        out, target_provider="aws", deployment_mode="vm_rehost", user_decisions=None
+    )
     return out
+
+
+def build_github_to_cloud_transformation_catalog(
+    app_discovery: Dict[str, Any],
+    target_provider: str = "aws",
+    deployment_mode: str = "vm_rehost",
+    user_decisions: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """
+    Build an interactive catalog mapping every discovered item from the GitHub repository
+    (runtime, multi-tier components, external BaaS like Supabase, databases, caches, queues,
+    ports/network, secrets, and IAM identity) to what will be created in the target cloud,
+    why it transforms, and the selectable options the user can choose from.
+    """
+    provider_clean = (target_provider or "aws").lower().strip()
+    is_gcp = provider_clean == "gcp"
+    p_upper = "GCP" if is_gcp else "AWS"
+    decisions_in = dict(user_decisions or app_discovery.get("user_decisions") or {})
+
+    app_name = app_discovery.get("app_name", "app")
+    slug = _slug(app_name)
+    safe_slug = slug.replace("-", "_")
+    ports = app_discovery.get("exposed_ports") or [8080]
+    health_ep = (app_discovery.get("health_endpoints") or ["/health"])[0]
+    components = app_discovery.get("components") or []
+    dependencies = app_discovery.get("dependencies") or []
+    env_vars = app_discovery.get("environment_variables") or []
+    secret_vars = [e for e in env_vars if e.get("is_secret")]
+
+    items: List[Dict[str, Any]] = []
+    applied_decisions: Dict[str, str] = {}
+
+    # 1. Compute, High Availability & Containerization Architecture
+    comp_default = "ha_asg_alb_containerized"
+    comp_selected = decisions_in.get("compute_architecture", comp_default)
+    comp_options = [
+        {
+            "id": "ha_asg_alb_containerized",
+            "label": (
+                "Alta Disponibilidad Multi-AZ (Balanceador ALB + Auto Scaling Group + Contenedores Docker)"
+                if not is_gcp
+                else "Alta Disponibilidad Regional (Managed Instance Group + Compute Engine + Contenedores Docker)"
+            ),
+            "badge": "Recomendado · Resiliente a Fallos",
+            "cost_estimate": "~$16–22 USD/mes (ALB) + Instancias EC2 Free-Tier" if not is_gcp else "~$15–20 USD/mes (Compute Engine)",
+            "description": (
+                f"Despliega el repositorio contenerizado con Docker Compose (`user_data.sh` + 2GB Swap) detrás de un "
+                f"{'Application Load Balancer Multi-AZ (`aws_lb`) y un Auto Scaling Group (`aws_autoscaling_group`)' if not is_gcp else 'grupo de instancias en Compute Engine'} "
+                f"con chequeos de salud automáticos en `{health_ep}`."
+            ),
+            "cloud_resources_created": (
+                [
+                    "aws_lb.app_alb (Application Load Balancer Multi-AZ)",
+                    "aws_lb_target_group.app_tg (Health Check HTTP " + health_ep + ")",
+                    "aws_lb_listener.http_listener (Puerto 80 -> Target Group)",
+                    f"aws_launch_template.compute_{safe_slug}_host_lt",
+                    f"aws_autoscaling_group.compute_{safe_slug}_host_asg (Min 1 / Desired 2 / Max 3)",
+                    f"aws_instance.compute_{safe_slug}_host (Ubuntu 22.04 LTS + Docker Compose + 2GB Swap)",
+                ]
+                if not is_gcp
+                else [
+                    f"google_compute_instance.compute_{safe_slug}_host (Debian 12 + Docker Compose)",
+                    "google_compute_firewall.allow_internal_and_web",
+                ]
+            ),
+        },
+        {
+            "id": "single_instance_containerized",
+            "label": (
+                "Instancia Única Económica 100% Free-Tier (1 EC2 t3.micro + Docker Compose, sin Balanceador ni ASG)"
+                if not is_gcp
+                else "Instancia Única Económica (1 VM Compute Engine e2-micro + Docker Compose)"
+            ),
+            "badge": "Costo Mínimo · $0 Free Tier",
+            "cost_estimate": "$0 USD/mes (Elegible en Capa Gratuita AWS/GCP)",
+            "description": (
+                "Omite el Application Load Balancer y el Auto Scaling Group. Levanta una única máquina virtual con IP pública directa "
+                "que clona el repositorio, configura 2GB de Swap y ejecuta todos los contenedores con `docker compose up -d`."
+            ),
+            "cloud_resources_created": (
+                [
+                    f"aws_instance.compute_{safe_slug}_host (1x t3.micro con IP Pública + Docker Compose + 2GB Swap)",
+                    "aws_security_group.app_sg (Puertos " + ", ".join(map(str, ports)) + ")",
+                ]
+                if not is_gcp
+                else [
+                    f"google_compute_instance.compute_{safe_slug}_host (1x e2-micro + Docker Compose)",
+                    "google_compute_firewall.allow_internal_and_web",
+                ]
+            ),
+        },
+    ]
+    if len(components) > 1:
+        comp_options.append({
+            "id": "decoupled_tier_instances",
+            "label": f"Instancias Separadas por Capa ({len(components)} Servidores Dedicados por Microservicio)",
+            "badge": "Aislamiento Físico por Capa",
+            "cost_estimate": f"~${len(components) * 8}–{len(components) * 15} USD/mes ({len(components)} instancias dedicadas)",
+            "description": (
+                "En lugar de consolidar los contenedores en un mismo host con Docker Compose, aprovisiona una instancia "
+                f"{'EC2' if not is_gcp else 'Compute Engine'} independiente para cada componente ({', '.join(c['name'] for c in components)})."
+            ),
+            "cloud_resources_created": [
+                f"{'aws_instance' if not is_gcp else 'google_compute_instance'}.compute_{safe_slug}_{_slug(c['name']).replace('-', '_')} (Dedicada para {c['name']})"
+                for c in components
+            ],
+        })
+    valid_comp_ids = {o["id"] for o in comp_options}
+    if comp_selected not in valid_comp_ids:
+        comp_selected = comp_default
+    applied_decisions["compute_architecture"] = comp_selected
+
+    items.append({
+        "id": "compute_architecture",
+        "category": "compute",
+        "github_discovered": {
+            "title": f"Aplicación y Runtime Principal: {app_name}",
+            "subtitle": f"{app_discovery.get('language')} · {app_discovery.get('framework')} ({app_discovery.get('runtime')})",
+            "files": [f for f in app_discovery.get("files_inspected", []) if "dockerfile" in f.lower() or "compose" in f.lower() or f in ("package.json", "requirements.txt", "pyproject.toml", "pom.xml", "go.mod")][:6],
+            "evidence_detail": (
+                f"Runtime `{app_discovery.get('runtime')}`, comando `{app_discovery.get('start_commands', [''])[0]}`, "
+                f"puertos expuestos `{ports}` y endpoint de salud `{health_ep}`."
+            ),
+            "badge": "Cómputo y Contenedores",
+        },
+        "why_transformed": (
+            f"El código fuente y sus manifiestos de contenedores deben alojarse en {p_upper} con acceso de red, "
+            "inicialización desatendida (`user_data.sh`) y tolerancia a fallos."
+        ),
+        "default_option_id": comp_default,
+        "selected_option_id": comp_selected,
+        "options": comp_options,
+    })
+
+    # 2. Multi-tier Components (Frontend / Backend)
+    for comp in components:
+        c_name = comp["name"]
+        c_slug = _slug(c_name).replace("-", "_")
+        c_key = f"component:{c_name}"
+        is_frontend = comp.get("tier") == "frontend"
+        c_default = "dedicated_compute_instance" if comp_selected == "decoupled_tier_instances" else "containerized_in_compose"
+        c_selected = decisions_in.get(c_key, c_default)
+
+        c_options = [
+            {
+                "id": "containerized_in_compose",
+                "label": f"Ejecutar '{c_name}' como Contenedor dentro del Clúster Docker Principal",
+                "badge": "Recomendado · $0 Instancias Extra",
+                "cost_estimate": "$0 USD extra (Comparte host principal)",
+                "description": (
+                    f"Empaqueta `{c_name}` ({comp.get('framework')}) como contenedor ligero dentro del `docker-compose` del host principal, "
+                    "evitando pagar por una máquina virtual separada."
+                ),
+                "cloud_resources_created": [
+                    f"Contenedor Docker `{c_name}` en `user_data.sh` / `docker-compose.cloudmove.yml` (0 instancias EC2 adicionales)"
+                ],
+            },
+        ]
+        if is_frontend:
+            c_options.append({
+                "id": "cloud_static_storage",
+                "label": (
+                    f"Transformar Frontend '{c_name}' a Bucket S3 Static Website Hosting (`aws_s3_bucket`)"
+                    if not is_gcp
+                    else f"Transformar Frontend '{c_name}' a Bucket de Cloud Storage (`google_storage_bucket`)"
+                ),
+                "badge": f"Nativo {p_upper} Serverless",
+                "cost_estimate": "~$0.02 USD/GB al mes (S3 / GCS Static Hosting)",
+                "description": (
+                    f"Como `{c_name}` es un SPA ({comp.get('framework')}), la nube puede alojar sus archivos estáticos (HTML/JS/CSS) "
+                    f"directamente en un bucket {'Amazon S3 con Website Configuration' if not is_gcp else 'Google Cloud Storage'} sin consumir RAM de servidor."
+                ),
+                "cloud_resources_created": (
+                    [
+                        f"aws_s3_bucket.storage_{safe_slug}_{c_slug}_static",
+                        f"aws_s3_bucket_website_configuration.storage_{safe_slug}_{c_slug}_static_website",
+                    ]
+                    if not is_gcp
+                    else [
+                        f"google_storage_bucket.storage_{safe_slug}_{c_slug}_static",
+                    ]
+                ),
+            })
+        c_options.append({
+            "id": "dedicated_compute_instance",
+            "label": f"Aprovisionar Servidor {'EC2' if not is_gcp else 'Compute Engine'} Dedicado para '{c_name}'",
+            "badge": "VM Independiente",
+            "cost_estimate": "~$8.50 USD/mes (1 instancia t3.micro/e2-micro adicional)",
+            "description": (
+                f"Crea una máquina virtual exclusiva en Terraform para ejecutar únicamente el componente `{c_name}` "
+                f"(puertos {comp.get('container_ports', [])})."
+            ),
+            "cloud_resources_created": [
+                f"{'aws_instance' if not is_gcp else 'google_compute_instance'}.compute_{safe_slug}_{c_slug}"
+            ],
+        })
+
+        valid_c_ids = {o["id"] for o in c_options}
+        if c_selected not in valid_c_ids:
+            c_selected = c_default
+        applied_decisions[c_key] = c_selected
+
+        items.append({
+            "id": c_key,
+            "category": "component",
+            "github_discovered": {
+                "title": f"Componente {comp.get('tier', 'servicio').capitalize()}: {c_name}",
+                "subtitle": f"{comp.get('language')} · {comp.get('framework')} (Runtime: {comp.get('runtime')})",
+                "files": [f"{c_name}/Dockerfile", f"{c_name}/package.json" if is_frontend else f"{c_name}/requirements.txt"],
+                "evidence_detail": (
+                    f"Puertos de contenedor: `{comp.get('container_ports', [])}` · Comando: `{comp.get('start_command')}`"
+                    + (f" · Rutas API: `{', '.join(comp.get('endpoints', [])[:5])}`" if comp.get("endpoints") else "")
+                ),
+                "badge": "Frontend SPA" if is_frontend else "Backend API",
+            },
+            "why_transformed": (
+                f"Sub-componente detectado en el repositorio multi-capa; puedes elegir si corre consolidado en Docker Compose, "
+                f"{'en un Bucket S3 estático, o ' if is_frontend else 'o '}en una instancia dedicada."
+            ),
+            "default_option_id": c_default,
+            "selected_option_id": c_selected,
+            "options": c_options,
+        })
+
+    # 3. Dependencies (External BaaS like Supabase, Databases, Caches, Queues, Storage, Service Mesh)
+    for dep in dependencies:
+        dep_id = dep["id"]
+        dep_safe_id = dep_id.lower().replace("-", "_").replace(".", "_")
+        dep_type = dep.get("type", "database_instance")
+        dep_engine = str(dep.get("engine") or "postgres")
+        is_ext_baas = bool(dep.get("is_external_baas", False)) or "supabase" in dep_engine.lower() or "firebase" in dep_engine.lower()
+        ev_detail = (dep.get("evidence") or [{}])[0].get("detail", "Detectado en manifiestos del repositorio.")
+        ev_source = (dep.get("evidence") or [{}])[0].get("source", "Manifiesto de aplicación")
+        d_key = f"dep:{dep_id}"
+
+        if dep_type == "service_mesh_link":
+            d_default = "docker_internal_network"
+            d_selected = decisions_in.get(d_key, d_default)
+            d_options = [
+                {
+                    "id": "docker_internal_network",
+                    "label": "Enrutar por Red Interna de Contenedores Docker + Regla en Security Group (`app_sg`)",
+                    "badge": "Recomendado · $0",
+                    "cost_estimate": "$0 USD/mes (Nativo en VPC / Docker Bridge)",
+                    "description": (
+                        "Resuelve la comunicación HTTP/REST entre el frontend y el backend mediante la red interna de Docker Compose y "
+                        "el Security Group `app_sg`, sin crear servidores adicionales por error."
+                    ),
+                    "cloud_resources_created": [
+                        f"Regla TCP puerto {dep.get('port', 8000)} en `aws_security_group.app_sg`" if not is_gcp else f"Regla TCP puerto {dep.get('port', 8000)} en `google_compute_firewall.allow_internal_and_web`"
+                    ],
+                },
+            ]
+            applied_decisions[d_key] = "docker_internal_network"
+            items.append({
+                "id": d_key,
+                "category": "networking",
+                "github_discovered": {
+                    "title": f"Enlace de Red Interno: {dep['name']}",
+                    "subtitle": f"Protocolo {dep.get('engine', 'http_rest').upper()} · Puerto TCP {dep.get('port', 8000)}",
+                    "files": [ev_source],
+                    "evidence_detail": ev_detail,
+                    "badge": "Comunicación Interna",
+                },
+                "why_transformed": "Garantiza que el frontend pueda consumir los endpoints del backend en la nube sin abrir instancias innecesarias.",
+                "default_option_id": d_default,
+                "selected_option_id": "docker_internal_network",
+                "options": d_options,
+            })
+            continue
+
+        if dep_type in ("database_instance", "database"):
+            d_default = "keep_external" if is_ext_baas else "transform_to_cloud_managed"
+            d_selected = decisions_in.get(d_key, d_default)
+            d_options = [
+                {
+                    "id": "keep_external",
+                    "label": (
+                        f"Usar el Servicio Externo Original ({dep['name']} / Supabase BaaS) — No crear BD en {p_upper}"
+                        if is_ext_baas
+                        else f"Conectar a Base de Datos Externa Existente — No aprovisionar {'RDS' if not is_gcp else 'Cloud SQL'}"
+                    ),
+                    "badge": "Recomendado · $0 en Nube" if is_ext_baas else "Opción Externa · $0 en Nube",
+                    "cost_estimate": "$0 USD/mes en " + p_upper + " (Se mantiene en proveedor externo)",
+                    "description": (
+                        f"La aplicación seguirá conectándose al servicio externo (`{dep_engine}`) a través de sus variables de entorno (`.env`). "
+                        f"No se creará ninguna instancia {'Amazon RDS' if not is_gcp else 'Google Cloud SQL'} vacía, evitando cobros duplicados."
+                    ),
+                    "cloud_resources_created": [
+                        f"0 recursos de Base de Datos en Terraform (Conexión externa preservada en `.env` y `user_data.sh`)"
+                    ],
+                },
+                {
+                    "id": "transform_to_cloud_managed",
+                    "label": (
+                        f"Transformar al Servicio Equivalente de {p_upper}: Amazon RDS for PostgreSQL (Multi-AZ)"
+                        if not is_gcp
+                        else f"Transformar al Servicio Equivalente de {p_upper}: Google Cloud SQL for PostgreSQL (HA)"
+                    ),
+                    "badge": f"Servicio Administrado {p_upper}" + (" (Recomendado)" if not is_ext_baas else ""),
+                    "cost_estimate": "~$15–28 USD/mes (db.t3.micro Multi-AZ + 20GB SSD)" if not is_gcp else "~$25–35 USD/mes (Cloud SQL Regional)",
+                    "description": (
+                        f"Sustituye o migra el servicio hacia una base de datos relacional administrada por {p_upper} en subredes privadas aisladas, "
+                        "con contraseña maestra generada dinámicamente (`random_password`), backups automáticos y script `migrate_database_data.sh` (`pg_dump`/`pg_restore`)."
+                    ),
+                    "cloud_resources_created": (
+                        [
+                            f"aws_db_instance.{dep_safe_id} (PostgreSQL db.t3.micro Multi-AZ Cifrada)",
+                            "aws_db_subnet_group.db_subnets (Subredes Privadas A y B)",
+                            "aws_security_group.data_sg (Puerto 5432 exclusivo desde app_sg)",
+                            "random_password.db_master_password",
+                            "Script de migración de datos: migrate_database_data.sh",
+                        ]
+                        if not is_gcp
+                        else [
+                            f"google_sql_database_instance.{dep_safe_id} (POSTGRES_15 Regional)",
+                            f"google_sql_user.{dep_safe_id}_admin_user",
+                            "random_password.db_master_password",
+                            "Script de migración de datos: migrate_database_data.sh",
+                        ]
+                    ),
+                },
+                {
+                    "id": "self_hosted_container",
+                    "label": "Transformar a Contenedor PostgreSQL Auto-Gestionado dentro del Docker Compose de la VM",
+                    "badge": "Ahorro Cloud · $0 RDS",
+                    "cost_estimate": "$0 USD extra (Corre dentro de la misma VM EC2/GCE)",
+                    "description": (
+                        "Levanta un contenedor `postgres:15-alpine` con volumen local persistente dentro de la misma instancia de cómputo en la nube, "
+                        f"sin contratar {'Amazon RDS' if not is_gcp else 'Cloud SQL'}."
+                    ),
+                    "cloud_resources_created": [
+                        f"Contenedor `postgres:15-alpine` + Volumen persistente en `docker-compose` (0 instancias {'RDS' if not is_gcp else 'Cloud SQL'})"
+                    ],
+                },
+            ]
+            valid_d_ids = {o["id"] for o in d_options}
+            if d_selected not in valid_d_ids:
+                d_selected = d_default
+            applied_decisions[d_key] = d_selected
+
+            items.append({
+                "id": d_key,
+                "category": "database_or_external",
+                "github_discovered": {
+                    "title": (
+                        f"Servicio Externo BaaS / Base de Datos: {dep['name']}"
+                        if is_ext_baas
+                        else f"Base de Datos Relacional: {dep['name']}"
+                    ),
+                    "subtitle": f"Motor: {dep_engine} · Puerto: {dep.get('port', 5432)} · Certeza: {int(dep.get('confidence', 0.95) * 100)}%",
+                    "files": [ev_source],
+                    "evidence_detail": ev_detail,
+                    "badge": "BaaS Externo Detectado" if is_ext_baas else "Base de Datos",
+                },
+                "why_transformed": (
+                    f"Se detectó `{dep['name']}` ({dep_engine}) en GitHub. Como {p_upper} ofrece su propio servicio administrado "
+                    f"({'Amazon RDS' if not is_gcp else 'Google Cloud SQL'}), puedes elegir entre seguir usando el servicio externo gratuito, "
+                    f"transformarlo al servicio nativo de {p_upper}, o alojarlo como contenedor propio."
+                ),
+                "default_option_id": d_default,
+                "selected_option_id": d_selected,
+                "options": d_options,
+            })
+            continue
+
+        if dep_type == "cache":
+            d_default = "transform_to_cloud_managed"
+            d_selected = decisions_in.get(d_key, d_default)
+            d_options = [
+                {
+                    "id": "transform_to_cloud_managed",
+                    "label": (
+                        "Transformar a Caché Administrado de la Nube: Amazon ElastiCache for Redis"
+                        if not is_gcp
+                        else "Transformar a Caché Administrado de la Nube: Google Cloud Memorystore for Redis"
+                    ),
+                    "badge": f"Servicio Nativo {p_upper}",
+                    "cost_estimate": "~$12–15 USD/mes (cache.t3.micro)",
+                    "description": f"Crea un clúster Redis administrado por {p_upper} protegido por el Security Group de datos.",
+                    "cloud_resources_created": (
+                        [
+                            f"aws_elasticache_cluster.{dep_safe_id} (Redis 7 cache.t3.micro)",
+                            "aws_security_group.data_sg (Puerto TCP 6379)",
+                        ]
+                        if not is_gcp
+                        else [f"google_redis_instance.{dep_safe_id} (Redis 7 BASIC 1GB)"]
+                    ),
+                },
+                {
+                    "id": "self_hosted_container",
+                    "label": "Ejecutar Contenedor `redis:7-alpine` dentro del Docker Compose de la VM ($0 extra)",
+                    "badge": "Económico · $0 ElastiCache",
+                    "cost_estimate": "$0 USD extra (Corre en el mismo host Docker)",
+                    "description": "Ejecuta Redis como contenedor ligero dentro de la instancia EC2/GCE sin costo adicional.",
+                    "cloud_resources_created": ["Contenedor `redis:7-alpine` en Docker Compose (0 clústeres ElastiCache)"],
+                },
+                {
+                    "id": "keep_external",
+                    "label": "Usar Servicio Redis Externo (Ej. Upstash / Redis Cloud) — No crear en Terraform",
+                    "badge": "Servicio Externo · $0 en Nube",
+                    "cost_estimate": "$0 USD en " + p_upper,
+                    "description": "Mantiene la conexión hacia un proveedor Redis externo mediante `REDIS_URL`.",
+                    "cloud_resources_created": ["0 recursos de caché en Terraform (Conexión externa por `.env`)"],
+                },
+            ]
+            if d_selected not in {o["id"] for o in d_options}:
+                d_selected = d_default
+            applied_decisions[d_key] = d_selected
+            items.append({
+                "id": d_key,
+                "category": "database_or_external",
+                "github_discovered": {
+                    "title": f"Caché en Memoria: {dep['name']}",
+                    "subtitle": f"Motor: {dep_engine} · Puerto: {dep.get('port', 6379)}",
+                    "files": [ev_source],
+                    "evidence_detail": ev_detail,
+                    "badge": "Caché / Redis",
+                },
+                "why_transformed": f"El repositorio utiliza Redis; puedes transformarlo en {'ElastiCache' if not is_gcp else 'Memorystore'}, contenedor local o servicio externo.",
+                "default_option_id": d_default,
+                "selected_option_id": d_selected,
+                "options": d_options,
+            })
+            continue
+
+        # Queue / Storage / External API
+        d_default = "keep_external" if dep_type == "network_connection" else "transform_to_cloud_managed"
+        d_selected = decisions_in.get(d_key, d_default)
+        d_options = [
+            {
+                "id": "transform_to_cloud_managed",
+                "label": f"Transformar a Servicio Administrado de {p_upper} ({'S3 Bucket' if dep_type == 'storage' else 'Cola / Servicio Cloud'})",
+                "badge": f"Nativo {p_upper}",
+                "cost_estimate": "Pago por uso (Capa Gratuita elegible)",
+                "description": f"Aprovisiona el recurso nativo equivalente en Terraform para `{dep['name']}`.",
+                "cloud_resources_created": [
+                    f"{'aws_s3_bucket' if not is_gcp else 'google_storage_bucket'}.{dep_safe_id}"
+                    if dep_type == "storage"
+                    else f"Recurso administrado `{dep['name']}` en {p_upper}"
+                ],
+            },
+            {
+                "id": "keep_external",
+                "label": f"Mantener `{dep['name']}` como Servicio Externo — No aprovisionar en {p_upper}",
+                "badge": "Externo · $0 en Nube",
+                "cost_estimate": "$0 USD en " + p_upper,
+                "description": "Conserva la referencia externa por variables de entorno sin crear el recurso en Terraform.",
+                "cloud_resources_created": ["0 recursos adicionales en Terraform (Conexión externa)"],
+            },
+        ]
+        if d_selected not in {o["id"] for o in d_options}:
+            d_selected = d_default
+        applied_decisions[d_key] = d_selected
+        items.append({
+            "id": d_key,
+            "category": "database_or_external",
+            "github_discovered": {
+                "title": f"Dependencia Detectada: {dep['name']}",
+                "subtitle": f"Tipo: {dep_type} ({dep_engine}) · Puerto: {dep.get('port', 443)}",
+                "files": [ev_source],
+                "evidence_detail": ev_detail,
+                "badge": dep_type.upper(),
+            },
+            "why_transformed": f"Dependencia detectada en el repositorio que puede aprovisionarse en {p_upper} o mantenerse externa.",
+            "default_option_id": d_default,
+            "selected_option_id": d_selected,
+            "options": d_options,
+        })
+
+    # 4. Secrets & Environment Variables (.env)
+    sec_default = "env_template_user_data"
+    sec_selected = decisions_in.get("secrets_and_env", sec_default)
+    env_names_preview = ", ".join(e["name"] for e in env_vars[:8]) or "PORT, APP_ENV"
+    sec_options = [
+        {
+            "id": "env_template_user_data",
+            "label": "Inyectar vía Plantilla `.env` en `user_data.sh` y Variables de Terraform ($0 extra)",
+            "badge": "Recomendado · $0 Secrets Manager",
+            "cost_estimate": "$0 USD/mes",
+            "description": (
+                f"Genera el archivo `.env` automáticamente durante el arranque de la instancia (`user_data.sh`) con las {len(env_vars)} "
+                "llaves detectadas (sin exponer secretos en texto plano) y sin pagar por bóvedas adicionales."
+            ),
+            "cloud_resources_created": [
+                "Archivo `.env` auto-generado en `user_data.sh` y `.env.cloud.template` (0 bóvedas de pago)"
+            ],
+        },
+        {
+            "id": "cloud_secrets_manager",
+            "label": (
+                f"Transformar a Bóveda Administrada: AWS Secrets Manager ({max(1, len(secret_vars))} secreto(s))"
+                if not is_gcp
+                else f"Transformar a Bóveda Administrada: Google Secret Manager ({max(1, len(secret_vars))} secreto(s))"
+            ),
+            "badge": f"Seguridad Enterprise {p_upper}",
+            "cost_estimate": f"~${max(1, len(secret_vars)) * 0.40:.2f} USD/mes ($0.40 por secreto)",
+            "description": (
+                f"Crea recursos nativos `{'aws_secretsmanager_secret' if not is_gcp else 'google_secret_manager_secret'}` en Terraform "
+                "para almacenar y rotar las credenciales detectadas con cifrado KMS."
+            ),
+            "cloud_resources_created": [
+                f"{'aws_secretsmanager_secret' if not is_gcp else 'google_secret_manager_secret'}.secret_{safe_slug}_{_slug(s['name']).replace('-', '_')}"
+                for s in (secret_vars or [{"name": "app_secrets"}])
+            ],
+        },
+    ]
+    if sec_selected not in {o["id"] for o in sec_options}:
+        sec_selected = sec_default
+    applied_decisions["secrets_and_env"] = sec_selected
+
+    items.append({
+        "id": "secrets_and_env",
+        "category": "secrets",
+        "github_discovered": {
+            "title": f"Variables de Entorno y Secretos ({len(env_vars)} variables, {len(secret_vars)} secretos protegidos)",
+            "subtitle": f"Llaves detectadas: {env_names_preview}",
+            "files": [f for f in app_discovery.get("files_inspected", []) if ".env" in f.lower() or "compose" in f.lower()][:4] or [".env / docker-compose"],
+            "evidence_detail": (
+                f"Se detectaron {len(env_vars)} variables de entorno y se redactaron automáticamente {len(secret_vars)} secretos sensibles."
+            ),
+            "badge": "Variables y Secretos",
+        },
+        "why_transformed": (
+            f"Los contenedores necesitan estas variables al arrancar en {p_upper}; puedes inyectarlas gratis en `user_data.sh` "
+            f"o crear secretos administrados en {'AWS Secrets Manager' if not is_gcp else 'Google Secret Manager'}."
+        ),
+        "default_option_id": sec_default,
+        "selected_option_id": sec_selected,
+        "options": sec_options,
+    })
+
+    # 5. Workload Identity (IAM Role / Service Account)
+    iam_default = "iam_instance_profile"
+    iam_selected = decisions_in.get("workload_identity", iam_default)
+    iam_options = [
+        {
+            "id": "iam_instance_profile",
+            "label": (
+                f"Crear Rol IAM Nativo + Instance Profile (`aws_iam_role.identity_{safe_slug}_sa`)"
+                if not is_gcp
+                else "Crear Service Account Nativa (`google_service_account.workload_sa`)"
+            ),
+            "badge": "Recomendado · $0",
+            "cost_estimate": "$0 USD/mes (Sin costo en AWS/GCP)",
+            "description": (
+                "Crea un Rol IAM de mínimo privilegio y un Instance Profile para la instancia EC2, evitando incrustar llaves estáticas."
+            ),
+            "cloud_resources_created": (
+                [
+                    f"aws_iam_role.identity_{safe_slug}_sa",
+                    f"aws_iam_instance_profile.identity_{safe_slug}_sa_profile",
+                ]
+                if not is_gcp
+                else ["google_service_account.workload_sa"]
+            ),
+        },
+        {
+            "id": "skip_custom_iam",
+            "label": "No crear Rol IAM en Terraform (Ideal para cuentas restringidas / AWS Academy Learner Lab)",
+            "badge": "Compatible AWS Academy",
+            "cost_estimate": "$0 USD/mes",
+            "description": (
+                "Omite la creación de `aws_iam_role` y `aws_iam_instance_profile` en `main.tf`, permitiendo ejecutar `terraform apply` "
+                "sin errores de permisos `iam:CreateRole` en laboratorios académicos."
+            ),
+            "cloud_resources_created": [
+                "0 recursos IAM creados (Evita bloqueos `AccessDenied` en `iam:CreateRole`)"
+            ],
+        },
+    ]
+    if iam_selected not in {o["id"] for o in iam_options}:
+        iam_selected = iam_default
+    applied_decisions["workload_identity"] = iam_selected
+
+    items.append({
+        "id": "workload_identity",
+        "category": "security",
+        "github_discovered": {
+            "title": "Identidad de Ejecución en la Nube (IAM / Service Account)",
+            "subtitle": f"Permisos derivados para {app_name}",
+            "files": ["Manifiestos de aplicación y telemetría"],
+            "evidence_detail": "Requerido para que el servidor en la nube pueda registrar logs y acceder a recursos sin llaves hardcodeadas.",
+            "badge": "Seguridad IAM",
+        },
+        "why_transformed": (
+            f"Traduce la identidad del servicio en un {'Rol IAM (`aws_iam_role`)' if not is_gcp else 'Service Account'} "
+            "(no en un servidor EC2), o permite omitirlo si tu cuenta académica restringe IAM."
+        ),
+        "default_option_id": iam_default,
+        "selected_option_id": iam_selected,
+        "options": iam_options,
+    })
+
+    # Build consolidated preview of all cloud resources that will be created
+    planned_resources_summary: List[Dict[str, str]] = [
+        {
+            "terraform_resource": "aws_vpc.target_vpc + 4x aws_subnet (Multi-AZ) + aws_internet_gateway.igw" if not is_gcp else "google_compute_network.target_vpc + google_compute_subnetwork.primary_subnet",
+            "github_origin": f"Red base y puertos expuestos ({', '.join(map(str, ports))})",
+            "reason": f"Aislamiento de red virtual y subredes en {p_upper} para alojar la aplicación de forma segura.",
+            "decision_label": "Red Base VPC Multi-AZ (Automático)",
+        }
+    ]
+    for item in items:
+        sel_opt = next((o for o in item["options"] if o["id"] == item["selected_option_id"]), item["options"][0])
+        for res_str in sel_opt.get("cloud_resources_created", []):
+            planned_resources_summary.append({
+                "terraform_resource": res_str,
+                "github_origin": item["github_discovered"]["title"],
+                "reason": item["why_transformed"],
+                "decision_label": sel_opt["label"],
+                "cost_estimate": sel_opt.get("cost_estimate", "$0"),
+            })
+
+    return {
+        "target_provider": provider_clean,
+        "deployment_mode": deployment_mode,
+        "items": items,
+        "applied_decisions": applied_decisions,
+        "planned_resources_summary": planned_resources_summary,
+    }
 
 
 def build_application_cmir(
     app_discovery: Dict[str, Any],
     target_provider: str = "aws",
     deployment_mode: str = "vm_rehost",
+    user_decisions: Optional[Dict[str, str]] = None,
 ) -> CMIR:
     """
     Build a CMIR v2.1 representation of the discovered application, its runtime,
-    ports, volumes, identity, and dependencies without storing secret values.
+    ports, volumes, identity, and dependencies without storing secret values,
+    honoring the user's interactive transformation decisions (`user_decisions`).
     """
     provider_clean = target_provider.lower().strip()
     now = app_discovery.get("discovered_at") or _utc_now()
     app_id = app_discovery["app_id"]
     app_name = app_discovery["app_name"]
     slug = _slug(app_name)
+
+    catalog = build_github_to_cloud_transformation_catalog(
+        app_discovery,
+        target_provider=provider_clean,
+        deployment_mode=deployment_mode,
+        user_decisions=user_decisions,
+    )
+    decisions = catalog["applied_decisions"]
+    app_discovery["transformation_catalog"] = catalog
+    app_discovery["user_decisions"] = decisions
+
+    comp_arch_choice = decisions.get("compute_architecture", "ha_asg_alb_containerized")
+    disable_ha_alb_asg = comp_arch_choice == "single_instance_containerized"
 
     nodes: List[Dict[str, Any]] = []
     relationships: List[Dict[str, Any]] = []
@@ -1201,11 +1842,16 @@ def build_application_cmir(
             }
         ],
         "metadata": {
+            "is_primary_host": True,
             "language": app_discovery["language"],
             "framework": app_discovery["framework"],
             "runtime": app_discovery["runtime"],
             "runtime_constraints": app_discovery.get("runtime_constraints"),
             "deployment_mode": deployment_mode,
+            "compute_architecture_choice": comp_arch_choice,
+            "disable_ha_alb_asg": disable_ha_alb_asg,
+            "exposed_ports": app_discovery["exposed_ports"],
+            "health_endpoints": app_discovery.get("health_endpoints", ["/health"]),
         },
     })
     if app_discovery.get("git_metadata"):
@@ -1264,6 +1910,8 @@ def build_application_cmir(
             c_slug = _slug(comp["name"])
             c_comp_id = f"compute-{slug}-{c_slug}"
             c_app_id = f"app-{slug}-{c_slug}"
+            comp_choice = decisions.get(f"component:{comp['name']}", "containerized_in_compose")
+            is_dedicated = comp_choice == "dedicated_compute_instance" or comp_arch_choice == "decoupled_tier_instances"
             nodes.append({
                 "id": c_comp_id,
                 "canonical_id": f"asset:compute:{slug}:{c_slug}",
@@ -1286,12 +1934,45 @@ def build_application_cmir(
                     }
                 ],
                 "metadata": {
+                    "is_subcomponent_container": True,
+                    "dedicated_instance": is_dedicated,
+                    "user_decision": comp_choice,
+                    "parent_compute_id": compute_id,
                     "component": comp["name"],
                     "tier": comp.get("tier"),
                     "runtime": comp.get("runtime"),
                     "ports": comp.get("container_ports", []),
                 },
             })
+            if comp_choice == "cloud_static_storage":
+                static_bucket_id = f"storage-{slug}-{c_slug}-static"
+                nodes.append({
+                    "id": static_bucket_id,
+                    "canonical_id": f"asset:storage:{slug}:{c_slug}:static",
+                    "name": f"{slug}-{c_slug}-static-web",
+                    "type": "storage",
+                    "category": "storage",
+                    "provider": provider_clean,
+                    "engine": "s3_static_website" if provider_clean == "aws" else "gcs_static_website",
+                    "epistemic_state": "derived",
+                    "confidence": 0.98,
+                    "source_connector": "app_source_scanner",
+                    "discovered_at": now,
+                    "metadata": {
+                        "static_website_hosting": True,
+                        "component": comp["name"],
+                        "user_decision": "cloud_static_storage",
+                    },
+                })
+                relationships.append({
+                    "source": c_app_id,
+                    "target": static_bucket_id,
+                    "type": "hosted_on_bucket",
+                    "epistemic_state": "derived",
+                    "confidence": 0.98,
+                    "source_connector": "app_source_scanner",
+                    "discovered_at": now,
+                })
             nodes.append({
                 "id": c_app_id,
                 "canonical_id": f"asset:app:{slug}:{c_slug}",
@@ -1415,31 +2096,76 @@ def build_application_cmir(
             "discovered_at": now,
         })
 
-    identity_id = f"identity-{slug}-sa"
-    nodes.append({
-        "id": identity_id,
-        "canonical_id": f"asset:identity:{slug}",
-        "name": f"{slug}-workload-identity",
-        "type": "identity",
-        "category": "security",
-        "provider": provider_clean,
-        "epistemic_state": "derived",
-        "confidence": 0.95,
-        "source_connector": "app_source_scanner",
-        "discovered_at": now,
-        "metadata": {"role_type": "IAM Role" if provider_clean == "aws" else "GCP Service Account"},
-    })
-    relationships.append({
-        "source": app_id,
-        "target": identity_id,
-        "type": "requires_identity",
-        "epistemic_state": "derived",
-        "confidence": 0.95,
-        "source_connector": "app_source_scanner",
-        "discovered_at": now,
-    })
+    if decisions.get("workload_identity", "iam_instance_profile") != "skip_custom_iam":
+        identity_id = f"identity-{slug}-sa"
+        nodes.append({
+            "id": identity_id,
+            "canonical_id": f"asset:identity:{slug}",
+            "name": f"{slug}-workload-identity",
+            "type": "identity",
+            "category": "security",
+            "provider": provider_clean,
+            "epistemic_state": "derived",
+            "confidence": 0.95,
+            "source_connector": "app_source_scanner",
+            "discovered_at": now,
+            "metadata": {"role_type": "IAM Role" if provider_clean == "aws" else "GCP Service Account"},
+        })
+        relationships.append({
+            "source": app_id,
+            "target": identity_id,
+            "type": "requires_identity",
+            "epistemic_state": "derived",
+            "confidence": 0.95,
+            "source_connector": "app_source_scanner",
+            "discovered_at": now,
+        })
+
+    if decisions.get("secrets_and_env", "env_template_user_data") == "cloud_secrets_manager":
+        secret_vars = [e for e in app_discovery.get("environment_variables", []) if e.get("is_secret")]
+        if not secret_vars:
+            secret_vars = [{"name": "app-runtime-secrets"}]
+        for sv in secret_vars:
+            sec_slug = _slug(sv["name"])
+            sec_id = f"secret-{slug}-{sec_slug}"
+            nodes.append({
+                "id": sec_id,
+                "canonical_id": f"asset:secret:{slug}:{sec_slug}",
+                "name": f"{slug}-{sec_slug}",
+                "type": "secret",
+                "category": "security",
+                "provider": provider_clean,
+                "epistemic_state": "derived",
+                "confidence": 0.98,
+                "source_connector": "app_source_scanner",
+                "discovered_at": now,
+                "metadata": {"env_key": sv["name"], "user_decision": "cloud_secrets_manager"},
+            })
+            relationships.append({
+                "source": app_id,
+                "target": sec_id,
+                "type": "reads_secret",
+                "epistemic_state": "derived",
+                "confidence": 0.98,
+                "source_connector": "app_source_scanner",
+                "discovered_at": now,
+            })
 
     for dep in app_discovery["dependencies"]:
+        dep_choice = decisions.get(f"dep:{dep['id']}")
+        is_ext_baas = bool(dep.get("is_external_baas", False))
+        force_cloud_managed = False
+        run_in_compose = False
+        if dep_choice == "transform_to_cloud_managed":
+            is_ext_baas = False
+            force_cloud_managed = True
+        elif dep_choice == "keep_external":
+            is_ext_baas = True
+            force_cloud_managed = False
+        elif dep_choice == "self_hosted_container":
+            is_ext_baas = False
+            run_in_compose = True
+
         nodes.append({
             "id": dep["id"],
             "canonical_id": f"asset:dep:{dep['id']}",
@@ -1447,7 +2173,7 @@ def build_application_cmir(
             "type": dep["type"],
             "category": "data" if dep["type"] in ("database_instance", "cache", "storage") else "integration",
             "provider": provider_clean,
-            "engine": dep.get("engine"),
+            "engine": "postgres" if (force_cloud_managed and "supabase" in str(dep.get("engine", "")).lower()) else dep.get("engine"),
             "epistemic_state": dep["epistemic_state"],
             "confidence": dep["confidence"],
             "source_connector": "app_source_scanner",
@@ -1456,7 +2182,11 @@ def build_application_cmir(
             "metadata": {
                 "port": dep.get("port"),
                 "classification": dep["classification"],
-                "requires_data_migration": dep.get("requires_data_migration", False),
+                "requires_data_migration": True if force_cloud_managed else dep.get("requires_data_migration", False),
+                "is_external_baas": is_ext_baas,
+                "force_cloud_managed": force_cloud_managed,
+                "run_in_compose_container": run_in_compose,
+                "user_decision": dep_choice,
             },
         })
         relationships.append({
@@ -1471,6 +2201,7 @@ def build_application_cmir(
             "metadata": {
                 "classification": dep["classification"],
                 "reason": dep["evidence"][0]["detail"] if dep.get("evidence") else "",
+                "user_decision": dep_choice,
             },
         })
 
@@ -1484,6 +2215,7 @@ def build_application_cmir(
             "use_case": "app_source",
             "app_name": app_name,
             "deployment_mode": deployment_mode,
+            "user_decisions": decisions,
         },
     })
 
@@ -1818,6 +2550,16 @@ curl -fsS "http://127.0.0.1:{main_port}{health_ep}" >/dev/null
 echo "[OK] Servicio arrancado, puertos activos y endpoint de salud verificado."
 """
 
+    from app.generators.ai_translator import (
+        prepare_ai_payload,
+        generate_container_user_data_sh,
+        generate_auto_dockerfile_and_compose,
+    )
+
+    ai_payload = prepare_ai_payload(app_discovery)
+    user_data_sh = generate_container_user_data_sh(ai_payload)
+    auto_container_files = generate_auto_dockerfile_and_compose(ai_payload)
+
     app_diff_report = {
         "app_id": app_discovery["app_id"],
         "app_name": app_name,
@@ -1827,11 +2569,22 @@ echo "[OK] Servicio arrancado, puertos activos y endpoint de salud verificado."
         "ports_preserved": app_discovery["exposed_ports"],
         "health_endpoint": health_ep,
         "secrets_redacted_count": app_discovery["secrets_redacted_count"],
-        "database_data_migration_included": any(d.get("type") == "database_instance" for d in app_discovery["dependencies"]),
+        "database_data_migration_included": any(
+            d.get("type") == "database_instance" and not d.get("is_external_baas", False)
+            for d in app_discovery["dependencies"]
+        ),
+        "external_baas_preserved": any(
+            d.get("is_external_baas", False) for d in app_discovery["dependencies"]
+        ),
+        "high_availability_enabled": True,
+        "containerized_deployment": True,
         "behavioral_parity_expected": True,
     }
 
     files = dict(iac_bundle["files"])
+    files["user_data.sh"] = user_data_sh
+    files["Dockerfile.cloudmove"] = auto_container_files["Dockerfile.cloudmove"]
+    files["docker-compose.cloudmove.yml"] = auto_container_files["docker-compose.cloudmove.yml"]
     files[f"{slug}.service"] = systemd_unit
     files[".env.cloud.template"] = "\n".join(env_template_lines) + "\n"
     files["migrate_database_data.sh"] = db_data_transfer_script
@@ -1844,9 +2597,10 @@ echo "[OK] Servicio arrancado, puertos activos y endpoint de salud verificado."
         "iac_code": iac_bundle["iac_code"],
         "validation": iac_bundle["validation"],
         "diff_report": app_diff_report,
+        "ai_payload": ai_payload,
         "smoke_tests": [
-            f"Verificar que el proceso `{start_cmd}` esté activo (`systemctl is-active {slug}.service`).",
-            f"Comprobar respuesta TCP/HTTP en puertos {app_discovery['exposed_ports']} y `GET {health_ep}`.",
-            "Verificar paridad de datos en base de datos migrada (`migrate_database_data.sh`) y ausencia de errores en logs.",
+            f"Verificar que el stack de contenedores Docker (`{slug}-containers.service`) esté activo.",
+            f"Comprobar respuesta TCP/HTTP en el Application Load Balancer (`alb_dns_name`), puertos {app_discovery['exposed_ports']} y `GET {health_ep}`.",
+            "Verificar estado saludable de las instancias en el Auto Scaling Group (`ELB` health check) y ausencia de errores en logs.",
         ],
     }

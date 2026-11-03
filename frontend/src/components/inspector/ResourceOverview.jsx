@@ -5,27 +5,27 @@ function ResourceOverview({ node, parentNode, onSelectNode }) {
     <div className="inspector-tab-content">
       <div className="tech-prop-grid">
         <div className="prop-row">
-          <span className="prop-key">Provider</span>
+          <span className="prop-key">Proveedor</span>
           <span className="prop-val">{node.provider || "on-premise"}</span>
         </div>
         <div className="prop-row">
-          <span className="prop-key">Location / Region</span>
+          <span className="prop-key">Ubicación / Región</span>
           <span className="prop-val">{node.location || "Datacenter A"}</span>
         </div>
         <div className="prop-row">
-          <span className="prop-key">Environment</span>
+          <span className="prop-key">Entorno</span>
           <span className="prop-val">{node.environment || "production"}</span>
         </div>
         <div className="prop-row">
-          <span className="prop-key">Category</span>
+          <span className="prop-key">Categoría</span>
           <span className="prop-val">{node.category || "resource"}</span>
         </div>
         <div className="prop-row">
-          <span className="prop-key">Migration Status</span>
+          <span className="prop-key">Estado de Migración</span>
           <span className={`status-badge ${node.status?.toLowerCase()}`}>{node.status || "DISCOVERED"}</span>
         </div>
         <div className="prop-row">
-          <span className="prop-key">Parent Component</span>
+          <span className="prop-key">Contenedor Padre</span>
           {parentNode ? (
             <button
               type="button"
@@ -35,7 +35,7 @@ function ResourceOverview({ node, parentNode, onSelectNode }) {
               {parentNode.name} (L{parentNode.level})
             </button>
           ) : (
-            <span className="prop-val muted">Root Scope (Level 0)</span>
+            <span className="prop-val muted">Ámbito Raíz (Nivel 0)</span>
           )}
         </div>
       </div>

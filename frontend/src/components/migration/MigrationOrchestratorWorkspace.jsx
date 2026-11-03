@@ -2,6 +2,12 @@ import React, { useState, useEffect, useCallback } from "react";
 import IaCViewer from "./IaCViewer";
 import RepositoryTreeViewer from "./RepositoryTreeViewer";
 import { apiFetch } from "../../utils/apiClient";
+import {
+  AwsPageHeader,
+  AwsKeyValuePairs,
+  AwsStatusIndicator,
+  AwsTabs,
+} from "../cloudscape/AwsPrimitives";
 
 const STATE_FLOW = [
   "DRAFT",
@@ -41,24 +47,21 @@ function deriveOperationalStatusBadge(job) {
 const USE_CASE_CARDS = [
   {
     id: "app_source",
-    title: "Caso 1 · Migración desde una Aplicación",
-    subtitle:
-      "Flujo guiado de 11 pasos: inspecciona código y manifiestos sin ejecución arbitraria, clasifica dependencias (confirmadas, inferidas, desconocidas), redacta secretos y genera plan de 12 etapas hacia AWS o GCP.",
-    badge: "12 Etapas · App & BDs",
+    title: "Aplicación",
+    subtitle: "Código desde GitHub o una carpeta local → contenedores en la nube.",
+    badge: "Caso 1",
   },
   {
     id: "vm_image",
-    title: "Caso 2 · Migración de Imagen Completa de SO / VM",
-    subtitle:
-      "Prioriza integridad binaria (`qemu-img`, firmas KDMV/QCOW2, GPT, SHA-256 multi-disco), evalúa las 8 dimensiones de fidelidad (preservado, modificado, no transferible) y prepara AWS MGN / VM Import o GCP Migrate to VMs.",
-    badge: "13 Etapas · 8 Dimensiones",
+    title: "Imagen de SO / VM",
+    subtitle: "Disco virtual o el equipo actual → máquina virtual en la nube.",
+    badge: "Caso 2",
   },
   {
     id: "datacenter_campaign",
-    title: "Caso 3 · Descubrimiento y Migración de Datacenter",
-    subtitle:
-      "Campaña multi-sitio con jerarquía CMIR v2.1 (Datacenter → Host → Hipervisor → VM → SO → Procesos → BDs), protección de recursos compartidos y planificación por oleadas.",
-    badge: "10 Etapas · Oleadas DC",
+    title: "Datacenter",
+    subtitle: "Muchos servidores a la vez, migrados por oleadas.",
+    badge: "Caso 3",
   },
 ];
 
@@ -68,6 +71,404 @@ const FIDELITY_STATUS_META = {
   requires_manual_reconfiguration: { label: "REQUIERE RECONFIGURACIÓN", badgeClass: "warning" },
   not_preserved: { label: "NO TRANSFERIBLE (Limitación Física)", badgeClass: "danger" },
 };
+
+function GithubToCloudTransformationSelector({
+  catalog,
+  decisions,
+  onSelectDecision,
+  targetProvider,
+  onApplyToExistingJob = null,
+  applyingChanges = false,
+  isJobView = false,
+}) {
+  if (!catalog || !Array.isArray(catalog.items) || catalog.items.length === 0) {
+    return null;
+  }
+
+  const pUpper = (targetProvider || catalog.target_provider || "aws").toUpperCase();
+  const activeDecisions = decisions || catalog.applied_decisions || {};
+
+  // Compute live preview of planned cloud resources based on activeDecisions
+  const liveResourcesPreview = [
+    {
+      githubOrigin: "Red Base y Puertos Expuestos del Repositorio",
+      decisionLabel: `Red Virtual Aislada Multi-AZ en ${pUpper} (Automático)`,
+      terraformResource:
+        pUpper === "GCP"
+          ? "google_compute_network.target_vpc + google_compute_subnetwork.primary_subnet"
+          : "aws_vpc.target_vpc + 4x aws_subnet (Públicas/Privadas Multi-AZ) + aws_internet_gateway.igw",
+      reason: "Aísla los contenedores y bases de datos en una red privada segura en la nube.",
+      costEstimate: "$0 USD/mes",
+    },
+  ];
+
+  catalog.items.forEach((item) => {
+    const selectedId = activeDecisions[item.id] || item.selected_option_id || item.default_option_id;
+    const chosenOpt =
+      (item.options || []).find((o) => o.id === selectedId) || (item.options || [])[0];
+    if (chosenOpt) {
+      (chosenOpt.cloud_resources_created || []).forEach((resName) => {
+        liveResourcesPreview.push({
+          githubOrigin: item.github_discovered?.title || item.id,
+          decisionLabel: chosenOpt.label,
+          terraformResource: resName,
+          reason: item.why_transformed,
+          costEstimate: chosenOpt.cost_estimate || "$0 USD/mes",
+        });
+      });
+    }
+  });
+
+  return (
+    <div
+      className="cm-card"
+      style={{
+        marginTop: 14,
+        border: "1px solid #0972D3",
+        backgroundColor: "#FAFAFA",
+        padding: "16px 18px",
+        borderRadius: 4,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          flexWrap: "wrap",
+          gap: 10,
+          marginBottom: 12,
+        }}
+      >
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span
+              className="cm-badge"
+              style={{
+                backgroundColor: "#0972D3",
+                color: "#ffffff",
+                fontWeight: 700,
+                fontSize: 12.5,
+              }}
+            >
+              ARQUITECTURA INTERACTIVA
+            </span>
+            <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#16191F" }}>
+              Mapa de Transformación GitHub → {pUpper}: Qué se Detectó, Por Qué se Transforma y Qué Deseas Crear
+            </h4>
+          </div>
+          <p style={{ margin: "4px 0 0 0", fontSize: 13.5, color: "#5F6B7A", lineHeight: 1.45 }}>
+            Revisa cada componente, servicio externo (ej. Supabase, bases de datos, cachés), secretos y topología descubiertos en el repositorio GitHub. Puedes escoger si deseas <strong>conservar servicios externos gratuitos</strong> o <strong>transformarlos a servicios administrados nativos de {pUpper}</strong> antes de generar o actualizar el código Terraform.
+          </p>
+        </div>
+
+        {isJobView && onApplyToExistingJob && (
+          <button
+            type="button"
+            className="cm-btn primary sm"
+            onClick={onApplyToExistingJob}
+            disabled={applyingChanges}
+            style={{ whiteSpace: "nowrap", fontWeight: 700 }}
+          >
+            {applyingChanges
+              ? "Regenerando Terraform..."
+              : `Aplicar Elecciones y Regenerar Terraform (${pUpper})`}
+          </button>
+        )}
+      </div>
+
+      {/* Lista de elementos descubiertos en GitHub y sus opciones de transformación en la nube */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
+        {catalog.items.map((item, idx) => {
+          const selectedId =
+            activeDecisions[item.id] || item.selected_option_id || item.default_option_id;
+          const gh = item.github_discovered || {};
+
+          return (
+            <div
+              key={item.id}
+              style={{
+                backgroundColor: "#ffffff",
+                border: "1px solid #D5DBDB",
+                borderRadius: 4,
+                padding: "14px 16px",
+                boxShadow: "0 1px 1px 0 rgba(0, 28, 36, 0.05)",
+              }}
+            >
+              {/* Encabezado: Qué se descubrió en GitHub y Por qué se transforma */}
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  marginBottom: 8,
+                  paddingBottom: 8,
+                  borderBottom: "1px solid #E9EBED",
+                }}
+              >
+                <div style={{ flex: "1 1 320px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span
+                      className="cm-badge"
+                      style={{
+                        backgroundColor: "#F2F8FD",
+                        color: "#0972D3",
+                        border: "1px solid #A4C9F5",
+                        fontSize: 12.5,
+                        fontWeight: 700,
+                      }}
+                    >
+                      #{idx + 1} · {gh.badge || "Elemento GitHub"}
+                    </span>
+                    <strong style={{ fontSize: 13.5, color: "#16191F" }}>{gh.title}</strong>
+                    {gh.subtitle && (
+                      <span style={{ fontSize: 13.5, color: "#5F6B7A" }}>({gh.subtitle})</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 13.5, color: "#16191F", marginTop: 4 }}>
+                    <strong>Evidencia en GitHub:</strong> {gh.evidence_detail}
+                    {Array.isArray(gh.files) && gh.files.length > 0 && (
+                      <span>
+                        {" "}
+                        · Archivos: <code>{gh.files.join(", ")}</code>
+                      </span>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 13.5,
+                      color: "#033160",
+                      backgroundColor: "#F2F8FD",
+                      padding: "6px 10px",
+                      borderRadius: 4,
+                      marginTop: 6,
+                      borderLeft: "4px solid #0972D3",
+                    }}
+                  >
+                    <strong>¿Por qué se transforma a la nube?:</strong> {item.why_transformed}
+                  </div>
+                </div>
+              </div>
+
+              {/* Opciones seleccionables para el usuario */}
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: "#16191F", marginBottom: 8 }}>
+                Escoge cómo deseas manejar este elemento en {pUpper}:
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(275px, 1fr))",
+                  gap: 10,
+                }}
+              >
+                {(item.options || []).map((opt) => {
+                  const isChosen = selectedId === opt.id;
+                  return (
+                    <label
+                      key={opt.id}
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        justifyContent: "space-between",
+                        padding: "10px 12px",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                        border: isChosen ? "2px solid #0972D3" : "1px solid #D5DBDB",
+                        backgroundColor: isChosen ? "#F2F8FD" : "#ffffff",
+                        transition: "all 0.15s ease",
+                      }}
+                    >
+                      <div>
+                        <div
+                          style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "flex-start",
+                            gap: 6,
+                            marginBottom: 4,
+                          }}
+                        >
+                          <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+                            <input
+                              type="radio"
+                              name={`decision-${isJobView ? "job" : "pre"}-${item.id}`}
+                              value={opt.id}
+                              checked={isChosen}
+                              onChange={() => onSelectDecision(item.id, opt.id)}
+                              style={{ marginTop: 3, cursor: "pointer" }}
+                            />
+                            <strong
+                              style={{
+                                fontSize: 14,
+                                color: isChosen ? "#0972D3" : "#16191F",
+                                lineHeight: 1.35,
+                              }}
+                            >
+                              {opt.label}
+                            </strong>
+                          </div>
+                        </div>
+
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 6,
+                            flexWrap: "wrap",
+                            marginLeft: 20,
+                            marginBottom: 6,
+                          }}
+                        >
+                          {opt.badge && (
+                            <span
+                              className="cm-badge"
+                              style={{
+                                backgroundColor: isChosen ? "#D5E8FA" : "#F2F3F3",
+                                color: isChosen ? "#033160" : "#5F6B7A",
+                                fontSize: 12.5,
+                              }}
+                            >
+                              {opt.badge}
+                            </span>
+                          )}
+                          {opt.cost_estimate && (
+                            <span
+                              className="cm-badge"
+                              style={{
+                                backgroundColor: opt.cost_estimate.startsWith("$0")
+                                  ? "#F2FAF3"
+                                  : "#FFFAF0",
+                                color: opt.cost_estimate.startsWith("$0")
+                                  ? "#037F0C"
+                                  : "#8D5600",
+                                border: opt.cost_estimate.startsWith("$0")
+                                  ? "1px solid #8CD990"
+                                  : "1px solid #F8C26B",
+                                fontSize: 12.5,
+                                fontWeight: 700,
+                              }}
+                            >
+                              {opt.cost_estimate}
+                            </span>
+                          )}
+                        </div>
+
+                        <p
+                          style={{
+                            margin: "0 0 8px 20px",
+                            fontSize: 13.5,
+                            color: "#5F6B7A",
+                            lineHeight: 1.4,
+                          }}
+                        >
+                          {opt.description}
+                        </p>
+                      </div>
+
+                      {Array.isArray(opt.cloud_resources_created) &&
+                        opt.cloud_resources_created.length > 0 && (
+                          <div
+                            style={{
+                              marginLeft: 20,
+                              padding: "6px 8px",
+                              backgroundColor: isChosen ? "#ffffff" : "#FAFAFA",
+                              borderRadius: 4,
+                              border: "1px dashed #D5DBDB",
+                              fontSize: 13,
+                              color: "#16191F",
+                            }}
+                          >
+                            <div style={{ fontWeight: 700, marginBottom: 2, color: "#16191F" }}>
+                              Se creará en {pUpper} (Terraform):
+                            </div>
+                            {opt.cloud_resources_created.map((cr, crIdx) => (
+                              <div key={crIdx} style={{ lineHeight: 1.35 }}>
+                                • <code>{cr}</code>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Tabla Resumen en Vivo de lo que se va a crear en AWS / GCP */}
+      <div
+        style={{
+          backgroundColor: "#ffffff",
+          border: "1px solid #D5DBDB",
+          borderRadius: 4,
+          padding: "12px 14px",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: 8,
+            marginBottom: 8,
+          }}
+        >
+          <strong style={{ fontSize: 14, color: "#16191F" }}>
+            Resumen en Tiempo Real: ¿Qué se va a crear exactamente en {pUpper} según tu selección? ({liveResourcesPreview.length} bloques)
+          </strong>
+          <span className="cm-badge observed" style={{ fontSize: 12.5 }}>
+            Sincronizado con Generador Terraform
+          </span>
+        </div>
+        <div className="cm-table-wrap">
+          <table className="cm-table">
+            <thead>
+              <tr>
+                <th>Origen Detectado en GitHub</th>
+                <th>Opción Escogida por el Usuario</th>
+                <th>Recurso(s) que Creará Terraform en {pUpper}</th>
+                <th>Impacto de Costo Est.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {liveResourcesPreview.map((row, rIdx) => (
+                <tr key={rIdx}>
+                  <td style={{ fontSize: 13.5 }}>
+                    <strong>{row.githubOrigin}</strong>
+                  </td>
+                  <td style={{ fontSize: 13.5 }}>{row.decisionLabel}</td>
+                  <td style={{ fontSize: 13.5 }}>
+                    <code>{row.terraformResource}</code>
+                  </td>
+                  <td style={{ fontSize: 13.5 }}>
+                    <span
+                      className="cm-badge"
+                      style={{
+                        backgroundColor: String(row.costEstimate).startsWith("$0")
+                          ? "#dcfce7"
+                          : "#fef3c7",
+                        color: String(row.costEstimate).startsWith("$0")
+                          ? "#166534"
+                          : "#92400e",
+                        fontSize: 12.5,
+                      }}
+                    >
+                      {row.costEstimate}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function MigrationOrchestratorWorkspace({
   onLoadCmirToCanvas,
@@ -94,6 +495,9 @@ export default function MigrationOrchestratorWorkspace({
   const [customAppPath, setCustomAppPath] = useState("");
   const [deploymentMode, setDeploymentMode] = useState("container");
   const [uc1PreInspection, setUc1PreInspection] = useState(null);
+  const [uc1Decisions, setUc1Decisions] = useState({});
+  const [jobDecisions, setJobDecisions] = useState({});
+  const [updatingDecisions, setUpdatingDecisions] = useState(false);
   const [githubUrl, setGithubUrl] = useState("");
   const [githubRef, setGithubRef] = useState("");
   const [githubToken, setGithubToken] = useState("");
@@ -117,12 +521,26 @@ export default function MigrationOrchestratorWorkspace({
   const preferContinuousReplication = consistencyStrategy === "continuous_replication";
   const [uc2PreInspection, setUc2PreInspection] = useState(null);
   const [fidelityFilter, setFidelityFilter] = useState("ALL");
+  const [wizardCollapsed, setWizardCollapsed] = useState(false);
+  const [showDeploymentGuide, setShowDeploymentGuide] = useState(true);
+
+  // Progressive disclosure: one focused task per screen (AWS Console Tabs)
+  const [mainTab, setMainTab] = useState(initialJobId ? "inspector" : "wizard"); // "wizard" | "inspector" | "plans"
+  const [inspectorTab, setInspectorTab] = useState("execution"); // "execution" | "source" | "compatibility" | "iac" | "guide"
 
   useEffect(() => {
     if (initialUseCase) {
       setNewUseCase(initialUseCase);
+      setMainTab("wizard");
     }
   }, [initialUseCase]);
+
+  useEffect(() => {
+    if (initialJobId) {
+      setMainTab("inspector");
+      setInspectorTab("execution");
+    }
+  }, [initialJobId]);
 
   const fetchPersistence = useCallback(async () => {
     try {
@@ -198,12 +616,40 @@ export default function MigrationOrchestratorWorkspace({
       setGithubRepoData(data.repository);
       setGithubBranches(data.branches || []);
       setGithubTreeData(data.tree || null);
+      const branchToUse = data.default_branch || githubRef || "main";
       if (data.default_branch) setGithubRef(data.default_branch);
       const treeSummary = data.tree?.summary
         ? ` · Árbol: ${data.tree.summary.total_files} archivos, ${data.tree.summary.total_directories} carpetas/subcarpetas analizadas.`
         : "";
+
+      // Automatically inspect the repository to populate the GitHub -> Cloud transformation map and decision options
+      try {
+        const inspectRes = await apiFetch("/api/v1/migration/use-case-1/inspect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            target_provider: newProvider,
+            deployment_mode: deploymentMode,
+            github_url: targetUrl,
+            github_ref: branchToUse,
+            github_token: activeToken?.trim() || undefined,
+          }),
+        });
+        if (inspectRes.ok) {
+          const inspectData = await inspectRes.json();
+          setUc1PreInspection(inspectData);
+          const catalogDecisions =
+            inspectData.transformation_catalog?.applied_decisions ||
+            inspectData.application?.transformation_catalog?.applied_decisions ||
+            {};
+          setUc1Decisions(catalogDecisions);
+        }
+      } catch {
+        // Non-blocking if user wants to run manual inspect later
+      }
+
       setStatusBanner(
-        `Repositorio público '${data.repository?.full_name}' validado (${data.repository?.visibility}). Rama predeterminada: ${data.default_branch}. Lenguaje: ${data.repository?.language || "Detectado"}.${treeSummary}`
+        `Repositorio público '${data.repository?.full_name}' validado (${data.repository?.visibility}). Rama predeterminada: ${data.default_branch}. Lenguaje: ${data.repository?.language || "Detectado"}.${treeSummary} Revisa abajo el Mapa de Transformación GitHub → ${newProvider.toUpperCase()} y elige tus opciones.`
       );
     } catch (err) {
       setErrorMsg(err.message);
@@ -312,6 +758,7 @@ export default function MigrationOrchestratorWorkspace({
       const payload = {
         target_provider: newProvider,
         deployment_mode: deploymentMode,
+        user_decisions: Object.keys(uc1Decisions).length > 0 ? uc1Decisions : undefined,
       };
       if (appPreset === "github") {
         payload.github_url = githubUrl.trim();
@@ -329,11 +776,16 @@ export default function MigrationOrchestratorWorkspace({
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "No se pudo inspeccionar la aplicación.");
       setUc1PreInspection(data);
+      const catalogDecisions =
+        data.transformation_catalog?.applied_decisions ||
+        data.application?.transformation_catalog?.applied_decisions ||
+        {};
+      setUc1Decisions(catalogDecisions);
       const gitInfo = data.application?.git_metadata
         ? ` · Git Commit: ${data.application.git_metadata.short_sha}`
         : "";
       setStatusBanner(
-        `Inspección estática completada para '${data.application?.app_name}'${gitInfo}: ${data.application?.dependencies?.length || 0} dependencias detectadas y ${data.application?.secrets_redacted_count || 0} secretos redactados.`
+        `Inspección estática completada para '${data.application?.app_name}'${gitInfo}: ${data.application?.dependencies?.length || 0} dependencias detectadas y ${data.application?.secrets_redacted_count || 0} secretos redactados. Puedes personalizar abajo cómo se transformará cada elemento en ${newProvider.toUpperCase()}.`
       );
     } catch (err) {
       setErrorMsg(err.message);
@@ -399,6 +851,9 @@ export default function MigrationOrchestratorWorkspace({
       const sourceConfig = {};
       if (newUseCase === "app_source") {
         sourceConfig.deployment_mode = deploymentMode;
+        if (Object.keys(uc1Decisions).length > 0) {
+          sourceConfig.user_decisions = uc1Decisions;
+        }
         if (appPreset === "github") {
           if (!githubUrl.trim()) {
             throw new Error("Por favor introduzca el enlace público del repositorio GitHub a migrar.");
@@ -465,6 +920,8 @@ export default function MigrationOrchestratorWorkspace({
       setSelectedJob(data);
       if (onActiveJobChange) onActiveJobChange(data);
       setNewName("");
+      setMainTab("inspector");
+      setInspectorTab("execution");
       await fetchJobs(data.migration_id);
       await fetchPersistence();
       setStatusBanner(
@@ -584,6 +1041,46 @@ export default function MigrationOrchestratorWorkspace({
     URL.revokeObjectURL(url);
   };
 
+  useEffect(() => {
+    if (selectedJob?.use_case === "app_source") {
+      const cat = selectedJob?.source_environment?.transformation_catalog;
+      const savedDecisions =
+        cat?.applied_decisions ||
+        selectedJob?.source_environment?.user_decisions ||
+        selectedJob?.source_config?.user_decisions ||
+        {};
+      setJobDecisions(savedDecisions);
+    }
+  }, [selectedJob]);
+
+  const handleUpdateJobDecisions = async () => {
+    if (!selectedJob) return;
+    setUpdatingDecisions(true);
+    setErrorMsg("");
+    setStatusBanner("");
+    try {
+      const res = await apiFetch(`/api/v1/migration/jobs/${selectedJob.migration_id}/decisions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_decisions: jobDecisions }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "No se pudieron aplicar las decisiones de arquitectura.");
+      }
+      setSelectedJob(data);
+      if (onActiveJobChange) onActiveJobChange(data);
+      await fetchJobs(data.migration_id);
+      setStatusBanner(
+        `Decisiones de transformación GitHub → ${data.target_provider?.toUpperCase()} aplicadas. Se regeneró el subgrafo CMIR v2.1 y el código Terraform (main.tf, outputs.tf, user_data.sh).`
+      );
+    } catch (err) {
+      setErrorMsg(err.message);
+    } finally {
+      setUpdatingDecisions(false);
+    }
+  };
+
   const currentJob = selectedJob;
   const cmirResources = currentJob?.cmir?.resources || [];
   const srcEnv = currentJob?.source_environment || {};
@@ -605,35 +1102,74 @@ export default function MigrationOrchestratorWorkspace({
 
   return (
     <div className="tab-pane-view">
-      {/* Cabecera de Página */}
-      <div className="cm-page-header">
-        <div>
-          <h2 className="cm-page-title">
-            Orquestador Unificado de Migraciones y Planes (AWS · GCP)
-          </h2>
-          <p className="cm-page-subtitle">
-            Flujos guiados para migración desde aplicación (Caso 1), imagen completa de SO/VM (Caso 2) y campañas de datacenter (Caso 3) con máquina de estados transaccional, validación Terraform CLI y diferenciación estricta entre simulación Dry-Run y nube real.
-          </p>
-        </div>
-        <div className="cm-header-badges" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {persistenceStatus && (
-            <span className="cm-badge observed">
-              BD Transaccional: {persistenceStatus.engine?.toUpperCase()} ({persistenceStatus.journal_mode?.toUpperCase()}) · Esquema v{persistenceStatus.current_schema_version}
-            </span>
-          )}
-          <span className="cm-badge aws">AWS Soportado</span>
-          <span className="cm-badge gcp">GCP Soportado</span>
-          <button
-            type="button"
-            className="cm-btn sm danger"
-            onClick={handleClearAllJobs}
-            style={{ fontSize: 11, padding: "3px 10px" }}
-            title="Eliminar planes persistidos, imágenes en staging e iniciar el orquestador desde 0"
-          >
-            Limpiar Planes e Imágenes (Iniciar desde 0)
-          </button>
-        </div>
-      </div>
+      {/* Cabecera de Recurso AWS Cloudscape */}
+      <AwsPageHeader
+        title="Orquestador de migraciones"
+        subtitle="Crea un plan, revísalo y ejecútalo paso a paso hacia AWS o GCP."
+        badges={[
+          ...(persistenceStatus
+            ? [
+                {
+                  label: `BD: ${persistenceStatus.engine?.toUpperCase()} · v${persistenceStatus.current_schema_version}`,
+                  className: "observed",
+                },
+              ]
+            : []),
+        ]}
+        actions={
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="cm-btn secondary"
+              onClick={() => fetchJobs()}
+              disabled={loading}
+            >
+              Actualizar
+            </button>
+            <button
+              type="button"
+              className="cm-btn primary"
+              onClick={() => setMainTab("wizard")}
+            >
+              Nueva migración
+            </button>
+          </div>
+        }
+      />
+
+      {/* Resumen General del Orquestador (KeyValuePairs AWS Cloudscape) */}
+      <AwsKeyValuePairs
+        columns={3}
+        items={[
+          {
+            label: "Planes registrados",
+            value: `${jobs.length}`,
+          },
+          {
+            label: "Plan activo",
+            value: currentJob ? currentJob.name : "Ninguno",
+          },
+          {
+            label: "Estado",
+            value: currentJob ? (
+              <AwsStatusIndicator
+                type={
+                  currentJob.state === "FAILED"
+                    ? "error"
+                    : currentJob.state === "COMPLETED" || currentJob.state === "READY_FOR_CUTOVER"
+                    ? "success"
+                    : "info"
+                }
+              >
+                {currentJob.state}
+              </AwsStatusIndicator>
+            ) : (
+              <AwsStatusIndicator type="pending">SIN PLAN ACTIVO</AwsStatusIndicator>
+            ),
+            subtext: currentJob ? opBadge.label : "Listo para iniciar evaluación",
+          },
+        ]}
+      />
 
       {errorMsg && (
         <div className="cm-alert error" role="alert" style={{ marginBottom: 16 }}>
@@ -650,10 +1186,10 @@ export default function MigrationOrchestratorWorkspace({
                 border: "1px solid #f87171",
               }}
             >
-              <div style={{ fontWeight: 700, fontSize: 13, color: "#991b1b", marginBottom: 6 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: "#991b1b", marginBottom: 6 }}>
                 Remediación Inmediata del Bloqueador Técnico de Hipervisor:
               </div>
-              <p style={{ margin: "0 0 10px 0", fontSize: 12, color: "#374151", lineHeight: 1.45 }}>
+              <p style={{ margin: "0 0 10px 0", fontSize: 13.5, color: "#374151", lineHeight: 1.45 }}>
                 La migración de imágenes hacia AWS VM Import o GCP Image Import transfiere el estado persistente en disco tras un snapshot consistente (quiesce + sync), NO la memoria RAM volátil ni los sockets TCP abiertos. Selecciona una acción para avanzar a <strong>PLAN_READY</strong>:
               </p>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -684,12 +1220,27 @@ export default function MigrationOrchestratorWorkspace({
         </div>
       )}
 
+      {/* Navegación principal por tareas: una sola tarea visible a la vez */}
+      <AwsTabs
+        ariaLabel="Tareas del orquestador"
+        activeTabId={mainTab}
+        onTabChange={setMainTab}
+        tabs={[
+          { id: "wizard", label: "1. Crear migración" },
+          { id: "inspector", label: "2. Plan activo", disabled: jobs.length === 0 },
+          { id: "plans", label: "3. Historial de planes", count: jobs.length },
+        ]}
+      />
+
       {/* Paso 1: Selector de Caso de Uso y Asistente Guiado */}
+      {mainTab === "wizard" && (
       <div className="cm-card" style={{ marginBottom: 20 }}>
         <div className="cm-card-title">
-          <span>1. Seleccionar Caso de Uso y Configurar Origen / Destino Cloud</span>
-          <span className="cm-badge info">Asistente Guiado por Objetivo</span>
+          <span>Selecciona qué quieres migrar</span>
         </div>
+
+        {!wizardCollapsed && (
+          <>
 
         <div className="cm-selector-grid" style={{ marginBottom: 16 }}>
           {USE_CASE_CARDS.map((uc) => {
@@ -760,7 +1311,7 @@ export default function MigrationOrchestratorWorkspace({
             <div style={{ marginTop: 16 }}>
               {/* Selector de Modo de Origen */}
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
-                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--color-text-primary)" }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: "var(--color-text-primary)" }}>
                   Origen de la Aplicación a Descubrir:
                 </span>
                 <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
@@ -798,7 +1349,7 @@ export default function MigrationOrchestratorWorkspace({
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
                     <div>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span className="cm-badge" style={{ backgroundColor: "#1e3a8a", color: "#ffffff", fontWeight: 700, fontSize: 10 }}>GIT</span>
+                        <span className="cm-badge" style={{ backgroundColor: "#1e3a8a", color: "#ffffff", fontWeight: 700, fontSize: 12.5 }}>GIT</span>
                         <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#1e3a8a" }}>
                           Adjuntar Repositorio GitHub por Enlace Público
                         </h4>
@@ -808,14 +1359,14 @@ export default function MigrationOrchestratorWorkspace({
                             backgroundColor: "#dcfce7",
                             color: "#166534",
                             border: "1px solid #86efac",
-                            fontSize: 11,
+                            fontSize: 13,
                             fontWeight: 700,
                           }}
                         >
                           Enlace Público (Sin Credenciales)
                         </span>
                       </div>
-                      <p style={{ margin: "4px 0 0 0", fontSize: 12, color: "#475569", lineHeight: 1.45 }}>
+                      <p style={{ margin: "4px 0 0 0", fontSize: 13.5, color: "#475569", lineHeight: 1.45 }}>
                         Ingresa el enlace público de cualquier repositorio GitHub. CloudMove validará el acceso al repositorio, resolverá y fijará el commit SHA inmutable, analizará runtimes, puertos y dependencias en un sandbox efímero aislado, redactará secretos y generará la plantilla IaC de Terraform para {newProvider.toUpperCase()}.
                       </p>
                     </div>
@@ -838,7 +1389,7 @@ export default function MigrationOrchestratorWorkspace({
                           setGithubRepoData(null);
                           setGithubTreeData(null);
                         }}
-                        style={{ flex: "1 1 380px", fontSize: 13, backgroundColor: "#ffffff" }}
+                        style={{ flex: "1 1 380px", fontSize: 14, backgroundColor: "#ffffff" }}
                       />
                       <button
                         type="button"
@@ -850,7 +1401,7 @@ export default function MigrationOrchestratorWorkspace({
                         {validatingGithub ? "Validando en GitHub..." : "Validar Enlace Público"}
                       </button>
                     </div>
-                    <div style={{ fontSize: 11.5, color: "#475569", marginTop: 4 }}>
+                    <div style={{ fontSize: 13.5, color: "#475569", marginTop: 4 }}>
                       <span><strong>Acceso a repositorios públicos:</strong> No requiere autenticación, contraseñas ni permisos especiales.</span>
                     </div>
                   </div>
@@ -876,7 +1427,7 @@ export default function MigrationOrchestratorWorkspace({
                             style={{
                               backgroundColor: githubRepoData.visibility === "public" ? "#dcfce7" : "#fef3c7",
                               color: githubRepoData.visibility === "public" ? "#166534" : "#92400e",
-                              fontSize: 10,
+                              fontSize: 12.5,
                               fontWeight: 700,
                               textTransform: "uppercase",
                             }}
@@ -884,7 +1435,7 @@ export default function MigrationOrchestratorWorkspace({
                             Repositorio {githubRepoData.visibility}
                           </span>
                           {githubRepoData.language && (
-                            <span className="cm-badge" style={{ backgroundColor: "#f1f5f9", color: "#334155", fontSize: 10.5 }}>
+                            <span className="cm-badge" style={{ backgroundColor: "#f1f5f9", color: "#334155", fontSize: 12.5 }}>
                               {githubRepoData.language}
                             </span>
                           )}
@@ -893,17 +1444,17 @@ export default function MigrationOrchestratorWorkspace({
                           href={githubRepoData.html_url || githubUrl}
                           target="_blank"
                           rel="noreferrer"
-                          style={{ fontSize: 11.5, color: "#2563eb", textDecoration: "none" }}
+                          style={{ fontSize: 13.5, color: "#2563eb", textDecoration: "none" }}
                         >
                           Abrir en GitHub ↗
                         </a>
                       </div>
                       {githubRepoData.description && (
-                        <p style={{ margin: "2px 0 6px 0", fontSize: 12, color: "#475569" }}>
+                        <p style={{ margin: "2px 0 6px 0", fontSize: 13.5, color: "#475569" }}>
                           {githubRepoData.description}
                         </p>
                       )}
-                      <div style={{ fontSize: 11.5, color: "#64748b" }}>
+                      <div style={{ fontSize: 13.5, color: "#64748b" }}>
                         Rama predeterminada: <strong><code>{githubRepoData.default_branch}</code></strong> · Estrellas: <strong>{githubRepoData.stars_count ?? 0}</strong>
                       </div>
                       {githubTreeData && (
@@ -981,7 +1532,7 @@ export default function MigrationOrchestratorWorkspace({
                         background: "none",
                         border: "none",
                         color: "#2563eb",
-                        fontSize: 12,
+                        fontSize: 13.5,
                         cursor: "pointer",
                         padding: 0,
                         textDecoration: "underline",
@@ -1069,7 +1620,7 @@ export default function MigrationOrchestratorWorkspace({
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
                 <div style={{ flex: "1 1 320px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <span className="cm-badge" style={{ backgroundColor: "#14532d", color: "#ffffff", fontWeight: 700, fontSize: 10 }}>IMG / OS</span>
+                    <span className="cm-badge" style={{ backgroundColor: "#14532d", color: "#ffffff", fontWeight: 700, fontSize: 12.5 }}>IMG / OS</span>
                     <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#14532d" }}>
                       Caso 2 · Migración de Imagen de Sistema Operativo / Máquina Virtual
                     </h4>
@@ -1079,14 +1630,14 @@ export default function MigrationOrchestratorWorkspace({
                         backgroundColor: uc2SourceMode === "live_capture" ? "#dcfce7" : "#e0f2fe",
                         color: uc2SourceMode === "live_capture" ? "#166534" : "#0369a1",
                         border: `1px solid ${uc2SourceMode === "live_capture" ? "#86efac" : "#7dd3fc"}`,
-                        fontSize: 11,
+                        fontSize: 13,
                         fontWeight: 700,
                       }}
                     >
                       {uc2SourceMode === "live_capture" ? "Captura en Vivo Activa" : "Modo Archivo de Disco"}
                     </span>
                   </div>
-                  <p style={{ margin: "4px 0 0 0", fontSize: 12, color: "#475569", lineHeight: 1.45 }}>
+                  <p style={{ margin: "4px 0 0 0", fontSize: 13.5, color: "#475569", lineHeight: 1.45 }}>
                     {uc2SourceMode === "live_capture"
                       ? `CloudMove captura el sistema operativo en vivo donde se ejecuta: archivos guardados, configuración /etc, fstab, servicios systemd, paquetes y kernel, generando una imagen de disco (QCOW2/RAW) lista para aprovisionar y montar como VM en ${newProvider.toUpperCase()}.`
                       : `Ingresa la ruta de cualquier archivo de imagen de disco en el sistema (.vmdk, .qcow2, .raw, .vhdx). El analizador ejecutará qemu-img info en modo seguro de solo lectura para inspeccionar las cabeceras binarias reales, verificar particionado GPT/MBR, calcular SHA-256 y evaluar compatibilidad hacia ${newProvider.toUpperCase()}.`}
@@ -1109,7 +1660,7 @@ export default function MigrationOrchestratorWorkspace({
                       padding: "6px 12px",
                       borderRadius: 4,
                       cursor: "pointer",
-                      fontSize: 12,
+                      fontSize: 13.5,
                       boxShadow: uc2SourceMode === "live_capture" ? "0 1px 2px rgba(0,0,0,0.1)" : "none",
                     }}
                   >
@@ -1129,7 +1680,7 @@ export default function MigrationOrchestratorWorkspace({
                       padding: "6px 12px",
                       borderRadius: 4,
                       cursor: "pointer",
-                      fontSize: 12,
+                      fontSize: 13.5,
                       boxShadow: uc2SourceMode === "file_path" ? "0 1px 2px rgba(0,0,0,0.1)" : "none",
                     }}
                   >
@@ -1153,17 +1704,17 @@ export default function MigrationOrchestratorWorkspace({
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
                       <div>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <span className="cm-badge" style={{ backgroundColor: "#14532d", color: "#ffffff", fontSize: 10, fontWeight: 700 }}>DISCOS REALES</span>
+                          <span className="cm-badge" style={{ backgroundColor: "#14532d", color: "#ffffff", fontSize: 12.5, fontWeight: 700 }}>DISCOS REALES</span>
                           <span style={{ fontWeight: 700, fontSize: 13.5, color: "#14532d" }}>
                             Dispositivos y Particiones del Host Detectados en Vivo
                           </span>
                           {hostDevicesData?.queried_at && (
-                            <span className="cm-badge observed" style={{ fontSize: 10 }}>
+                            <span className="cm-badge observed" style={{ fontSize: 12.5 }}>
                               Consulta Ejecutada: {new Date(hostDevicesData.queried_at).toLocaleTimeString()} · Sin Datos Precargados
                             </span>
                           )}
                         </div>
-                        <p style={{ margin: "3px 0 0 0", fontSize: 12, color: "#475569" }}>
+                        <p style={{ margin: "3px 0 0 0", fontSize: 13.5, color: "#475569" }}>
                           CloudMove ejecuta <code>lsblk</code> y consultas directas al subsistema de archivos para relevar el disco físico y particiones donde corre la aplicación.
                         </p>
                       </div>
@@ -1190,7 +1741,7 @@ export default function MigrationOrchestratorWorkspace({
                               setHostDevicesData(null);
                               setSelectedStorageDevice("");
                             }}
-                            style={{ fontSize: 11, padding: "4px 8px" }}
+                            style={{ fontSize: 13, padding: "4px 8px" }}
                             title="Limpiar datos detectados del host"
                           >
                             Limpiar Consulta
@@ -1207,7 +1758,7 @@ export default function MigrationOrchestratorWorkspace({
                           borderRadius: 6,
                           padding: "8px 12px",
                           marginBottom: 10,
-                          fontSize: 12,
+                          fontSize: 13.5,
                           color: "#334155",
                           display: "flex",
                           flexWrap: "wrap",
@@ -1247,14 +1798,14 @@ export default function MigrationOrchestratorWorkspace({
                                     onChange={() => setSelectedStorageDevice(dev.path)}
                                     style={{ cursor: "pointer" }}
                                   />
-                                  <label htmlFor={`dev-${dev.name}`} style={{ cursor: "pointer", fontWeight: 700, fontSize: 13, color: "#1e293b" }}>
+                                  <label htmlFor={`dev-${dev.name}`} style={{ cursor: "pointer", fontWeight: 700, fontSize: 14, color: "#1e293b" }}>
                                     <code>{dev.path}</code> ({dev.model})
                                   </label>
-                                  <span className="cm-badge" style={{ backgroundColor: "#e2e8f0", color: "#334155", fontSize: 10.5 }}>
+                                  <span className="cm-badge" style={{ backgroundColor: "#e2e8f0", color: "#334155", fontSize: 12.5 }}>
                                     {dev.size_gib} GiB · {dev.type?.toUpperCase()}
                                   </span>
                                   {dev.is_boot_device && (
-                                    <span className="cm-badge observed" style={{ fontSize: 10 }}>
+                                    <span className="cm-badge observed" style={{ fontSize: 12.5 }}>
                                       Disco de Arranque Principal
                                     </span>
                                   )}
@@ -1268,7 +1819,7 @@ export default function MigrationOrchestratorWorkspace({
                                     <div
                                       key={p.name}
                                       style={{
-                                        fontSize: 11.5,
+                                        fontSize: 13.5,
                                         color: "#475569",
                                         backgroundColor: "#f8fafc",
                                         padding: "4px 8px",
@@ -1283,18 +1834,18 @@ export default function MigrationOrchestratorWorkspace({
                                       <div>
                                         <strong><code>{p.path}</code></strong>
                                         {p.mount_point && <span> montada en <strong><code>{p.mount_point}</code></strong></span>}
-                                        <span style={{ color: "#64748b" }}> ({p.filesystem})</span>
-                                        {p.uuid && <span style={{ color: "#94a3b8" }}> · UUID: {p.uuid}</span>}
+                                        <span style={{ color: "var(--color-text-muted)" }}> ({p.filesystem})</span>
+                                        {p.uuid && <span style={{ color: "var(--color-text-muted)" }}> · UUID: {p.uuid}</span>}
                                       </div>
                                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                                         <span>{p.size_gib} GiB</span>
                                         {p.mount_point === "/" && (
-                                          <span className="cm-badge" style={{ backgroundColor: "#dbeafe", color: "#1e40af", fontSize: 10 }}>
+                                          <span className="cm-badge" style={{ backgroundColor: "#dbeafe", color: "#1e40af", fontSize: 12.5 }}>
                                             Espacio Utilizado: {p.used_gib} GiB ({p.usage_percent}%)
                                           </span>
                                         )}
                                         {p.is_boot && (
-                                          <span className="cm-badge" style={{ backgroundColor: "#dcfce7", color: "#166534", fontSize: 10 }}>
+                                          <span className="cm-badge" style={{ backgroundColor: "#dcfce7", color: "#166534", fontSize: 12.5 }}>
                                             Partición de Arranque ESP
                                           </span>
                                         )}
@@ -1308,7 +1859,7 @@ export default function MigrationOrchestratorWorkspace({
                         })}
                       </div>
                     ) : (
-                      <div style={{ fontSize: 12.5, color: "#64748b", padding: "16px 12px", textAlign: "center", backgroundColor: "#f8fafc", borderRadius: 6, border: "1px dashed #cbd5e1" }}>
+                      <div style={{ fontSize: 14, color: "#64748b", padding: "16px 12px", textAlign: "center", backgroundColor: "#f8fafc", borderRadius: 6, border: "1px dashed #cbd5e1" }}>
                         {queryingDevices
                           ? "Ejecutando consulta de hardware en tiempo real con lsblk..."
                           : "Sin datos precargados. Haz clic en 'Consultar Dispositivos del Equipo en Vivo' para escanear el subsistema de almacenamiento de este equipo en tiempo real."}
@@ -1318,10 +1869,11 @@ export default function MigrationOrchestratorWorkspace({
 
                   {/* Formato de Salida */}
                   <div className="cm-field">
-                    <label className="cm-label" style={{ fontWeight: 600, color: "#1e293b" }}>
+                    <label htmlFor="uc2-output-format-select" className="cm-label" style={{ fontWeight: 600, color: "#1e293b" }}>
                       Formato de Imagen de Disco de Salida para la Nube
                     </label>
                     <select
+                      id="uc2-output-format-select"
                       className="cm-select"
                       value={uc2OutputFormat}
                       onChange={(e) => setUc2OutputFormat(e.target.value)}
@@ -1393,11 +1945,11 @@ export default function MigrationOrchestratorWorkspace({
                   border: "1px solid #cbd5e1",
                 }}
               >
-                <div style={{ fontWeight: 700, fontSize: 13, color: "#1e293b", marginBottom: 6 }}>
+                <div style={{ fontWeight: 700, fontSize: 14, color: "#1e293b", marginBottom: 6 }}>
                   Estrategia de Consistencia de Datos y Transferencia hacia {newProvider.toUpperCase()}
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14, cursor: "pointer" }}>
                     <input
                       type="radio"
                       name="consistency_strategy"
@@ -1408,13 +1960,13 @@ export default function MigrationOrchestratorWorkspace({
                     />
                     <div>
                       <strong>Snapshot Consistente con Quiesce de Servicios (Recomendado)</strong>
-                      <div style={{ color: "#475569", fontSize: 11.5, marginTop: 2 }}>
+                      <div style={{ color: "#475569", fontSize: 13.5, marginTop: 2 }}>
                         Vaciado de búferes vía <code>sync()</code> y congelación de escrituras. Garantiza persistencia completa de discos y <code>/etc</code>. Las sesiones TCP volátiles se reabren ordenadamente al arrancar la instancia en la nube.
                       </div>
                     </div>
                   </label>
 
-                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14, cursor: "pointer" }}>
                     <input
                       type="radio"
                       name="consistency_strategy"
@@ -1425,13 +1977,13 @@ export default function MigrationOrchestratorWorkspace({
                     />
                     <div>
                       <strong>Replicación Continua a Nivel de Bloques (AWS MGN / GCP Migrate to VMs)</strong>
-                      <div style={{ color: "#475569", fontSize: 11.5, marginTop: 2 }}>
+                      <div style={{ color: "#475569", fontSize: 13.5, marginTop: 2 }}>
                         Replicación continua de cambios a nivel de bloque en segundo plano mientras el servidor opera, con cutover final de mínimo downtime.
                       </div>
                     </div>
                   </label>
 
-                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, cursor: "pointer" }}>
+                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14, cursor: "pointer" }}>
                     <input
                       type="radio"
                       name="consistency_strategy"
@@ -1442,7 +1994,7 @@ export default function MigrationOrchestratorWorkspace({
                     />
                     <div>
                       <strong style={{ color: "#b91c1c" }}>Exigir Transferencia de RAM Volátil en Caliente (Simulador de Bloqueo por Incompatibilidad Física)</strong>
-                      <div style={{ color: "#64748b", fontSize: 11.5, marginTop: 2 }}>
+                      <div style={{ color: "#64748b", fontSize: 13.5, marginTop: 2 }}>
                         Activa <code>require_live_memory_state=True</code> para auditar y demostrar por qué los hipervisores en la nube bloquean la transferencia de memoria RAM volátil entre hardware heterogéneo.
                       </div>
                     </div>
@@ -1503,7 +2055,7 @@ export default function MigrationOrchestratorWorkspace({
 
         {/* Vista previa de pre-inspección si el usuario ejecutó el Paso Previo */}
         {newUseCase === "app_source" && uc1PreInspection?.application && (
-          <div className="cm-card-subtle" style={{ marginTop: 14, borderLeft: "4px solid #1d4ed8" }}>
+          <div className="cm-step-card" style={{ marginTop: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <strong>
@@ -1520,11 +2072,11 @@ export default function MigrationOrchestratorWorkspace({
               </span>
             </div>
             {uc1PreInspection.application.git_metadata && (
-              <div style={{ fontSize: 12, marginBottom: 6, color: "#1e3a8a", backgroundColor: "#f0fdf4", padding: "6px 10px", borderRadius: 4, border: "1px solid #bbf7d0" }}>
+              <div style={{ fontSize: 13.5, marginBottom: 6, color: "#1e3a8a", backgroundColor: "#f0fdf4", padding: "6px 10px", borderRadius: 4, border: "1px solid #bbf7d0" }}>
                 <span><strong>Repositorio Público:</strong> <a href={uc1PreInspection.application.git_metadata.repository_url} target="_blank" rel="noreferrer"><strong>{uc1PreInspection.application.git_metadata.owner}/{uc1PreInspection.application.git_metadata.repo}</strong></a> · Rama: <code>{uc1PreInspection.application.git_metadata.ref}</code> · Mensaje: <em>"{uc1PreInspection.application.git_metadata.commit_message}"</em> · Sandbox efímero: <span style={{ color: "#166534", fontWeight: 600 }}>Aislado y purgado</span></span>
               </div>
             )}
-            <div style={{ fontSize: 12, color: "var(--color-text-secondary)" }}>
+            <div style={{ fontSize: 13.5, color: "var(--color-text-secondary)" }}>
               Archivos analizados: <code>{(uc1PreInspection.application.files_inspected || []).join(", ")}</code> · Puertos: <code>{(uc1PreInspection.application.exposed_ports || []).join(", ")}</code> · Secretos redactados: <strong>{uc1PreInspection.application.secrets_redacted_count}</strong> · Dependencias detectadas: <strong>{uc1PreInspection.application.dependencies?.length || 0}</strong>
             </div>
             {uc1PreInspection.application.repository_tree && (
@@ -1538,11 +2090,25 @@ export default function MigrationOrchestratorWorkspace({
                 defaultOpen={true}
               />
             )}
+
+            {/* Selector Interactivo de Transformación GitHub -> Nube (Pre-Plan) */}
+            <GithubToCloudTransformationSelector
+              catalog={
+                uc1PreInspection.transformation_catalog ||
+                uc1PreInspection.application?.transformation_catalog
+              }
+              decisions={uc1Decisions}
+              onSelectDecision={(itemId, optId) =>
+                setUc1Decisions((prev) => ({ ...prev, [itemId]: optId }))
+              }
+              targetProvider={newProvider}
+              isJobView={false}
+            />
           </div>
         )}
 
         {newUseCase === "vm_image" && uc2PreInspection?.manifest && (
-          <div className="cm-card-subtle" style={{ marginTop: 14, borderLeft: "4px solid #059669" }}>
+          <div className="cm-step-card" style={{ marginTop: 14 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                 <strong>
@@ -1563,7 +2129,7 @@ export default function MigrationOrchestratorWorkspace({
                 Snapshot: {uc2PreInspection.manifest.snapshot_consistency?.consistency_type || "application_quiesced"}
               </span>
             </div>
-            <div style={{ fontSize: 12, color: "var(--color-text-secondary)", lineHeight: 1.6 }}>
+            <div style={{ fontSize: 13.5, color: "var(--color-text-secondary)", lineHeight: 1.6 }}>
               <div>
                 <strong>Sistema Operativo:</strong> {uc2PreInspection.manifest.os?.distro} {uc2PreInspection.manifest.os?.version} · Kernel: <code>{uc2PreInspection.manifest.os?.kernel}</code> ({uc2PreInspection.manifest.os?.architecture}) · Arranque: <code>{uc2PreInspection.manifest.boot_mode}</code> ({uc2PreInspection.manifest.partition_scheme})
               </div>
@@ -1584,11 +2150,11 @@ export default function MigrationOrchestratorWorkspace({
                   <div>
                     <strong>Imagen de Sistema (System Image Bundle):</strong> <code>{uc2PreInspection.manifest.live_capture_details.system_image_snapshot_archive}</code> ({Math.round((uc2PreInspection.manifest.live_capture_details.system_image_bundle_size_bytes || 0) / 1024)} KB)
                   </div>
-                  <div style={{ fontSize: 11.5, marginTop: 3 }}>
+                  <div style={{ fontSize: 13.5, marginTop: 3 }}>
                     Incluye configuración de /etc, manifiesto de {uc2PreInspection.manifest.installed_packages_summary?.total_count} paquetes, usuarios, redes, systemd y script de restauración automática <code>restore_system_image.sh</code>.
                   </div>
                   {uc2PreInspection.manifest.live_capture_details.raw_disk_clone_script && (
-                    <div style={{ fontSize: 11.5, marginTop: 4 }}>
+                    <div style={{ fontSize: 13.5, marginTop: 4 }}>
                       <strong>Herramienta de Clonado Bit a Bit:</strong> <code>{uc2PreInspection.manifest.live_capture_details.raw_disk_clone_script}</code> (permite streaming directo hacia AWS S3 o GCP Storage sin consumir disco local).
                     </div>
                   )}
@@ -1597,10 +2163,13 @@ export default function MigrationOrchestratorWorkspace({
             </div>
           </div>
         )}
+          </>
+        )}
       </div>
+      )}
 
-      {/* Lista de Planes Persistidos y Panel de Inspección / Ejecución */}
-      {jobs.length === 0 ? (
+      {/* Estado vacío: aún no hay planes (pestañas 2 y 3) */}
+      {mainTab !== "wizard" && jobs.length === 0 && (
         <div
           className="cm-card"
           style={{
@@ -1613,101 +2182,145 @@ export default function MigrationOrchestratorWorkspace({
           }}
         >
           <div style={{ marginBottom: 12 }}>
-            <span className="cm-badge" style={{ backgroundColor: "#2563eb", color: "#ffffff", fontSize: 13, fontWeight: 700, padding: "4px 12px" }}>
+            <span className="cm-badge" style={{ backgroundColor: "#2563eb", color: "#ffffff", fontSize: 14, fontWeight: 700, padding: "4px 12px" }}>
               ORQUESTADOR
             </span>
           </div>
           <h3 style={{ margin: "0 0 8px 0", fontSize: 17, fontWeight: 700, color: "var(--color-text-primary)" }}>
             No hay planes de migración precargados
           </h3>
-          <p style={{ margin: "0 0 16px 0", color: "var(--color-text-secondary)", fontSize: 13.5, maxWidth: 560, marginInline: "auto", lineHeight: 1.5 }}>
-            CloudMove inicia completamente limpio y desde cero, sin planes precargados. Utiliza el formulario superior para crear y orquestar un plan real:
+          <p style={{ margin: "0 0 16px 0", color: "var(--color-text-secondary)", fontSize: 15, maxWidth: 560, marginInline: "auto", lineHeight: 1.5 }}>
+            Crea tu primer plan desde la pestaña «1. Crear migración».
           </p>
-          <div style={{ display: "flex", justifyContent: "center", gap: 12, flexWrap: "wrap", fontSize: 12 }}>
-            <span className="cm-badge" style={{ backgroundColor: "#eff6ff", color: "#1d4ed8", padding: "6px 12px", border: "1px solid #bfdbfe" }}>
-              1. Pega un enlace público de GitHub (Caso 1)
-            </span>
-            <span className="cm-badge" style={{ backgroundColor: "#f0fdf4", color: "#15803d", padding: "6px 12px", border: "1px solid #bbf7d0" }}>
-              2. Especifica una imagen de disco / SO (Caso 2)
-            </span>
-            <span className="cm-badge" style={{ backgroundColor: "#faf5ff", color: "#7e22ce", padding: "6px 12px", border: "1px solid #e9d5ff" }}>
-              3. Lanza una campaña de datacenter (Caso 3)
-            </span>
-          </div>
+          <button type="button" className="cm-btn primary" onClick={() => setMainTab("wizard")}>
+            Crear migración
+          </button>
         </div>
-      ) : (
-        <div className="cm-split-layout">
-        {/* Columna Izquierda: Lista de Planes */}
-        <div className="cm-card">
-          <div className="cm-card-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span>Planes Persistidos ({jobs.length})</span>
-            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <button
-                type="button"
-                className="cm-btn sm danger"
-                onClick={handleClearAllJobs}
-                style={{ fontSize: 10, padding: "2px 7px" }}
-                title="Eliminar todos los planes persistidos de la base de datos"
-              >
-                Limpiar Todos
-              </button>
-              <span className="cm-badge info">ACID</span>
-            </div>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: "75vh", overflowY: "auto" }}>
-            {jobs.map((job) => {
-              const isSelected = currentJob?.migration_id === job.migration_id;
-              const badgeKey = deriveOperationalStatusBadge(job);
-              const badgeMeta = OPERATIONAL_BADGE_MAP[badgeKey] || OPERATIONAL_BADGE_MAP.PLANNED;
-              return (
-                <button
-                  key={job.migration_id}
-                  type="button"
-                  onClick={() => {
-                    setSelectedJob(job);
-                    if (onActiveJobChange) onActiveJobChange(job);
-                  }}
-                  className={`cm-selector-card ${isSelected ? "selected" : ""}`}
-                  style={{ padding: "10px 12px" }}
-                >
-                  <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 4, color: "var(--color-text-primary)" }}>
-                    {job.name}
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                    <span className="cm-hint">
-                      <code>{job.use_case}</code> · <strong>{job.target_provider?.toUpperCase()}</strong> · v{job.version || 1}
-                    </span>
-                    <span className={`cm-badge ${badgeMeta.badgeClass}`} style={{ fontSize: 10, padding: "2px 6px" }}>
-                      {job.state}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+      )}
 
-        {/* Columna Derecha: Detalle Completo del Plan Seleccionado */}
-        {currentJob && (
+      {/* Pestaña 3: Historial de planes registrados */}
+      {mainTab === "plans" && jobs.length > 0 && (
+        <div className="cm-card">
+          <div className="cm-card-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <span>Planes registrados ({jobs.length})</span>
+            <button
+              type="button"
+              className="cm-btn sm danger"
+              onClick={handleClearAllJobs}
+              title="Eliminar todos los planes persistidos de la base de datos"
+            >
+              Eliminar todos
+            </button>
+          </div>
+          <div className="cm-table-wrap">
+            <table className="cm-table">
+              <thead>
+                <tr>
+                  <th>Nombre</th>
+                  <th>Caso</th>
+                  <th>Destino</th>
+                  <th>Estado</th>
+                  <th style={{ textAlign: "right" }}>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {jobs.map((job) => {
+                  const isSelected = currentJob?.migration_id === job.migration_id;
+                  const badgeKey = deriveOperationalStatusBadge(job);
+                  const badgeMeta = OPERATIONAL_BADGE_MAP[badgeKey] || OPERATIONAL_BADGE_MAP.PLANNED;
+                  const caseLabel =
+                    job.use_case === "app_source"
+                      ? "Caso 1 · Aplicación"
+                      : job.use_case === "vm_image"
+                      ? "Caso 2 · Imagen SO/VM"
+                      : "Caso 3 · Datacenter";
+                  return (
+                    <tr key={job.migration_id} style={isSelected ? { backgroundColor: "#F2F8FD" } : undefined}>
+                      <td>
+                        <strong>{job.name}</strong>
+                        <div className="cm-hint">v{job.version || 1}</div>
+                      </td>
+                      <td>{caseLabel}</td>
+                      <td>{job.target_provider?.toUpperCase()}</td>
+                      <td>
+                        <span className={`cm-badge ${badgeMeta.badgeClass}`}>{job.state}</span>
+                      </td>
+                      <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                        <button
+                          type="button"
+                          className="cm-btn sm primary"
+                          onClick={() => {
+                            setSelectedJob(job);
+                            if (onActiveJobChange) onActiveJobChange(job);
+                            setInspectorTab("execution");
+                            setMainTab("inspector");
+                          }}
+                        >
+                          Abrir
+                        </button>{" "}
+                        <button
+                          type="button"
+                          className="cm-btn sm danger"
+                          onClick={() => handleDeleteJob(job.migration_id)}
+                        >
+                          Eliminar
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Pestaña 2: Plan activo en inspección (ancho completo) */}
+      {mainTab === "inspector" && jobs.length > 0 && currentJob && (
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {/* 1. Cabecera del Plan, Máquina de Estados y Controles */}
+            {/* 1. Cabecera del Plan */}
             <div className="cm-card">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 14 }}>
-                <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+                <div style={{ flex: "1 1 360px", minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                    <h3 style={{ margin: 0, fontSize: 17, fontFamily: "var(--font-display)" }}>
+                    <h3 style={{ margin: 0, fontSize: 20, fontFamily: "var(--font-display)" }}>
                       {currentJob.name}
                     </h3>
                     <span className={`cm-badge ${opBadge.badgeClass}`}>
                       {opBadge.label}
                     </span>
                     <span className={`cm-badge ${currentJob.target_provider === "gcp" ? "gcp" : "aws"}`}>
-                      Destino: {currentJob.target_provider?.toUpperCase()}
+                      {currentJob.target_provider?.toUpperCase()}
                     </span>
                   </div>
                   <div className="cm-hint" style={{ marginTop: 6 }}>
-                    ID: <code>{currentJob.migration_id}</code> · Versión transaccional: <code>v{currentJob.version || 1}</code> · Caso: <code>{currentJob.use_case}</code> · Modo de ejecución: <code>{currentJob.execution_mode}</code> · Ejecutado en nube real: <strong>{currentJob.completed_in_real_cloud ? "SÍ" : "NO (Simulación Dry-Run)"}</strong> · Origen: <code>{currentJob.source_retention_policy || "PRESERVED_READ_ONLY_STANDBY"}</code>
+                    ID <code>{currentJob.migration_id}</code> · v{currentJob.version || 1} · {currentJob.completed_in_real_cloud ? "Ejecutado en nube real" : "Simulación (Dry-Run)"}
                   </div>
+                  {jobs.length > 1 && (
+                    <div className="cm-field" style={{ marginTop: 10, maxWidth: 480 }}>
+                      <label htmlFor="mig-active-plan-select" className="cm-label">
+                        Cambiar plan
+                      </label>
+                      <select
+                        id="mig-active-plan-select"
+                        className="cm-select"
+                        value={currentJob.migration_id}
+                        onChange={(e) => {
+                          const next = jobs.find((j) => j.migration_id === e.target.value);
+                          if (next) {
+                            setSelectedJob(next);
+                            if (onActiveJobChange) onActiveJobChange(next);
+                          }
+                        }}
+                      >
+                        {jobs.map((j) => (
+                          <option key={j.migration_id} value={j.migration_id}>
+                            {j.name} — {j.state}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -1717,56 +2330,51 @@ export default function MigrationOrchestratorWorkspace({
                     onClick={() => handleDeleteJob(currentJob.migration_id)}
                     title="Eliminar este plan permanentemente"
                   >
-                    Eliminar Plan
+                    Eliminar
                   </button>
                   <button
                     type="button"
                     className="cm-btn sm"
                     onClick={handleDownloadJobReport}
                   >
-                    Descargar Evidencia JSON
+                    Evidencia JSON
                   </button>
                   <button
                     type="button"
                     className="cm-btn primary sm"
                     onClick={handleDownloadZipBundle}
                     title="Descargar paquete completo (.ZIP) con Terraform IaC, scripts de subida, cloud-init y guía paso a paso"
-                    style={{ backgroundColor: "#047857", borderColor: "#065f46" }}
                   >
-                    Descargar Paquete de Despliegue (.ZIP)
+                    Descargar paquete (.ZIP)
                   </button>
-                  {currentJob.use_case === "vm_image" && (
-                    <>
-                      <button
-                        type="button"
-                        className="cm-btn sm"
-                        onClick={handleDownloadSystemImage}
-                        title="Descargar copia del sistema operativo (/etc, usuarios, systemd) en formato tar.gz"
-                        style={{ backgroundColor: "#1e3a8a", color: "#ffffff", borderColor: "#172554" }}
-                      >
-                        Descargar Copia del SO (.tar.gz)
-                      </button>
-                      <button
-                        type="button"
-                        className="cm-btn sm"
-                        onClick={handleDownloadDiskImage}
-                        title="Descargar imagen binaria de disco QCOW2 generada en staging"
-                        style={{ backgroundColor: "#0284c7", color: "#ffffff", borderColor: "#0369a1" }}
-                      >
-                        Descargar Imagen QCOW2
-                      </button>
-                    </>
-                  )}
-                  {onLoadCmirToCanvas && currentJob.cmir && (
-                    <button
-                      type="button"
-                      className="cm-btn primary sm"
-                      onClick={() => onLoadCmirToCanvas(currentJob)}
-                    >
-                      Ver Subgrafo CMIR v2.1 en Grafo de Arquitectura ({cmirResources.length} nodos)
-                    </button>
-                  )}
                 </div>
+              </div>
+            </div>
+
+            {/* Sub-pestañas del plan: una sección enfocada a la vez */}
+            <AwsTabs
+              ariaLabel="Secciones del plan activo"
+              activeTabId={inspectorTab}
+              onTabChange={setInspectorTab}
+              style={{ marginBottom: 0 }}
+              tabs={[
+                {
+                  id: "execution",
+                  label: "Ejecución",
+                  badge:
+                    currentJob.blockers?.length > 0 ? `${currentJob.blockers.length} bloqueo(s)` : undefined,
+                },
+                { id: "source", label: currentJob.use_case === "app_source" ? "GitHub → Nube" : "Origen" },
+                { id: "compatibility", label: "Fidelidad y pruebas" },
+                { id: "iac", label: "Terraform y CMIR" },
+                { id: "guide", label: "Guía de despliegue" },
+              ]}
+            />
+
+            {inspectorTab === "execution" && (
+            <div className="cm-card">
+              <div className="cm-card-title">
+                <span>Máquina de estados y acciones</span>
               </div>
 
               {/* Cinta de Progreso de la Máquina de Estados */}
@@ -1938,9 +2546,10 @@ export default function MigrationOrchestratorWorkspace({
                 )}
               </div>
             </div>
+            )}
 
             {/* 2. Bloqueadores Críticos y Advertencias de Compatibilidad */}
-            {(currentJob.blockers?.length > 0 || currentJob.warnings?.length > 0) && (
+            {inspectorTab === "execution" && (currentJob.blockers?.length > 0 || currentJob.warnings?.length > 0) && (
               <div className="cm-card">
                 <div className="cm-card-title">
                   <span>Diagnóstico de Compatibilidad, Riesgos y Bloqueadores</span>
@@ -1966,10 +2575,10 @@ export default function MigrationOrchestratorWorkspace({
                               border: "1px solid #f87171",
                             }}
                           >
-                            <div style={{ fontWeight: 700, fontSize: 13, color: "#991b1b", marginBottom: 6 }}>
+                            <div style={{ fontWeight: 700, fontSize: 14, color: "#991b1b", marginBottom: 6 }}>
                               Resolución / Remediación Operativa de la Arquitectura:
                             </div>
-                            <p style={{ margin: "0 0 10px 0", fontSize: 12, color: "#374151", lineHeight: 1.45 }}>
+                            <p style={{ margin: "0 0 10px 0", fontSize: 13.5, color: "#374151", lineHeight: 1.45 }}>
                               La migración hacia AWS VM Import o GCP Image Import traslada el estado persistente en disco (particiones, datos, configuración de red y servicios en /etc). La memoria RAM volátil y sockets TCP abiertos no son transferibles entre hipervisores heterogéneos sin la misma capa de virtualización y red L2 extendida. Aplica un snapshot consistente con vaciado de búferes vía <code>sync()</code> o activa la replicación continua:
                             </p>
                             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -2007,15 +2616,15 @@ export default function MigrationOrchestratorWorkspace({
             {/* =================================================================
                 VISTAS ESPECÍFICAS DEL CASO 1: APLICACIÓN, DEPENDENCIAS Y SECRETOS
                 ================================================================= */}
-            {currentJob.use_case === "app_source" && (
+            {inspectorTab === "source" && currentJob.use_case === "app_source" && (
               <>
                 <div className="cm-card">
                   <div className="cm-card-title">
                     <span>
-                      Caso 1 · Evidencia de Aplicación y Runtime Detectado ({srcEnv.app_name || "Aplicación"})
+                      Evidencia de aplicación detectada ({srcEnv.app_name || "Aplicación"})
                     </span>
                     <span className="cm-badge observed">
-                      Análisis Estático Seguro · Sin Ejecución Arbitraria
+                      Análisis estático seguro
                     </span>
                   </div>
 
@@ -2025,20 +2634,20 @@ export default function MigrationOrchestratorWorkspace({
                         <strong>Trazabilidad Git Verificada (Repositorio GitHub Público / PAT):</strong>
                         <span className="cm-badge observed">Commit Fijado e Inmutable</span>
                       </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8, fontSize: 12 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 8, fontSize: 13.5 }}>
                         <div>Repositorio: <a href={srcEnv.git_metadata.repository_url} target="_blank" rel="noreferrer"><code>{srcEnv.git_metadata.owner}/{srcEnv.git_metadata.repo}</code></a></div>
                         <div>Commit SHA: <code>{srcEnv.git_metadata.commit_sha}</code></div>
                         <div>Rama / Ref: <code>{srcEnv.git_metadata.ref}</code></div>
                         <div>Autor: <strong>{srcEnv.git_metadata.author_name}</strong> ({srcEnv.git_metadata.author_date?.slice(0, 10)})</div>
                       </div>
-                      <div style={{ marginTop: 6, fontSize: 12 }}>
+                      <div style={{ marginTop: 6, fontSize: 13.5 }}>
                         Mensaje: <em>"{srcEnv.git_metadata.commit_message}"</em> · Sandbox efímero: <span style={{ color: "#15803d", fontWeight: 600 }}>Aislado y purgado de archivos temporales</span>
                       </div>
                     </div>
                   )}
 
                   {!srcEnv.git_metadata && (
-                    <div style={{ marginBottom: 14, padding: "10px 14px", backgroundColor: "#f8fafc", borderRadius: 6, border: "1px dashed #94a3b8", fontSize: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                    <div style={{ marginBottom: 14, padding: "10px 14px", backgroundColor: "#f8fafc", borderRadius: 6, border: "1px dashed #94a3b8", fontSize: 13.5, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                       <span><strong>¿Deseas probar este caso con un repositorio GitHub real?</strong> Ingresa un enlace público en la sección superior y genera el plan.</span>
                       <button
                         type="button"
@@ -2046,10 +2655,10 @@ export default function MigrationOrchestratorWorkspace({
                         onClick={() => {
                           setNewUseCase("app_source");
                           setAppPreset("github");
-                          window.scrollTo({ top: 0, behavior: "smooth" });
+                          setMainTab("wizard");
                         }}
                       >
-                        Adjuntar Repositorio GitHub ↑
+                        Adjuntar Repositorio GitHub
                       </button>
                     </div>
                   )}
@@ -2099,7 +2708,7 @@ export default function MigrationOrchestratorWorkspace({
                   {/* Tabla de Dependencias Clasificadas: Confirmadas vs Inferidas vs Desconocidas */}
                   {appDependencies.length > 0 && (
                     <div style={{ marginTop: 12 }}>
-                      <h4 style={{ margin: "0 0 8px 0", fontSize: 13 }}>
+                      <h4 style={{ margin: "0 0 8px 0", fontSize: 14 }}>
                         Dependencias de Aplicación Clasificadas por Nivel de Certeza Epistémica ({appDependencies.length})
                       </h4>
                       <div className="cm-table-wrap">
@@ -2152,7 +2761,7 @@ export default function MigrationOrchestratorWorkspace({
                                       <span className="cm-badge neutral">Sin estado persistente</span>
                                     )}
                                   </td>
-                                  <td style={{ fontSize: 11.5 }}>
+                                  <td style={{ fontSize: 13.5 }}>
                                     {dep.evidence?.[0]?.detail || dep.evidence?.[0]?.source || "Manifiesto de aplicación"}
                                   </td>
                                 </tr>
@@ -2167,13 +2776,28 @@ export default function MigrationOrchestratorWorkspace({
                   {/* Supuestos explícitos */}
                   {appAssumptions.length > 0 && (
                     <div className="cm-card-subtle" style={{ marginTop: 12 }}>
-                      <strong style={{ fontSize: 12 }}>Supuestos y Condiciones Operativas Declaradas:</strong>
+                      <strong style={{ fontSize: 13.5 }}>Supuestos y Condiciones Operativas Declaradas:</strong>
                       {appAssumptions.map((asmp, idx) => (
                         <div key={idx} className="cm-hint" style={{ marginTop: 4 }}>
                           • {asmp}
                         </div>
                       ))}
                     </div>
+                  )}
+
+                  {/* Mapa Interactivo de Transformación GitHub -> Nube y Selector de Opciones (Post-Detección / En Plan) */}
+                  {srcEnv.transformation_catalog && (
+                    <GithubToCloudTransformationSelector
+                      catalog={srcEnv.transformation_catalog}
+                      decisions={jobDecisions}
+                      onSelectDecision={(itemId, optId) =>
+                        setJobDecisions((prev) => ({ ...prev, [itemId]: optId }))
+                      }
+                      targetProvider={currentJob.target_provider}
+                      onApplyToExistingJob={handleUpdateJobDecisions}
+                      applyingChanges={updatingDecisions}
+                      isJobView={true}
+                    />
                   )}
                 </div>
 
@@ -2188,12 +2812,12 @@ export default function MigrationOrchestratorWorkspace({
                       {envVars.map((ev) => (
                         <div key={ev.name} className="cm-card-subtle" style={{ padding: "8px 12px" }}>
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                            <strong style={{ fontSize: 12 }}>{ev.name}</strong>
-                            <span className={`cm-badge ${ev.is_secret ? "danger" : "observed"}`} style={{ fontSize: 10, padding: "1px 5px" }}>
+                            <strong style={{ fontSize: 13.5 }}>{ev.name}</strong>
+                            <span className={`cm-badge ${ev.is_secret ? "danger" : "observed"}`} style={{ fontSize: 12.5, padding: "1px 5px" }}>
                               {ev.is_secret ? "SECRETO REDACTADO" : "CONFIG"}
                             </span>
                           </div>
-                          <code style={{ fontSize: 11.5, color: ev.is_secret ? "#b91c1c" : "#1e40af", wordBreak: "break-all" }}>
+                          <code style={{ fontSize: 13.5, color: ev.is_secret ? "#b91c1c" : "#1e40af", wordBreak: "break-all" }}>
                             {ev.redacted_value}
                           </code>
                         </div>
@@ -2201,7 +2825,11 @@ export default function MigrationOrchestratorWorkspace({
                     </div>
                   </div>
                 )}
+              </>
+            )}
 
+            {inspectorTab === "compatibility" && currentJob.use_case === "app_source" && (
+              <>
                 {/* Resumen de Paridad de Aplicación (diffReport sin .comparisons) */}
                 {diffReport && !diffReport.comparisons && (
                   <div className="cm-card">
@@ -2251,7 +2879,7 @@ export default function MigrationOrchestratorWorkspace({
             {/* =================================================================
                 VISTAS ESPECÍFICAS DEL CASO 2: IMAGEN COMPLETA DE SO / VM
                 ================================================================= */}
-            {binaryInspection && (
+            {inspectorTab === "source" && binaryInspection && (
               <div className="cm-card">
                 <div className="cm-card-title">
                   <span>Caso 2 · Integridad de Imagen, Cabecera Binaria (`qemu-img info`) y Checksum SHA-256</span>
@@ -2304,14 +2932,14 @@ export default function MigrationOrchestratorWorkspace({
                 {stagingVerification && (
                   <div className="cm-card-subtle" style={{ marginBottom: 12 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
-                      <strong style={{ fontSize: 12.5 }}>
+                      <strong style={{ fontSize: 14 }}>
                         Trazabilidad Criptográfica SHA-256 (Imagen de Origen vs Copia de Staging)
                       </strong>
                       <span className={`cm-badge ${stagingVerification.source_and_staging_checksum_match ? "observed" : "danger"}`}>
                         Checksum Match: {stagingVerification.source_and_staging_checksum_match ? "VERIFICADO (100% Idéntico)" : "MISMATCH"}
                       </span>
                     </div>
-                    <div style={{ fontSize: 11.5, display: "flex", flexDirection: "column", gap: 3 }}>
+                    <div style={{ fontSize: 13.5, display: "flex", flexDirection: "column", gap: 3 }}>
                       <div>
                         <strong>SHA-256 Origen (Intacto):</strong> <code>{stagingVerification.source_sha256}</code>
                       </div>
@@ -2331,7 +2959,7 @@ export default function MigrationOrchestratorWorkspace({
                 {/* Tabla de Discos y Particiones Detectados */}
                 {disks.length > 0 && (
                   <div>
-                    <h4 style={{ margin: "0 0 8px 0", fontSize: 13 }}>
+                    <h4 style={{ margin: "0 0 8px 0", fontSize: 14 }}>
                       Discos Físicos/Virtuales y Tabla de Particiones Detectados ({disks.length} discos)
                     </h4>
                     <div className="cm-table-wrap">
@@ -2365,15 +2993,15 @@ export default function MigrationOrchestratorWorkspace({
                               </td>
                               <td>
                                 {(d.partitions || []).map((p) => (
-                                  <div key={p.name} style={{ fontSize: 11.5 }}>
+                                  <div key={p.name} style={{ fontSize: 13.5 }}>
                                     <code>{p.name}</code> → <strong>{p.mount_point}</strong> ({p.filesystem}, {p.size_mib} MiB, <code>{p.fstab_ref}</code>)
                                   </div>
                                 ))}
                               </td>
                               <td>
-                                <code style={{ fontSize: 11 }}>{d.sha256?.slice(0, 20)}...</code>
+                                <code style={{ fontSize: 13 }}>{d.sha256?.slice(0, 20)}...</code>
                                 <div>
-                                  <span className={`cm-badge ${d.binary_verified ? "observed" : "warning"}`} style={{ fontSize: 10 }}>
+                                  <span className={`cm-badge ${d.binary_verified ? "observed" : "warning"}`} style={{ fontSize: 12.5 }}>
                                     {d.binary_verified ? "Binario Verificado" : "Stub Simulado"}
                                   </span>
                                 </div>
@@ -2389,7 +3017,7 @@ export default function MigrationOrchestratorWorkspace({
             )}
 
             {/* Caso 2:Las 8 Dimensiones de Fidelidad (Preservado vs Modificado vs No Transferible vs Reconfiguración) */}
-            {fidelityDims && (
+            {inspectorTab === "compatibility" && fidelityDims && (
               <div className="cm-card">
                 <div className="cm-card-title">
                   <span>
@@ -2428,12 +3056,12 @@ export default function MigrationOrchestratorWorkspace({
                       return (
                         <div key={dim.dimension} className="cm-card-subtle">
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
-                            <strong style={{ fontSize: 12.5 }}>{dim.dimension}</strong>
-                            <span className={`cm-badge ${meta.badgeClass}`} style={{ fontSize: 10 }}>
+                            <strong style={{ fontSize: 14 }}>{dim.dimension}</strong>
+                            <span className={`cm-badge ${meta.badgeClass}`} style={{ fontSize: 12.5 }}>
                               {meta.label}
                             </span>
                           </div>
-                          <div style={{ fontSize: 12, color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
+                          <div style={{ fontSize: 13.5, color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
                             {dim.detail}
                           </div>
                         </div>
@@ -2444,7 +3072,7 @@ export default function MigrationOrchestratorWorkspace({
             )}
 
             {/* Caso 2: Tabla de Diferencias de Configuración Previstas (diffReport.comparisons) */}
-            {Array.isArray(diffReport?.comparisons) && (
+            {inspectorTab === "compatibility" && Array.isArray(diffReport?.comparisons) && (
               <div className="cm-card">
                 <div className="cm-card-title">
                   <span>
@@ -2494,6 +3122,7 @@ export default function MigrationOrchestratorWorkspace({
             )}
 
             {/* Etapas Ordenadas del Plan de Migración (12 etapas Caso 1 / 13 etapas Caso 2 / 10 etapas Caso 3) */}
+            {inspectorTab === "execution" && (
             <div className="cm-card">
               <div className="cm-card-title">
                 <span>
@@ -2508,17 +3137,17 @@ export default function MigrationOrchestratorWorkspace({
                   return (
                     <div
                       key={st.stage_id}
-                      className="cm-card-subtle"
+                      className="cm-step-card"
                       style={{
-                        borderLeft: isDone
-                          ? "4px solid #15803d"
+                        borderColor: isDone
+                          ? "var(--color-health-healthy-border)"
                           : isFailed
-                          ? "4px solid #b91c1c"
-                          : "4px solid #94a3b8",
+                          ? "var(--color-health-error-border)"
+                          : "var(--color-border-subtle)",
                       }}
                     >
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                        <strong style={{ fontSize: 12.5 }}>
+                        <strong style={{ fontSize: 14 }}>
                           Etapa {idx + 1}: {st.title}
                         </strong>
                         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -2534,7 +3163,7 @@ export default function MigrationOrchestratorWorkspace({
                           </span>
                         </div>
                       </div>
-                      <div style={{ fontSize: 12, color: "var(--color-text-secondary)", marginTop: 4 }}>
+                      <div style={{ fontSize: 13.5, color: "var(--color-text-secondary)", marginTop: 4 }}>
                         {st.description}
                       </div>
                       {st.error && (
@@ -2547,9 +3176,15 @@ export default function MigrationOrchestratorWorkspace({
                 })}
               </div>
             </div>
+            )}
 
             {/* Resultados de Pruebas de Arranque / Pre-Cutover y Validación Post-Cutover */}
-            {(preCutover || postCutover) && (
+            {inspectorTab === "compatibility" && !fidelityDims && !diffReport && !preCutover && !postCutover && (
+              <div className="cm-alert info">
+                Aún no hay resultados de fidelidad ni pruebas para este plan. Aparecerán al avanzar las etapas desde la pestaña «Ejecución».
+              </div>
+            )}
+            {inspectorTab === "compatibility" && (preCutover || postCutover) && (
               <div className="cm-card">
                 <div className="cm-card-title">
                   <span>Resultados de Pruebas de Arranque de VM, Smoke Tests y Validación de Cutover</span>
@@ -2558,7 +3193,7 @@ export default function MigrationOrchestratorWorkspace({
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
                   {preCutover && (
                     <div className="cm-card-subtle">
-                      <strong style={{ fontSize: 12.5, display: "block", marginBottom: 6 }}>
+                      <strong style={{ fontSize: 14, display: "block", marginBottom: 6 }}>
                         Pruebas Pre-Cutover (Aislamiento / Boot Test)
                       </strong>
                       {Object.entries(preCutover).map(([k, v]) => (
@@ -2571,7 +3206,7 @@ export default function MigrationOrchestratorWorkspace({
                   )}
                   {postCutover && (
                     <div className="cm-card-subtle">
-                      <strong style={{ fontSize: 12.5, display: "block", marginBottom: 6 }}>
+                      <strong style={{ fontSize: 14, display: "block", marginBottom: 6 }}>
                         Validación Post-Cutover
                       </strong>
                       {Object.entries(postCutover).map(([k, v]) => (
@@ -2587,6 +3222,7 @@ export default function MigrationOrchestratorWorkspace({
             )}
 
             {/* Entidades Normalizadas en CMIR v2.1 con Procedencia Epistémica */}
+            {inspectorTab === "iac" && (
             <div className="cm-card">
               <div className="cm-card-title">
                 <span>
@@ -2607,7 +3243,7 @@ export default function MigrationOrchestratorWorkspace({
                   const ep = (node.epistemic_state || "observed").toLowerCase();
                   return (
                     <div key={node.id} className="cm-card-subtle" style={{ padding: "9px 12px" }}>
-                      <div style={{ fontWeight: 700, fontSize: 12.5 }}>{node.name}</div>
+                      <div style={{ fontWeight: 700, fontSize: 14 }}>{node.name}</div>
                       <div className="cm-hint">
                         Tipo: <code>{node.type}</code> · Nivel L{node.level ?? 0}
                       </div>
@@ -2621,9 +3257,10 @@ export default function MigrationOrchestratorWorkspace({
                 })}
               </div>
             </div>
+            )}
 
             {/* Artefactos Terraform HCL y Runbooks Generados */}
-            {currentJob.generated_artifacts?.files && (
+            {inspectorTab === "iac" && currentJob.generated_artifacts?.files && (
               <div className="cm-card">
                 <div className="cm-card-title">
                   <span>
@@ -2645,11 +3282,16 @@ export default function MigrationOrchestratorWorkspace({
             )}
 
             {/* SECCIÓN PASO A PASO: CÓMO MONTAR LO RECOGIDO EN LA NUBE */}
-            {currentJob.generated_artifacts?.files && (
-              <div className="cm-card" style={{ marginTop: 20, borderTop: "3px solid #2563eb" }}>
+            {inspectorTab === "guide" && !currentJob.generated_artifacts?.files && (
+              <div className="cm-alert info">
+                La guía de despliegue estará disponible cuando el plan genere sus artefactos (Terraform y scripts).
+              </div>
+            )}
+            {inspectorTab === "guide" && currentJob.generated_artifacts?.files && (
+              <div className="cm-card">
                 <div className="cm-card-title" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                   <div>
-                    <span style={{ fontSize: 16, fontWeight: 700 }}>
+                    <span style={{ fontSize: 15, fontWeight: 700 }}>
                       Guía Paso a Paso: Cómo Montar lo Recogido en la Nube ({currentJob.target_provider?.toUpperCase()})
                     </span>
                     <div className="cm-hint" style={{ marginTop: 4 }}>
@@ -2663,58 +3305,67 @@ export default function MigrationOrchestratorWorkspace({
                       type="button"
                       className="cm-btn primary sm"
                       onClick={handleDownloadZipBundle}
-                      style={{ backgroundColor: "#047857", borderColor: "#065f46" }}
                     >
                       Descargar Paquete Completo (.ZIP)
                     </button>
                     {currentJob.use_case === "vm_image" && (
-                      <>
-                        <button
-                          type="button"
-                          className="cm-btn sm"
-                          onClick={() => handleDownloadDiskImage("vdi")}
-                          style={{ backgroundColor: "#1d4ed8", color: "#ffffff", borderColor: "#1e40af", fontWeight: 600 }}
-                          title="Descargar disco virtual listo para VirtualBox (.VDI)"
-                        >
-                          Descargar VirtualBox (.VDI)
-                        </button>
-                        <button
-                          type="button"
-                          className="cm-btn sm"
-                          onClick={() => handleDownloadDiskImage("vmdk")}
-                          style={{ backgroundColor: "#0f766e", color: "#ffffff", borderColor: "#115e59", fontWeight: 600 }}
-                          title="Descargar disco virtual listo para VMware (.VMDK)"
-                        >
-                          Descargar VMware (.VMDK)
-                        </button>
-                        <button
-                          type="button"
-                          className="cm-btn sm"
-                          onClick={() => handleDownloadDiskImage("qcow2")}
-                          style={{ backgroundColor: "#0284c7", color: "#ffffff", borderColor: "#0369a1", fontWeight: 600 }}
-                          title="Descargar disco virtual para QEMU / KVM / Proxmox (.QCOW2)"
-                        >
-                          Descargar QCOW2
-                        </button>
-                        <button
-                          type="button"
-                          className="cm-btn sm"
-                          onClick={handleDownloadSystemImage}
-                          style={{ backgroundColor: "#4338ca", color: "#ffffff", borderColor: "#3730a3", fontWeight: 600 }}
-                          title="Descargar copia del sistema operativo (/etc, usuarios, systemd)"
-                        >
-                          Descargar Copia SO (.tar.gz)
-                        </button>
-                        <button
-                          type="button"
-                          className="cm-btn sm"
-                          onClick={() => handleDownloadHypervisorScript("virtualbox")}
-                          style={{ backgroundColor: "#334155", color: "#ffffff", borderColor: "#1e293b", fontWeight: 600 }}
-                          title="Descargar script para crear y encender la VM automáticamente en VirtualBox con 1 comando"
-                        >
-                          Script VirtualBox
-                        </button>
-                      </>
+                      <details className="cm-export-menu">
+                        <summary aria-label="Descargar formatos de imagen de disco y scripts de hipervisor">
+                          Formatos de Disco e Imagen ▾
+                        </summary>
+                        <div className="cm-export-dropdown-list" role="menu">
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="cm-export-dropdown-item"
+                            onClick={() => handleDownloadDiskImage("vdi")}
+                            title="Descargar disco virtual listo para VirtualBox (.VDI)"
+                          >
+                            <span>Descargar VirtualBox (.VDI)</span>
+                            <code>.vdi</code>
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="cm-export-dropdown-item"
+                            onClick={() => handleDownloadDiskImage("vmdk")}
+                            title="Descargar disco virtual listo para VMware (.VMDK)"
+                          >
+                            <span>Descargar VMware (.VMDK)</span>
+                            <code>.vmdk</code>
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="cm-export-dropdown-item"
+                            onClick={() => handleDownloadDiskImage("qcow2")}
+                            title="Descargar disco virtual para QEMU / KVM / Proxmox (.QCOW2)"
+                          >
+                            <span>Descargar QCOW2</span>
+                            <code>.qcow2</code>
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="cm-export-dropdown-item"
+                            onClick={handleDownloadSystemImage}
+                            title="Descargar copia del sistema operativo (/etc, usuarios, systemd)"
+                          >
+                            <span>Descargar Copia SO (.tar.gz)</span>
+                            <code>.tar.gz</code>
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="cm-export-dropdown-item"
+                            onClick={() => handleDownloadHypervisorScript("virtualbox")}
+                            title="Descargar script para crear y encender la VM automáticamente en VirtualBox con 1 comando"
+                          >
+                            <span>Script VirtualBox</span>
+                            <code>.sh</code>
+                          </button>
+                        </div>
+                      </details>
                     )}
                     {currentJob.generated_artifacts?.files?.["DEPLOYMENT_INSTRUCTIONS.md"] && (
                       <button
@@ -2722,15 +3373,23 @@ export default function MigrationOrchestratorWorkspace({
                         className="cm-btn sm"
                         onClick={() => handleDownloadFile("DEPLOYMENT_INSTRUCTIONS.md", currentJob.generated_artifacts.files["DEPLOYMENT_INSTRUCTIONS.md"])}
                       >
-                        Descargar Manual (DEPLOYMENT_INSTRUCTIONS.md)
+                        Descargar Manual (.md)
                       </button>
                     )}
+                    <button
+                      type="button"
+                      className="cm-btn sm"
+                      aria-expanded={showDeploymentGuide}
+                      onClick={() => setShowDeploymentGuide((prev) => !prev)}
+                    >
+                      {showDeploymentGuide ? "Ocultar Pasos (−)" : "Ver Pasos (+)"}
+                    </button>
                   </div>
                 </div>
 
                 {/* Barra de Descargas de Archivos Individuales */}
                 <div style={{ marginBottom: 18, padding: "10px 14px", backgroundColor: "#f8fafc", borderRadius: 6, border: "1px solid #e2e8f0" }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#334155", marginBottom: 6 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 700, color: "#334155", marginBottom: 6 }}>
                     Archivos listos para descargar e inspeccionar individualmente:
                   </div>
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -2739,7 +3398,7 @@ export default function MigrationOrchestratorWorkspace({
                         key={fName}
                         type="button"
                         className="cm-btn sm"
-                        style={{ fontSize: 11, padding: "3px 8px", backgroundColor: "#ffffff" }}
+                        style={{ fontSize: 13, padding: "3px 8px", backgroundColor: "#ffffff" }}
                         onClick={() => handleDownloadFile(fName, currentJob.generated_artifacts.files[fName])}
                         title={`Descargar ${fName}`}
                       >
@@ -2749,6 +3408,8 @@ export default function MigrationOrchestratorWorkspace({
                   </div>
                 </div>
 
+                {showDeploymentGuide && (
+                  <>
                 {/* CASO 1: APLICACIÓN DESDE GITHUB / CÓDIGO FUENTE */}
                 {currentJob.use_case === "app_source" && (() => {
                   const srcEnv = currentJob.source_environment || {};
@@ -2798,14 +3459,14 @@ export default function MigrationOrchestratorWorkspace({
 
                   return (
                     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #2563eb" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#1e40af", marginBottom: 4 }}>
+                      <div className="cm-step-card">
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                           Paso 1: Clonar Repositorio en Commit Analizado y Descargar Paquete
                         </div>
-                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                           Clona el repositorio <strong>{appRepoUrl}</strong> en el commit exacto analizado (<code>{appShortSha}</code>) y extrae los artefactos generados por CloudMove:
                         </p>
-                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {`git clone ${appRepoUrl} ${appSlug}
 cd ${appSlug}
 git checkout ${appCommitSha}
@@ -2816,26 +3477,26 @@ unzip -o bundle.zip`}
                         </pre>
                       </div>
 
-                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #0284c7" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#0369a1", marginBottom: 4 }}>
+                      <div className="cm-step-card">
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                           Paso 2: Instalación de Dependencias y Validación Local ({appRuntime})
                         </div>
-                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                           Instala las dependencias detectadas para asegurar que el entorno de ejecución es reproducible:
                         </p>
-                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {depInstallCmd}
                         </pre>
                       </div>
 
-                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #0891b2" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#0e7490", marginBottom: 4 }}>
+                      <div className="cm-step-card">
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                           Paso 3: Compilación y Publicación del Contenedor ({currentJob.target_provider === "aws" ? "Amazon ECR" : "Google Artifact Registry"})
                         </div>
-                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                           Compila la imagen Docker etiquetada con el commit analizado (<code>{appShortSha}</code>) y súbela al registro de contenedores de la nube:
                         </p>
-                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {currentJob.target_provider === "aws"
   ? `# 1. Autenticar Docker con Amazon ECR:
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
@@ -2861,28 +3522,28 @@ docker push us-central1-docker.pkg.dev/$GCP_PROJECT/${appSlug}-repo/${appSlug}:l
                         </pre>
                       </div>
 
-                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #059669" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#166534", marginBottom: 4 }}>
+                      <div className="cm-step-card">
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                           Paso 4: Aprovisionamiento de Infraestructura con Terraform ({currentJob.target_provider?.toUpperCase()})
                         </div>
-                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                           Despliega la red VPC, subredes, balanceador ALB, clúster {currentJob.target_provider === "aws" ? "ECS Fargate" : "Cloud Run"} y base de datos {appDbEngine} {appDbVersion}:
                         </p>
-                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {`terraform init
 terraform plan
 terraform apply -auto-approve`}
                         </pre>
                       </div>
 
-                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #d97706" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#b45309", marginBottom: 4 }}>
+                      <div className="cm-step-card">
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                           Paso 5: Despliegue Efectivo de la Aplicación en la Nube
                         </div>
-                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                           Fuerza la ejecución del contenedor en el servicio de cómputo en la nube configurando el comando de arranque (<code>{appPrimaryStartCmd}</code>):
                         </p>
-                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {currentJob.target_provider === "aws"
   ? `aws ecs update-service \\
     --cluster $(terraform output -raw ecs_cluster_name 2>/dev/null || echo "${appSlug}-cluster") \\
@@ -2899,14 +3560,14 @@ gcloud run deploy ${appSlug} \\
                         </pre>
                       </div>
 
-                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #4f46e5" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#4338ca", marginBottom: 4 }}>
+                      <div className="cm-step-card">
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                           Paso 6: Configuración de Variables de Entorno y Migraciones ({appDbEngine})
                         </div>
-                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                           Configura las variables de entorno detectadas y ejecuta las migraciones de base de datos en la nube:
                         </p>
-                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {currentJob.target_provider === "aws"
   ? `# 1. Registrar secretos en AWS Secrets Manager:
 aws secretsmanager create-secret --name "${appSlug}/production" \\
@@ -2926,14 +3587,14 @@ gcloud run jobs execute ${appSlug}-migrate --region=us-central1 --wait`}
                         </pre>
                       </div>
 
-                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #7c3aed" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#6d28d9", marginBottom: 4 }}>
+                      <div className="cm-step-card">
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                           Paso 7: Enlace Frontend y Verificación Operativa (Sonda en {appPrimaryHealthEp})
                         </div>
-                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                           Comprueba la respuesta HTTP en la sonda de salud <code>{appPrimaryHealthEp}</code> y conecta la URL pública al cliente web:
                         </p>
-                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {`APP_URL=$(terraform output -raw app_endpoint 2>/dev/null || terraform output -raw service_url 2>/dev/null || echo "http://localhost:${appPrimaryPort}")
 echo "Aplicación activa en la nube: $APP_URL"
 
@@ -2971,11 +3632,11 @@ echo "Configurar en cliente web: VITE_API_BASE_URL=$APP_URL"`}
 
                   return (
                     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #2563eb" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#1e40af", marginBottom: 4 }}>
+                      <div className="cm-step-card">
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                           Paso 1: Descargar la Copia del SO y Disco Listo para tu Hipervisor
                         </div>
-                        <p style={{ margin: "0 0 8px 0", fontSize: 12.5, color: "#475569" }}>
+                        <p style={{ margin: "0 0 8px 0", fontSize: 14, color: "#475569" }}>
                           Servidor analizado: <strong>{currentJob.name}</strong> ({vmDistro}, Kernel: <code>{vmKernel}</code>, <code>{vmArch}</code>, Disco: <code>{vmPrimaryDisk}</code> de {vmDiskSize} GiB, {vmPkgs} paquetes).
                           Descarga el formato exacto que necesites para tu virtualizador o para la nube:
                         </p>
@@ -2984,7 +3645,6 @@ echo "Configurar en cliente web: VITE_API_BASE_URL=$APP_URL"`}
                             type="button"
                             className="cm-btn sm"
                             onClick={() => handleDownloadDiskImage("vdi")}
-                            style={{ backgroundColor: "#1d4ed8", color: "#ffffff", borderColor: "#1e40af", fontWeight: 600 }}
                             title="Descargar disco virtual listo para VirtualBox (.VDI)"
                           >
                             Descargar para VirtualBox (.VDI)
@@ -2993,7 +3653,6 @@ echo "Configurar en cliente web: VITE_API_BASE_URL=$APP_URL"`}
                             type="button"
                             className="cm-btn sm"
                             onClick={() => handleDownloadDiskImage("vmdk")}
-                            style={{ backgroundColor: "#0f766e", color: "#ffffff", borderColor: "#115e59", fontWeight: 600 }}
                             title="Descargar disco virtual listo para VMware (.VMDK)"
                           >
                             Descargar para VMware (.VMDK)
@@ -3002,7 +3661,6 @@ echo "Configurar en cliente web: VITE_API_BASE_URL=$APP_URL"`}
                             type="button"
                             className="cm-btn sm"
                             onClick={() => handleDownloadDiskImage("qcow2")}
-                            style={{ backgroundColor: "#0284c7", color: "#ffffff", borderColor: "#0369a1", fontWeight: 600 }}
                             title="Descargar disco virtual para QEMU / KVM / Proxmox (.QCOW2)"
                           >
                             Descargar QCOW2 (.qcow2)
@@ -3011,7 +3669,6 @@ echo "Configurar en cliente web: VITE_API_BASE_URL=$APP_URL"`}
                             type="button"
                             className="cm-btn sm"
                             onClick={handleDownloadSystemImage}
-                            style={{ backgroundColor: "#4338ca", color: "#ffffff", borderColor: "#3730a3", fontWeight: 600 }}
                             title="Descargar copia del sistema operativo (/etc, usuarios, systemd)"
                           >
                             Descargar Copia SO (.tar.gz)
@@ -3020,12 +3677,11 @@ echo "Configurar en cliente web: VITE_API_BASE_URL=$APP_URL"`}
                             type="button"
                             className="cm-btn primary sm"
                             onClick={handleDownloadZipBundle}
-                            style={{ backgroundColor: "#047857", borderColor: "#065f46" }}
                           >
                             Descargar Paquete Completo (.ZIP)
                           </button>
                         </div>
-                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {`# Descargas directas vía curl:
 CLOUDMOVE_API_URL="\${CLOUDMOVE_API_URL:-${typeof window !== "undefined" ? window.location.origin : ""}}"
 
@@ -3041,14 +3697,14 @@ curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/${currentJob.migration_id}/sys
                         </pre>
                       </div>
 
-                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #0284c7" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#0369a1", marginBottom: 4 }}>
+                      <div className="cm-step-card">
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                           Paso 2: Transmitir / Subir la Copia del SO hacia el Almacenamiento Cloud
                         </div>
-                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                           Sube la imagen a la nube utilizando streaming directo sin saturar el almacenamiento local o sube la imagen descargada:
                         </p>
-                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {currentJob.target_provider === "aws"
   ? `# Opción A: Streaming directo bit a bit a S3 en caliente (Recomendado):
 sudo chmod +x create_full_raw_disk_clone.sh
@@ -3066,14 +3722,14 @@ gcloud storage cp *.qcow2 "gs://cloudmove-vm-images-$(gcloud config get-value pr
                         </pre>
                       </div>
 
-                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #0891b2" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#0e7490", marginBottom: 4 }}>
+                      <div className="cm-step-card">
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                           Paso 3: Registro e Importación de la Imagen en el Hipervisor Cloud (Creación de AMI / Custom Image)
                         </div>
-                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                           Importa el disco en el hipervisor cloud respetando el modo de arranque detectado (<code>{vmBootMode}</code>):
                         </p>
-                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {currentJob.target_provider === "aws"
   ? `# Ejecutar importación de AMI en AWS con modo de arranque ${vmBootMode}:
 aws ec2 import-image --description "Migrated ${vmDistro}" --disk-containers file:///tmp/containers.json --boot-mode ${vmBootMode} --region us-east-1
@@ -3092,14 +3748,14 @@ chmod +x deploy_to_gcp.sh
                         </pre>
                       </div>
 
-                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #059669" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#166534", marginBottom: 4 }}>
+                      <div className="cm-step-card">
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                           Paso 4: Montaje y Aprovisionamiento de la VM con Terraform
                         </div>
-                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                           Con el identificador de la AMI o Imagen, provisiona la instancia de cómputo, VPC, subredes e IP pública:
                         </p>
-                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {currentJob.target_provider === "aws"
   ? `terraform init
 terraform plan -var="ami_id=$AMI_ID"
@@ -3110,14 +3766,14 @@ terraform apply -auto-approve -var="custom_image_name=${vmSlug}-image"`}
                         </pre>
                       </div>
 
-                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #d97706" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#b45309", marginBottom: 4 }}>
+                      <div className="cm-step-card">
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                           Paso 5: Conexión Remota SSH y Verificación/Expansión del Disco Montado
                         </div>
-                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                           Inicia sesión por SSH en la nueva máquina virtual, verifica los puntos de montaje y expande la partición en caliente:
                         </p>
-                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {`# 1. Conectar a la instancia en la nube:
 ssh -i ~/.ssh/id_rsa admin@$INSTANCE_PUBLIC_IP
 
@@ -3128,14 +3784,14 @@ sudo resize2fs /dev/nvme0n1p1 2>/dev/null || sudo xfs_growfs / 2>/dev/null || tr
                         </pre>
                       </div>
 
-                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #4f46e5" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#4338ca", marginBottom: 4 }}>
+                      <div className="cm-step-card">
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                           Paso 6: Restauración de Configuraciones del SO In-Guest (Usuarios y Servicios)
                         </div>
-                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                           Transfiere la copia descargada <code>system_image_snapshot_*.tar.gz</code> al servidor y restaura los usuarios identificados (<code>{vmUsers}</code>) y servicios (<code>{vmServicesStr}</code>):
                         </p>
-                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {`# 1. Copiar snapshot del SO hacia la VM (desde tu estación de trabajo):
 scp -i ~/.ssh/id_rsa system_image_snapshot_*.tar.gz admin@$INSTANCE_PUBLIC_IP:~/
 
@@ -3146,14 +3802,14 @@ sudo ./restore_system_image.sh`}
                         </pre>
                       </div>
 
-                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #7c3aed" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#6d28d9", marginBottom: 4 }}>
+                      <div className="cm-step-card">
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                           Paso 7: Validación Operativa y Puesta en Marcha en la Nube
                         </div>
-                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                           Comprueba que los servicios del sistema, bases de datos y demonios se encuentren activos y respondiendo:
                         </p>
-                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {`# 1. Validar servicios activos y puertos en escucha:
 sudo systemctl status ssh
 sudo ss -tulpn
@@ -3163,14 +3819,14 @@ cat /etc/passwd | grep -E "admin|root|postgres|lacastrilp|rabbitmq"`}
                         </pre>
                       </div>
 
-                      <div className="cm-card-subtle" style={{ borderLeft: "4px solid #047857" }}>
-                        <div style={{ fontWeight: 700, fontSize: 14, color: "#065f46", marginBottom: 4 }}>
+                      <div className="cm-step-card">
+                        <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                           Paso 8: Automatización y Prueba Local en Hipervisores (VirtualBox / VMware)
                         </div>
-                        <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                        <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                           Si deseas validar el sistema operativo o ejecutarlo como máquina virtual local con 1 comando:
                         </p>
-                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                        <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {`# Opción A: VirtualBox (Automático)
 # Descarga el lanzador y ejecútalo (crea la VM, asigna 4GB RAM, UEFI y conecta el disco VDI):
 curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/${currentJob.migration_id}/hypervisor-script?hypervisor=virtualbox"
@@ -3189,70 +3845,70 @@ vmplayer ${vmSlug}.vmx`}
                 {/* CASO 3: CAMPAÑA DE DATACENTER */}
                 {currentJob.use_case === "datacenter_campaign" && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #2563eb" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#1e40af", marginBottom: 4 }}>
+                    <div className="cm-step-card">
+                      <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                         Paso 1: Descargar el Paquete de Campaña y Matriz de Oleadas (Waves)
                       </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                      <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                         Descarga el archivo ZIP con los módulos de Terraform de la Landing Zone y el grafo de dependencias:
                       </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {`unzip cloudmove-datacenter_campaign-${currentJob.target_provider}-${currentJob.migration_id}.zip -d ./dc_campaign
 cd ./dc_campaign`}
                       </pre>
                     </div>
 
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #0284c7" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#0369a1", marginBottom: 4 }}>
+                    <div className="cm-step-card">
+                      <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                         Paso 2: Despliegue de la Landing Zone y Red Compartida (Wave 0)
                       </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                      <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                         Aprovisiona primero la VPC central, subredes, Cloud NAT y conectividad híbrida VPN/Interconnect:
                       </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {`cd landing_zone
 terraform init
 terraform apply -auto-approve`}
                       </pre>
                     </div>
 
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #059669" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#166534", marginBottom: 4 }}>
+                    <div className="cm-step-card">
+                      <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                         Paso 3: Migración Continua de Bases de Datos con CDC (Wave 1)
                       </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                      <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                         Aprovisiona las bases de datos gestionadas ({currentJob.target_provider === "aws" ? "Amazon RDS / Aurora" : "Google Cloud SQL"}) y configura replicación continua de datos con Change Data Capture (CDC):
                       </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {currentJob.target_provider === "aws"
-  ? `aws dms start-replication-task --replication-task-arn \$DMS_TASK_ARN --start-replication-task-type start-replication`
-  : `gcloud database-migration migration-jobs start \$GCP_MIGRATION_JOB_ID`}
+  ? "aws dms start-replication-task --replication-task-arn $DMS_TASK_ARN --start-replication-task-type start-replication"
+  : "gcloud database-migration migration-jobs start $GCP_MIGRATION_JOB_ID"}
                       </pre>
                     </div>
 
-                    <div className="cm-card-subtle" style={{ borderLeft: "4px solid #7c3aed" }}>
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "#6d28d9", marginBottom: 4 }}>
+                    <div className="cm-step-card">
+                      <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
                         Paso 4: Replicación de Servidores y Ventana de Corte (Cutover)
                       </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 12.5, color: "#475569" }}>
+                      <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
                         Inicia la replicación continua a nivel de bloques ({currentJob.target_provider === "aws" ? "AWS MGN" : "GCP Migrate to VMs"}), sincroniza deltas y ejecuta la conmutación de tráfico en la ventana programada:
                       </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 11.5 }}>
+                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {currentJob.target_provider === "aws"
   ? `# Ejecutar cutover en AWS Application Migration Service:
-aws mgn finalize-cutover --source-server-id \$MGN_SOURCE_ID`
+aws mgn finalize-cutover --source-server-id $MGN_SOURCE_ID`
   : `# Ejecutar cutover en Google Cloud Migrate to VMs:
-gcloud migration vms cutover \$GCP_MIGRATION_GROUP_ID`}
+gcloud migration vms cutover $GCP_MIGRATION_GROUP_ID`}
                       </pre>
                     </div>
                   </div>
                 )}
+                  </>
+                )}
               </div>
             )}
           </div>
-        )}
-      </div>
-    )}
+      )}
     </div>
   );
 }

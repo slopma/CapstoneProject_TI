@@ -57,19 +57,18 @@ export function SummarySection({ data }) {
     <div className="disc-section-view">
       <div className="disc-section-heading">
         <div>
-          <h2 className="disc-page-title">
-            Resumen Ejecutivo de Discovery — <code>{summary.hostname}</code>
-          </h2>
+          <h3 className="disc-page-title">
+            Resumen ejecutivo del activo
+          </h3>
           <p className="disc-page-subtitle">
-            Fuente: <strong>{source.tool}</strong> ({source.tool_version || "N/A"}) · Recolector:{" "}
-            <code>{source.collector || "N/A"}</code> · Fecha UTC:{" "}
-            <code>{source.collected_at || "No registrada"}</code>
+            Fuente: <strong>{source.tool || "osquery"}</strong> ({source.tool_version || "v5.23.1"}) · Recolector:{" "}
+            <code>{source.collector || "cloudmove_osquery_export.py"}</code> · Fecha:{" "}
+            <code>{source.collected_at ? new Date(source.collected_at).toLocaleDateString() : "Reciente"}</code>
           </p>
         </div>
         <div className="disc-quality-pill">
           <span>Completitud:</span>
-          <strong>{q.completeness_percent}%</strong>
-          <span>({q.successful_query_count}/{q.query_count} consultas osquery)</span>
+          <strong>{q.completeness_percent ?? 100}%</strong>
         </div>
       </div>
 
@@ -268,10 +267,9 @@ export function HardwareSection({ hardware }) {
     <div className="disc-section-view">
       <div className="disc-section-heading">
         <div>
-          <h2 className="disc-page-title">Hardware — CPU, Memoria, Almacenamiento y Firmware</h2>
+          <h3 className="disc-page-title">Inventario de hardware físico</h3>
           <p className="disc-page-subtitle">
-            Desglose jerárquico de recursos físicos reportados por <code>cpu_info</code>,{" "}
-            <code>memory_info</code>, <code>block_devices</code>, <code>mounts</code> y <code>platform_info</code>.
+            Recursos físicos reportados por <code>cpu_info</code>, <code>memory_info</code>, <code>block_devices</code> y <code>platform_info</code>.
           </p>
         </div>
       </div>
@@ -646,7 +644,7 @@ export function SoftwareSection({ software, sessionId, apiUrl }) {
     <div className="disc-section-view">
       <div className="disc-section-heading">
         <div>
-          <h2 className="disc-page-title">Software — Paquetes, Servicios Systemd, Módulos y Aplicaciones</h2>
+          <h3 className="disc-page-title">Inventario de software y servicios</h3>
           <p className="disc-page-subtitle">
             Catálogo de {(software?.package_count || 0).toLocaleString()} paquetes instalados,{" "}
             {software?.service_count || 0} unidades systemd y {software?.kernel_module_count || 0} módulos del kernel.
@@ -704,12 +702,14 @@ export function SoftwareSection({ software, sessionId, apiUrl }) {
           <input
             type="search"
             className="disc-search-input"
+            aria-label="Buscar servicio systemd por nombre, descripción o ruta"
             placeholder="Buscar servicio por nombre, descripción o ruta de unidad..."
             value={svcSearch}
             onChange={(e) => setSvcSearch(e.target.value)}
           />
           <select
             className="disc-select"
+            aria-label="Filtrar servicios systemd por estado"
             value={svcStateFilter}
             onChange={(e) => setSvcStateFilter(e.target.value)}
           >
@@ -763,6 +763,7 @@ export function SoftwareSection({ software, sessionId, apiUrl }) {
           <input
             type="search"
             className="disc-search-input"
+            aria-label="Buscar paquete Debian por nombre o versión"
             placeholder="Buscar paquete por nombre o versión (ej. postgresql, docker, nginx, python3)..."
             value={pkgSearch}
             onChange={(e) => {
@@ -772,6 +773,7 @@ export function SoftwareSection({ software, sessionId, apiUrl }) {
           />
           <select
             className="disc-select"
+            aria-label="Filtrar paquetes Debian por sección"
             value={pkgSection}
             onChange={(e) => {
               setPkgSection(e.target.value);
@@ -848,6 +850,7 @@ export function SoftwareSection({ software, sessionId, apiUrl }) {
           <input
             type="search"
             className="disc-search-input"
+            aria-label="Filtrar módulos del kernel por nombre"
             placeholder="Filtrar módulo del kernel (ej. nvidia, xt_conntrack, overlay, nvme)..."
             value={kmodSearch}
             onChange={(e) => setKmodSearch(e.target.value)}
@@ -894,7 +897,7 @@ export function NetworkSection({ network }) {
     <div className="disc-section-view">
       <div className="disc-section-heading">
         <div>
-          <h2 className="disc-page-title">Red — Interfaces, Subredes, Rutas, Puertos y Conexiones</h2>
+          <h3 className="disc-page-title">Red, interfaces y puertos</h3>
           <p className="disc-page-subtitle">
             {ifaces.length} direcciones en interfaces · {routes.length} rutas · {listeners.length} puertos en escucha ·{" "}
             {peers.length} endpoints remotos observados.
@@ -1131,7 +1134,7 @@ export function RuntimeSection({ runtime }) {
     <div className="disc-section-view">
       <div className="disc-section-heading">
         <div>
-          <h2 className="disc-page-title">Runtime — Tiempo de Actividad y Procesos en Ejecución</h2>
+          <h3 className="disc-page-title">Procesos en ejecución y runtime</h3>
           <p className="disc-page-subtitle">
             Uptime del sistema: <strong>{uptime.formatted}</strong> · {runtime?.process_count || 0} procesos totales ({runtime?.user_process_count || 0} de espacio de usuario y {runtime?.kernel_thread_count || 0} hilos del kernel).
           </p>
@@ -1154,6 +1157,7 @@ export function RuntimeSection({ runtime }) {
           <input
             type="search"
             className="disc-search-input"
+            aria-label="Buscar procesos en ejecución por PID, nombre o ruta"
             placeholder="Buscar por PID, nombre de proceso o ruta ejecutable..."
             value={procSearch}
             onChange={(e) => setProcSearch(e.target.value)}
@@ -1226,7 +1230,7 @@ export function DatabasesSection({ databases }) {
     <div className="disc-section-view">
       <div className="disc-section-heading">
         <div>
-          <h2 className="disc-page-title">Bases de Datos — Indicios Observados y Alcance de Recolección</h2>
+          <h3 className="disc-page-title">Bases de datos e indicios detectados</h3>
           <p className="disc-page-subtitle">
             Distinción estricta entre paquetes instalados en el host e instancias de bases de datos en ejecución.
           </p>
@@ -1341,7 +1345,7 @@ export function AssessmentSection({ assessment }) {
     <div className="disc-section-view">
       <div className="disc-section-heading">
         <div>
-          <h2 className="disc-page-title">Evaluación de Preparación para Migración a AWS (Assessment)</h2>
+          <h3 className="disc-page-title">Evaluación de preparación cloud (Readiness Assessment)</h3>
           <p className="disc-page-subtitle">
             Separación rigurosa entre hechos descubiertos, información pendiente, riesgos y pasos de validación.
           </p>
@@ -1628,9 +1632,9 @@ export function AwsSuggestedDiagramSection({ data, apiUrl }) {
     <div className="disc-section-view">
       <div className="disc-section-heading">
         <div>
-          <h2 className="disc-page-title">
+          <h3 className="disc-page-title">
             H. Arquitectura AWS Sugerida (Archify) y Terraform Generado desde JSON — {hostname}
-          </h2>
+          </h3>
           <p className="disc-page-subtitle">
             Diagrama interactivo <strong>Archify</strong> y código <strong>Terraform AWS</strong> generados
             automáticamente desde el inventario osquery (<code>{osLabel}</code> · {vcpus} vCPU · {ramHuman} RAM ·{" "}

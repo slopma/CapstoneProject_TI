@@ -29,11 +29,13 @@ function IaCViewer({ code, files, language = "hcl", filename = "main.tf" }) {
         <div className="iac-filename-group">
           <span className="file-lang-pill">{language.toUpperCase()}</span>
           {fileEntries.length > 1 ? (
-            <div className="iac-file-tabs">
+            <div className="iac-file-tabs" role="tablist" aria-label="Archivos de código generados">
               {fileEntries.map(([fname]) => (
                 <button
                   key={fname}
                   type="button"
+                  role="tab"
+                  aria-selected={activeFile === fname}
                   className={`iac-tab-btn ${activeFile === fname ? "active" : ""}`}
                   onClick={() => setActiveFile(fname)}
                 >
@@ -47,10 +49,10 @@ function IaCViewer({ code, files, language = "hcl", filename = "main.tf" }) {
         </div>
         <div className="iac-actions">
           <button type="button" className="iac-btn" onClick={handleCopy}>
-            {copied ? "Copied!" : "Copy Code"}
+            {copied ? "¡Copiado!" : "Copiar código"}
           </button>
           <button type="button" className="iac-btn primary" onClick={handleDownload}>
-            Download File
+            Descargar archivo
           </button>
         </div>
       </div>

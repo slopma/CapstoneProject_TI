@@ -98,6 +98,8 @@ class BaseProviderAdapter(ABC):
                     declared_vars.add(vm.group(1))
                 for rm in re.finditer(r'resource\s+"([^"]+)"\s+"([^"]+)"', content):
                     declared_resources.add(f"{rm.group(1)}.{rm.group(2)}")
+                for dm in re.finditer(r'data\s+"([^"]+)"\s+"([^"]+)"', content):
+                    declared_resources.add(f"{dm.group(1)}.{dm.group(2)}")
 
         # Cross-reference validation across .tf files
         for fname, content in tf_files.items():

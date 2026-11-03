@@ -285,7 +285,7 @@ function computeDiscoveryLayout(rawNodes, rawEdges, expandedGroups, hiddenCatego
       type: "smoothstep",
       animated: e.type === "observed_connection",
       label: e.type === "contains" ? undefined : styleMeta.label,
-      labelStyle: { fontSize: 10, fontWeight: 600, fill: "#334155" },
+      labelStyle: { fontSize: 12.5, fontWeight: 600, fill: "#334155" },
       labelBgStyle: { fill: "#ffffff", fillOpacity: 0.9, rx: 4, ry: 4 },
       labelBgPadding: [4, 2],
       style: {
@@ -427,6 +427,7 @@ function InnerDiscoveryDiagram({
             <input
               type="search"
               className="disc-search-input"
+              aria-label="Buscar nodo en el diagrama por nombre, IP, puerto, proceso o paquete"
               placeholder="Buscar nodo por nombre, IP, puerto, proceso o paquete..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}

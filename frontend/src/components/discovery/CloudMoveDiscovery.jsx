@@ -254,7 +254,7 @@ export default function CloudMoveDiscovery({
       className="cm-card"
       style={{
         margin: "12px 18px",
-        borderLeft: "4px solid var(--color-primary)",
+        border: "1px solid var(--color-primary-border)",
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px", flexWrap: "wrap" }}>

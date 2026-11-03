@@ -45,6 +45,7 @@ resource "google_service_account" "workload_sa" {
 }
 
 # Migrated GCP Resource: Firewall Perimetral & DMZ (firewall-dmz)
+# Non-compute or logical resource mapped cleanly on GCP (google_compute_firewall / security_boundary): Firewall Perimetral & DMZ (firewall-dmz)
 # Migrated GCP Resource: VM Servidor Backend API (Ubuntu Linux) (backend-api-vm)
 resource "google_compute_instance" "backend_api_vm" {
   name         = "vm-servidor-backend-api-(ubuntu-linux)"

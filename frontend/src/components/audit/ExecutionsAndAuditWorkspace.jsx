@@ -1,6 +1,14 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import IaCViewer from "../migration/IaCViewer";
 import { apiFetch } from "../../utils/apiClient";
+import {
+  AwsPageHeader,
+  AwsContainer,
+  AwsKeyValuePairs,
+  AwsTabs,
+  AwsStatusIndicator,
+  AwsEmptyState,
+} from "../cloudscape/AwsPrimitives";
 
 export default function ExecutionsAndAuditWorkspace({
   generationResult,
@@ -10,6 +18,8 @@ export default function ExecutionsAndAuditWorkspace({
   const [selectedJobId, setSelectedJobId] = useState("");
   const [persistence, setPersistence] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [activeSubTab, setActiveSubTab] = useState("audit-log");
+  const [eventFilter, setEventFilter] = useState("");
 
   const loadAuditData = useCallback(async () => {
     setLoading(true);
@@ -38,12 +48,30 @@ export default function ExecutionsAndAuditWorkspace({
     loadAuditData();
   }, [loadAuditData]);
 
-  const activeJob = jobs.find((j) => j.migration_id === selectedJobId) || jobs[0] || null;
+  const activeJob =
+    jobs.find((j) => j.migration_id === selectedJobId) || jobs[0] || null;
   const events = activeJob?.events || [];
   const preTests = activeJob?.pre_cutover_test_results || null;
   const postTests = activeJob?.post_cutover_validation_results || null;
   const rollbackProc = activeJob?.rollback_procedure || null;
   const tfValidation = activeJob?.generated_artifacts?.validation || null;
+
+  const filteredEvents = useMemo(() => {
+    if (!eventFilter.trim()) return events;
+    const q = eventFilter.toLowerCase();
+    return events.filter((ev) => {
+      const evLabel =
+        ev.event ||
+        ev.event_type ||
+        (ev.from_state ? `${ev.from_state} -> ${ev.to_state}` : ev.to_state) ||
+        "STATE_EVENT";
+      return (
+        evLabel.toLowerCase().includes(q) ||
+        (ev.reason || ev.message || "").toLowerCase().includes(q) ||
+        (ev.actor || "").toLowerCase().includes(q)
+      );
+    });
+  }, [events, eventFilter]);
 
   const handleExportAuditBundle = () => {
     if (!activeJob) return;
@@ -52,7 +80,9 @@ export default function ExecutionsAndAuditWorkspace({
       persistence_status: persistence,
       migration_job: activeJob,
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json;charset=utf-8",
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -63,281 +93,402 @@ export default function ExecutionsAndAuditWorkspace({
 
   return (
     <div className="tab-pane-view">
-      <div className="cm-page-header">
-        <div>
-          <h2 className="cm-page-title">
-            Ejecuciones, Artefactos Terraform IaC y Bitácora de Auditoría Transaccional
-          </h2>
-          <p className="cm-page-subtitle">
-            Trazabilidad inmutable de cada transición de estado, validación sintáctica de módulos HCL (`terraform fmt`), resultados de pruebas pre/post-cutover y política de preservación del entorno de origen.
-          </p>
-        </div>
-        <div className="cm-header-badges">
-          {persistence && (
-            <span className="cm-badge observed">
-              Motor ACID: {persistence.engine?.toUpperCase()} ({persistence.journal_mode?.toUpperCase()}) · Esquema v{persistence.current_schema_version}
+      <AwsPageHeader
+        title="Ejecuciones y auditoría"
+        description="Historial de cambios de estado, pruebas y artefactos Terraform de cada plan."
+        badges={
+          <>
+            {persistence && (
+              <span className="cm-badge observed">
+                Motor ACID: {persistence.engine?.toUpperCase()} (
+                {persistence.journal_mode?.toUpperCase()}) · Esquema v
+                {persistence.current_schema_version}
+              </span>
+            )}
+            <span className="cm-badge info">
+              Trazas registradas: {events.length} eventos
             </span>
-          )}
-          <span className="cm-badge info">Trazas Registradas: {events.length} eventos</span>
-        </div>
-      </div>
-
-      {/* Si el usuario generó IaC directo desde el Lienzo de Arquitectura */}
-      {generationResult && (
-        <div className="cm-card" style={{ marginBottom: 20 }}>
-          <div className="cm-card-title">
-            <span>Artefactos Terraform Generados desde Selección del Grafo de Arquitectura</span>
-            <span className="cm-badge observed">Subgrafo CMIR Directo</span>
+          </>
+        }
+        actions={
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {jobs.length > 0 && (
+              <select
+                id="audit-job-select"
+                className="cm-select"
+                style={{ width: "auto", minWidth: 260 }}
+                aria-label="Seleccionar ejecución o plan de migración"
+                value={activeJob?.migration_id || ""}
+                onChange={(e) => setSelectedJobId(e.target.value)}
+              >
+                {jobs.map((j) => (
+                  <option key={j.migration_id} value={j.migration_id}>
+                    {j.migration_id} — {j.name} [
+                    {j.target_provider?.toUpperCase()} · {j.state} · v
+                    {j.version || 1}]
+                  </option>
+                ))}
+              </select>
+            )}
+            {activeJob && onSelectMigrationInOrchestrator && (
+              <button
+                type="button"
+                className="cm-btn sm"
+                onClick={() =>
+                  onSelectMigrationInOrchestrator(
+                    activeJob.use_case,
+                    activeJob.migration_id
+                  )
+                }
+              >
+                Abrir en orquestador
+              </button>
+            )}
+            {activeJob && (
+              <button
+                type="button"
+                className="cm-btn primary sm"
+                onClick={handleExportAuditBundle}
+              >
+                Exportar paquete de auditoría (.json)
+              </button>
+            )}
           </div>
+        }
+      />
+
+      {generationResult && (
+        <AwsContainer
+          title="Artefactos Terraform generados desde selección del grafo de arquitectura"
+          description="Código HCL sintetizado directamente desde el subgrafo CMIR seleccionado."
+          actions={<span className="cm-badge observed">Subgrafo CMIR directo</span>}
+        >
           <IaCViewer
             code={generationResult.iac_code || generationResult.terraform}
             files={generationResult.files}
             language="hcl"
             filename="main.tf"
           />
-        </div>
+        </AwsContainer>
       )}
 
-      {/* Selector de Ejecución / Plan de Migración */}
-      <div className="cm-card" style={{ marginBottom: 18 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12, flexWrap: "wrap" }}>
-          <div className="cm-field" style={{ flex: "1 1 340px" }}>
-            <label htmlFor="audit-job-select" className="cm-label">
-              Seleccionar Ejecución / Plan de Migración Persistido ({jobs.length} disponibles)
-            </label>
-            <select
-              id="audit-job-select"
-              className="cm-select"
-              value={activeJob?.migration_id || ""}
-              onChange={(e) => setSelectedJobId(e.target.value)}
-            >
-              {jobs.map((j) => (
-                <option key={j.migration_id} value={j.migration_id}>
-                  {j.migration_id} — {j.name} [{j.target_provider?.toUpperCase()} · {j.state} · v{j.version || 1}]
-                </option>
-              ))}
-            </select>
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {activeJob && onSelectMigrationInOrchestrator && (
-              <button
-                type="button"
-                className="cm-btn"
-                onClick={() => onSelectMigrationInOrchestrator(activeJob.use_case, activeJob.migration_id)}
-              >
-                Abrir en Orquestador de Migración →
-              </button>
-            )}
-            {activeJob && (
-              <button type="button" className="cm-btn primary" onClick={handleExportAuditBundle}>
-                Exportar Paquete de Evidencia y Auditoría (.json)
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-
       {loading ? (
-        <p className="cm-hint">Cargando bitácora de ejecuciones y artefactos...</p>
+        <AwsContainer title="Cargando bitácora">
+          <p className="cm-hint">
+            Cargando bitácora de ejecuciones y artefactos...
+          </p>
+        </AwsContainer>
       ) : !activeJob ? (
-        <div className="cm-alert info">
-          No hay ejecuciones registradas aún. Inicia una migración en la sección &ldquo;Migraciones y Planes&rdquo;.
-        </div>
+        <AwsContainer title="Sin ejecuciones registradas">
+          <AwsEmptyState
+            title="No hay ejecuciones registradas aún"
+            description="Inicia un plan de migración en la sección Migraciones y planes para inspeccionar su bitácora y artefactos."
+          />
+        </AwsContainer>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-          {/* Resumen de Integridad y Garantías Operativas */}
-          <div className="cm-kpi-grid">
-            <div className="cm-kpi-card">
-              <span className="cm-kpi-label">Modo de Ejecución</span>
-              <span className="cm-kpi-value" style={{ fontSize: 16 }}>
-                {activeJob.completed_in_real_cloud ? "NUBE REAL" : "SIMULADO (Dry-Run)"}
-              </span>
-              <span className="cm-kpi-meta">
-                <code>execution_mode: {activeJob.execution_mode}</code>
-              </span>
-            </div>
-            <div className="cm-kpi-card">
-              <span className="cm-kpi-label">Protección del Origen</span>
-              <span className="cm-kpi-value" style={{ fontSize: 16, color: "#15803d" }}>
-                INTACTO (Read-Only)
-              </span>
-              <span className="cm-kpi-meta">
-                <code>{activeJob.source_retention_policy || "PRESERVED_READ_ONLY_STANDBY"}</code>
-              </span>
-            </div>
-            <div className="cm-kpi-card">
-              <span className="cm-kpi-label">Control de Concurrencia</span>
-              <span className="cm-kpi-value" style={{ fontSize: 16 }}>
-                Versión v{activeJob.version || 1}
-              </span>
-              <span className="cm-kpi-meta">
-                Aprobado por: {activeJob.approved_by || "Pendiente de aprobación"}
-              </span>
-            </div>
-            <div className="cm-kpi-card">
-              <span className="cm-kpi-label">Validación Terraform CLI</span>
-              <span className="cm-kpi-value" style={{ fontSize: 16 }}>
-                {tfValidation?.valid ? "VALIDADO" : "VERIFICADO"}
-              </span>
-              <span className="cm-kpi-meta">
-                <code>terraform fmt</code>: {tfValidation?.terraform_fmt_passed ? "PASSED" : "OK"} · Secretos expuestos: 0
-              </span>
-            </div>
-          </div>
+        <>
+          <AwsKeyValuePairs
+            columns={4}
+            items={[
+              {
+                label: "Modo de ejecución",
+                value: activeJob.completed_in_real_cloud
+                  ? "Nube real"
+                  : "Simulado (Dry-Run)",
+                subtext: `execution_mode: ${activeJob.execution_mode}`,
+              },
+              {
+                label: "Protección del origen",
+                value: (
+                  <span style={{ color: "#037f0c" }}>Intacto (Read-Only)</span>
+                ),
+                subtext:
+                  activeJob.source_retention_policy ||
+                  "PRESERVED_READ_ONLY_STANDBY",
+              },
+              {
+                label: "Control de concurrencia",
+                value: `Versión v${activeJob.version || 1}`,
+                subtext: `Aprobado por: ${
+                  activeJob.approved_by || "Pendiente de aprobación"
+                }`,
+              },
+              {
+                label: "Validación Terraform CLI",
+                value: tfValidation?.valid ? "Validado" : "Verificado",
+                subtext: `terraform fmt: ${
+                  tfValidation?.terraform_fmt_passed ? "PASSED" : "OK"
+                } · Secretos expuestos: 0`,
+              },
+            ]}
+          />
 
-          {/* Resultados de Pruebas Pre-Cutover, Post-Cutover y Rollback */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
-            <div className="cm-card">
-              <h3 className="cm-card-title">
-                <span>Pruebas Pre-Cutover y Arranque de Prueba</span>
-                <span className={`cm-badge ${preTests?.passed ? "observed" : "neutral"}`}>
-                  {preTests ? (preTests.passed ? "SUPERADAS" : "CON FALLOS") : "PENDIENTE EN ETAPA TESTING"}
-                </span>
-              </h3>
-              {preTests ? (
-                <div style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 6 }}>
-                  {Object.entries(preTests).map(([k, v]) => (
-                    <div key={k} className="disc-kv-row">
-                      <span className="disc-kv-key">{k}:</span>
-                      <code className="disc-kv-val">{typeof v === "object" ? JSON.stringify(v) : String(v)}</code>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="cm-hint" style={{ margin: 0 }}>
-                  Las pruebas de humo, conectividad y arranque de VM en aislamiento se ejecutan al avanzar a la etapa <code>TESTING</code>.
-                </p>
-              )}
-            </div>
+          <AwsTabs
+            activeTabId={activeSubTab}
+            onTabChange={setActiveSubTab}
+            tabs={[
+              {
+                id: "audit-log",
+                label: "Bitácora",
+                count: events.length,
+              },
+              {
+                id: "cutover-rollback",
+                label: "Pruebas y rollback",
+              },
+              {
+                id: "terraform-artifacts",
+                label: "Terraform y scripts",
+                count: activeJob.generated_artifacts?.files
+                  ? Object.keys(activeJob.generated_artifacts.files).length
+                  : 0,
+              },
+            ]}
+          />
 
-            <div className="cm-card">
-              <h3 className="cm-card-title">
-                <span>Validación Post-Cutover y Paridad</span>
-                <span className={`cm-badge ${postTests?.passed ? "observed" : "neutral"}`}>
-                  {postTests ? "VALIDADO" : "PENDIENTE DE CUTOVER"}
-                </span>
-              </h3>
-              {postTests ? (
-                <div style={{ fontSize: 12, display: "flex", flexDirection: "column", gap: 6 }}>
-                  {Object.entries(postTests).map(([k, v]) => (
-                    <div key={k} className="disc-kv-row">
-                      <span className="disc-kv-key">{k}:</span>
-                      <code className="disc-kv-val">{typeof v === "object" ? JSON.stringify(v) : String(v)}</code>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="cm-hint" style={{ margin: 0 }}>
-                  La validación post-cutover se registra al completar la transición final hacia <code>COMPLETED</code>.
-                </p>
-              )}
-            </div>
-
-            {rollbackProc && (
-              <div className="cm-card">
-                <h3 className="cm-card-title">
-                  <span>Plan de Rollback Garantizado</span>
-                  <span className="cm-badge warning">RTO Estimado: {rollbackProc.estimated_rto_minutes || 5} min</span>
-                </h3>
-                <div style={{ fontSize: 12 }}>
-                  <div style={{ marginBottom: 6 }}>
-                    <strong>Estrategia:</strong> {rollbackProc.strategy || "Revertir DNS/ Tráfico al entorno On-Premise intacto"}
-                  </div>
-                  {(rollbackProc.steps || []).map((st, idx) => (
-                    <div key={idx} className="cm-hint" style={{ marginBottom: 3 }}>
-                      {idx + 1}. {String(st).replace(/^\d+\.\s*/, "")}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Bitácora Cronológica de Auditoría (job.events) */}
-          <div className="cm-card">
-            <h3 className="cm-card-title">
-              <span>Bitácora Cronológica de Eventos y Transiciones ({events.length})</span>
-              <span className="cm-badge observed">Trazabilidad Completa</span>
-            </h3>
-            <div className="cm-table-wrap">
-              <table className="cm-table">
-                <thead>
-                  <tr>
-                    <th>Timestamp UTC</th>
-                    <th>Transición / Evento</th>
-                    <th>Actor</th>
-                    <th>Detalle Técnico y Evidencia</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {events.map((ev, idx) => {
-                    const evLabel =
-                      ev.event ||
-                      ev.event_type ||
-                      (ev.from_state ? `${ev.from_state} → ${ev.to_state}` : ev.to_state) ||
-                      "STATE_EVENT";
-                    return (
-                      <tr key={idx}>
-                        <td style={{ whiteSpace: "nowrap" }}>
-                          <code>{ev.timestamp}</code>
-                        </td>
-                        <td>
-                          <span
-                            className={`cm-badge ${
-                              evLabel.includes("FAIL") || evLabel.includes("ROLL")
-                                ? "danger"
-                                : evLabel.includes("APPROV") || evLabel.includes("COMPLET")
-                                ? "observed"
-                                : "info"
-                            }`}
-                          >
-                            {evLabel}
-                          </span>
-                        </td>
-                        <td>
-                          <code>{ev.actor || "system"}</code>
-                        </td>
-                        <td>
-                          <div style={{ fontWeight: 600, color: "var(--color-text-primary)", marginBottom: 2 }}>
-                            {ev.reason || ev.message || "Transición registrada en bitácora ACID"}
-                          </div>
-                          {ev.event_id && (
-                            <div className="cm-hint" style={{ margin: 0 }}>
-                              ID traza: <code>{ev.event_id}</code>
-                              {ev.metadata && Object.keys(ev.metadata).length > 0
-                                ? ` · Metadata: ${JSON.stringify(ev.metadata)}`
-                                : ""}
+          {activeSubTab === "audit-log" && (
+            <AwsContainer
+              title="Bitácora cronológica de eventos y transiciones"
+              counter={filteredEvents.length}
+              description="Registro inmutable de transiciones de la máquina de estados en la base de datos ACID."
+              noPadding={true}
+              actions={
+                <input
+                  type="search"
+                  className="cm-input"
+                  style={{ width: 250 }}
+                  placeholder="Filtrar eventos o actores..."
+                  aria-label="Filtrar eventos de auditoría"
+                  value={eventFilter}
+                  onChange={(e) => setEventFilter(e.target.value)}
+                />
+              }
+            >
+              <div className="cm-table-wrap" style={{ border: "none", borderRadius: 0 }}>
+                <table className="cm-table">
+                  <thead>
+                    <tr>
+                      <th>Timestamp UTC</th>
+                      <th>Transición / evento</th>
+                      <th>Actor</th>
+                      <th>Detalle técnico y evidencia</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredEvents.map((ev, idx) => {
+                      const evLabel =
+                        ev.event ||
+                        ev.event_type ||
+                        (ev.from_state
+                          ? `${ev.from_state} → ${ev.to_state}`
+                          : ev.to_state) ||
+                        "STATE_EVENT";
+                      return (
+                        <tr key={idx}>
+                          <td style={{ whiteSpace: "nowrap" }}>
+                            <code>{ev.timestamp}</code>
+                          </td>
+                          <td>
+                            <AwsStatusIndicator
+                              type={
+                                evLabel.includes("FAIL") ||
+                                evLabel.includes("ROLL")
+                                  ? "error"
+                                  : evLabel.includes("APPROV") ||
+                                    evLabel.includes("COMPLET")
+                                  ? "success"
+                                  : "info"
+                              }
+                            >
+                              {evLabel}
+                            </AwsStatusIndicator>
+                          </td>
+                          <td>
+                            <code>{ev.actor || "system"}</code>
+                          </td>
+                          <td>
+                            <div
+                              style={{
+                                fontWeight: 600,
+                                color: "var(--color-text-primary)",
+                                marginBottom: 2,
+                              }}
+                            >
+                              {ev.reason ||
+                                ev.message ||
+                                "Transición registrada en bitácora ACID"}
                             </div>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
+                            {ev.event_id && (
+                              <div className="cm-hint" style={{ margin: 0 }}>
+                                ID traza: <code>{ev.event_id}</code>
+                                {ev.metadata &&
+                                Object.keys(ev.metadata).length > 0
+                                  ? ` · Metadata: ${JSON.stringify(
+                                      ev.metadata
+                                    )}`
+                                  : ""}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </AwsContainer>
+          )}
 
-          {/* Visor de Código Terraform HCL y Scripts Generados */}
-          {activeJob.generated_artifacts?.files && (
-            <div className="cm-card">
-              <h3 className="cm-card-title">
-                <span>
-                  Módulos Terraform HCL y Scripts de Migración ({activeJob.target_provider?.toUpperCase()})
-                </span>
-                <span className="cm-badge observed">
-                  {Object.keys(activeJob.generated_artifacts.files).length} archivos generados
-                </span>
-              </h3>
-              <IaCViewer
-                code={activeJob.generated_artifacts.iac_code}
-                files={activeJob.generated_artifacts.files}
-                language="hcl"
-                filename="main.tf"
-              />
+          {activeSubTab === "cutover-rollback" && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+                gap: 16,
+              }}
+            >
+              <AwsContainer
+                title="Pruebas pre-cutover y arranque de prueba"
+                actions={
+                  <span
+                    className={`cm-badge ${
+                      preTests?.passed ? "observed" : "neutral"
+                    }`}
+                  >
+                    {preTests
+                      ? preTests.passed
+                        ? "Superadas"
+                        : "Con fallos"
+                      : "Pendiente en etapa TESTING"}
+                  </span>
+                }
+              >
+                {preTests ? (
+                  <div
+                    style={{
+                      fontSize: 14,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                    }}
+                  >
+                    {Object.entries(preTests).map(([k, v]) => (
+                      <div key={k} className="disc-kv-row">
+                        <span className="disc-kv-key">{k}:</span>
+                        <code className="disc-kv-val">
+                          {typeof v === "object"
+                            ? JSON.stringify(v)
+                            : String(v)}
+                        </code>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="cm-hint" style={{ margin: 0 }}>
+                    Las pruebas de humo, conectividad y arranque de VM en
+                    aislamiento se ejecutan al avanzar a la etapa{" "}
+                    <code>TESTING</code>.
+                  </p>
+                )}
+              </AwsContainer>
+
+              <AwsContainer
+                title="Validación post-cutover y paridad"
+                actions={
+                  <span
+                    className={`cm-badge ${
+                      postTests?.passed ? "observed" : "neutral"
+                    }`}
+                  >
+                    {postTests ? "Validado" : "Pendiente de cutover"}
+                  </span>
+                }
+              >
+                {postTests ? (
+                  <div
+                    style={{
+                      fontSize: 14,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                    }}
+                  >
+                    {Object.entries(postTests).map(([k, v]) => (
+                      <div key={k} className="disc-kv-row">
+                        <span className="disc-kv-key">{k}:</span>
+                        <code className="disc-kv-val">
+                          {typeof v === "object"
+                            ? JSON.stringify(v)
+                            : String(v)}
+                        </code>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="cm-hint" style={{ margin: 0 }}>
+                    La validación post-cutover se registra al completar la
+                    transición final hacia <code>COMPLETED</code>.
+                  </p>
+                )}
+              </AwsContainer>
+
+              {rollbackProc && (
+                <AwsContainer
+                  title="Plan de rollback garantizado"
+                  actions={
+                    <span className="cm-badge warning">
+                      RTO estimado: {rollbackProc.estimated_rto_minutes || 5}{" "}
+                      min
+                    </span>
+                  }
+                >
+                  <div style={{ fontSize: 14 }}>
+                    <div style={{ marginBottom: 6 }}>
+                      <strong>Estrategia:</strong>{" "}
+                      {rollbackProc.strategy ||
+                        "Revertir DNS / tráfico al entorno on-premise intacto"}
+                    </div>
+                    {(rollbackProc.steps || []).map((st, idx) => (
+                      <div
+                        key={idx}
+                        className="cm-hint"
+                        style={{ marginBottom: 4 }}
+                      >
+                        {idx + 1}. {String(st).replace(/^\d+\.\s*/, "")}
+                      </div>
+                    ))}
+                  </div>
+                </AwsContainer>
+              )}
             </div>
           )}
-        </div>
+
+          {activeSubTab === "terraform-artifacts" && (
+            <AwsContainer
+              title={`Módulos Terraform HCL y scripts de migración (${activeJob.target_provider?.toUpperCase()})`}
+              counter={
+                activeJob.generated_artifacts?.files
+                  ? Object.keys(activeJob.generated_artifacts.files).length
+                  : 0
+              }
+              description="Archivos de infraestructura generados y listos para despliegue."
+            >
+              {activeJob.generated_artifacts?.files ? (
+                <IaCViewer
+                  code={activeJob.generated_artifacts.iac_code}
+                  files={activeJob.generated_artifacts.files}
+                  language="hcl"
+                  filename="main.tf"
+                />
+              ) : (
+                <AwsEmptyState
+                  title="Sin artefactos Terraform generados aún"
+                  description="Avanza el plan a la etapa de evaluación o generación de IaC en el orquestador."
+                />
+              )}
+            </AwsContainer>
+          )}
+        </>
       )}
     </div>
   );

@@ -128,6 +128,11 @@ class AppInspectRequest(BaseModel):
     github_url: Optional[str] = Field(None, description="Real GitHub repository URL e.g. https://github.com/owner/repo")
     github_ref: Optional[str] = Field(None, description="Branch, tag, or commit SHA to pin and analyze")
     github_token: Optional[str] = Field(None, description="Optional GitHub token for private repos or rate limit extension")
+    user_decisions: Optional[Dict[str, str]] = Field(None, description="User choices mapping discovered GitHub items to target cloud transformations")
+
+
+class UpdateArchitectureDecisionsRequest(BaseModel):
+    user_decisions: Dict[str, str] = Field(default_factory=dict, description="User choices mapping discovered GitHub items to target cloud resources")
 
 
 class ImageInspectRequest(BaseModel):
@@ -1042,12 +1047,18 @@ def inspect_use_case_1_application(request: Optional[AppInspectRequest] = None):
             github_ref=req.github_ref,
             github_token=req.github_token,
         )
-        cmir_obj = build_application_cmir(app_disc, target_provider=target, deployment_mode=req.deployment_mode)
+        cmir_obj = build_application_cmir(
+            app_disc,
+            target_provider=target,
+            deployment_mode=req.deployment_mode,
+            user_decisions=req.user_decisions,
+        )
         viability = evaluate_app_migration_viability(app_disc, cmir_obj, target_provider=target, deployment_mode=req.deployment_mode)
         return {
             "use_case": "app_source",
             "target_provider": target,
             "application": app_disc,
+            "transformation_catalog": app_disc.get("transformation_catalog"),
             "cmir": cmir_obj.model_dump(),
             "viability": viability,
         }
@@ -1056,6 +1067,23 @@ def inspect_use_case_1_application(request: Optional[AppInspectRequest] = None):
     except ConnectorError as exc:
         status = 404 if exc.code == "GITHUB_NOT_FOUND" else (400 if exc.code in ("GITHUB_REF_NOT_FOUND", "GITHUB_RATE_LIMIT") else 502)
         raise HTTPException(status_code=status, detail=exc.message) from exc
+
+
+@router.post("/jobs/{migration_id}/decisions")
+def update_job_architecture_decisions(migration_id: str, request: UpdateArchitectureDecisionsRequest):
+    """
+    Update user transformation choices for discovered GitHub components/services on an existing migration job
+    and regenerate the CMIR + Terraform HCL bundle in real time.
+    """
+    try:
+        return migration_orchestrator.update_architecture_decisions(
+            migration_id=migration_id,
+            user_decisions=request.user_decisions,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/use-case-1/migrate")
@@ -1082,6 +1110,7 @@ def orchestrate_use_case_1_migration(request: Optional[AppInspectRequest] = None
                 "github_url": req.github_url,
                 "github_ref": req.github_ref,
                 "github_token": req.github_token,
+                "user_decisions": req.user_decisions,
             },
             auto_assess_and_plan=True,
         )
