@@ -115,6 +115,7 @@ function getInitialTabFromUrl() {
 
 function App() {
   const [activeTab, setActiveTabState] = useState(getInitialTabFromUrl);
+  const [archViewMode, setArchViewMode] = useState("target");
   const [allNodes, setAllNodes] = useState([]);
   const [allEdges, setAllEdges] = useState([]);
   const [architectureMeta, setArchitectureMeta] = useState(null);
@@ -165,12 +166,12 @@ function App() {
     }
   }, []);
 
-  const fetchArchitecture = useCallback(async () => {
+  const fetchArchitecture = useCallback(async (mode = "target") => {
     setLoading(true);
     try {
-      let response = await apiFetch("/api/v1/architecture/graph");
+      let response = await apiFetch(`/api/v1/architecture/graph?view_mode=${mode}`);
       if (!response.ok) {
-        response = await apiFetch("/graph");
+        response = await apiFetch(`/graph?view_mode=${mode}`);
       }
       if (!response.ok) throw new Error("Backend unreachable");
       const data = await response.json();
@@ -180,7 +181,7 @@ function App() {
 
       setAllNodes(fetchedNodes);
       setAllEdges(fetchedEdges);
-      setArchitectureMeta(data.architecture || { name: "onpremise-datacenter-enterprise", provider: "on-premise" });
+      setArchitectureMeta(data.architecture || { name: data.architecture_name || "cloudmove-target-architecture", provider: data.provider || "aws" });
 
       const initialExpanded = fetchedNodes
         .filter((n) => (n.level ?? 0) <= 4)
@@ -197,6 +198,12 @@ function App() {
       setLoading(false);
     }
   }, []);
+
+  const handleToggleArchViewMode = useCallback((mode) => {
+    setArchViewMode(mode);
+    fetchArchitecture(mode);
+  }, [fetchArchitecture]);
+
 
   const fetchWorkContextSummary = useCallback(async () => {
     try {
@@ -519,6 +526,8 @@ function App() {
       ) : activeTab === "architecture" ? (
         <>
           <CanvasToolbar
+            archViewMode={archViewMode}
+            onToggleArchViewMode={handleToggleArchViewMode}
             activeLayer={activeLayer}
             setActiveLayer={setActiveLayer}
             domainFilter={domainFilter}

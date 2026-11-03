@@ -1240,3 +1240,80 @@ def orchestrate_use_case_2_migration(request: Optional[ImageInspectRequest] = No
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class ValidateExternalCredentialRequest(BaseModel):
+    service_type: str = "supabase"
+    credentials: Dict[str, str] = Field(default_factory=dict)
+
+
+class VerifyCloudCredentialsRequest(BaseModel):
+    provider: str = "aws"
+    credentials: Optional[Dict[str, str]] = None
+
+
+class DeployLiveJobRequest(BaseModel):
+    dry_run: bool = False
+    credentials: Optional[Dict[str, str]] = None
+    secrets: Optional[Dict[str, str]] = None
+
+
+@router.post("/credentials/validate-external")
+def validate_external_credential_endpoint(request: ValidateExternalCredentialRequest):
+    """
+    Safely validate external BaaS or API credentials without exposing or storing secrets.
+    """
+    from app.migration.external_services import validate_external_credentials
+    return validate_external_credentials(request.service_type, request.credentials)
+
+
+@router.post("/credentials/verify-cloud")
+def verify_cloud_credentials_endpoint(request: VerifyCloudCredentialsRequest):
+    """
+    Verify cloud provider authentication (e.g. AWS STS Caller Identity) for automated deployment.
+    """
+    from app.migration.cloud_deployer import cloud_deployer
+    return cloud_deployer.verify_cloud_provider_credentials(request.provider, request.credentials)
+
+
+@router.post("/jobs/{migration_id}/deploy-live")
+def deploy_live_migration_job_endpoint(migration_id: str, request: Optional[DeployLiveJobRequest] = None):
+    """
+    Execute autonomous cloud deployment directly from CloudMove using Terraform & Cloud SDKs.
+    """
+    req = request or DeployLiveJobRequest()
+    try:
+        job = migration_orchestrator.get_migration(migration_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    from app.migration.cloud_deployer import cloud_deployer
+    # Determine directory
+    job_dir = Path.cwd() / f"cloudmove-{job.get('use_case', 'app_source')}-{job.get('target_provider', 'aws')}-{migration_id}"
+    if not job_dir.exists():
+        job_dir = Path("generated/deployments") / migration_id
+
+    artifacts = job.get("generated_artifacts") or {}
+    files = artifacts.get("files") or {}
+
+    deploy_res = cloud_deployer.execute_job_deployment(
+        job_dir=job_dir,
+        provider=job.get("target_provider", "aws"),
+        dry_run=req.dry_run,
+        credentials=req.credentials,
+        secrets=req.secrets,
+        artifacts_files=files,
+    )
+
+    if deploy_res.get("success") and not req.dry_run:
+        try:
+            migration_orchestrator.advance_execution(
+                migration_id=migration_id,
+                dry_run=False,
+                operator_id="cloudmove-automated-deployer@cloudmove.local",
+            )
+        except Exception:
+            pass
+
+    return deploy_res
+

@@ -30,9 +30,35 @@ function CanvasToolbar({
   selectedCount = 0,
   onClearSelection,
   onAnalyzeDependencies,
+  archViewMode = "target",
+  onToggleArchViewMode,
 }) {
   return (
     <div className="canvas-toolbar" role="toolbar" aria-label="Controles de visualización del grafo de arquitectura">
+      {onToggleArchViewMode && (
+        <div className="toolbar-group" style={{ borderRight: "2px solid #e9ebed", paddingRight: "10px" }}>
+          <span className="toolbar-label" style={{ fontWeight: 700, color: "#000716" }}>Modelo</span>
+          <button
+            type="button"
+            className={`toolbar-btn is-filter-chip ${archViewMode === "target" ? "active" : ""}`}
+            style={archViewMode === "target" ? { backgroundColor: "#0972d3", color: "#ffffff", fontWeight: 700 } : {}}
+            onClick={() => onToggleArchViewMode("target")}
+            title="Ver la arquitectura objetivo que quedará desplegada en la nube"
+          >
+            ☁ Arquitectura Objetivo (Cloud)
+          </button>
+          <button
+            type="button"
+            className={`toolbar-btn is-filter-chip ${archViewMode === "source" ? "active" : ""}`}
+            style={archViewMode === "source" ? { backgroundColor: "#0972d3", color: "#ffffff", fontWeight: 700 } : {}}
+            onClick={() => onToggleArchViewMode("source")}
+            title="Ver la topología de origen descubierta (Referencia on-premise)"
+          >
+            🏢 Topología Origen (Referencia)
+          </button>
+        </div>
+      )}
+
       <div className="toolbar-group">
         <span className="toolbar-label">Jerarquía</span>
         <button

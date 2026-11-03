@@ -123,6 +123,11 @@ class CMIREvidence(BaseModel):
     raw_reference: Optional[str] = Field(None, description="Table, file path, line or query reference")
 
 
+# Backward compatibility alias
+Evidence = CMIREvidence
+
+
+
 class CMIRTargetMapping(BaseModel):
     provider: str = Field(..., description="Target cloud provider: aws | gcp")
     target_resource_type: str = Field(..., description="Terraform resource type in AWS or GCP")

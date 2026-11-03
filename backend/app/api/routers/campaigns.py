@@ -6,7 +6,9 @@ from fastapi.responses import PlainTextResponse
 
 from app.discovery.campaigns import (
     ApproveCampaignRequest,
+    CampaignMode,
     CreateCampaignRequest,
+    DEFAULT_OPERATOR,
     campaign_store,
 )
 from app.discovery.connectors import SecurityPolicyViolationError
@@ -20,6 +22,40 @@ def _require_operator_role(role: Optional[str], required_for: str) -> None:
             status_code=403,
             detail=f"Permiso denegado: el rol '{role}' no está autorizado para '{required_for}'.",
         )
+
+
+@router.post("/campaigns/launch")
+def launch_campaign(
+    payload: Dict[str, Any] = Body(default_factory=dict),
+    x_cloudmove_role: Optional[str] = Header(default=None),
+):
+    """Lanzar y ejecutar inmediatamente una campaña de descubrimiento."""
+    _require_operator_role(x_cloudmove_role, "campaigns.launch")
+    raw_mode = str(payload.get("mode", "mode_4_global_e2e_test")).lower()
+    mode_map = {
+        "mode_1_discover_only": CampaignMode.DISCOVER_ONLY,
+        "discover_only": CampaignMode.DISCOVER_ONLY,
+        "mode_2_discover_and_plan": CampaignMode.DISCOVER_PLAN,
+        "discover_plan": CampaignMode.DISCOVER_PLAN,
+        "mode_3_discover_and_install": CampaignMode.DISCOVER_INSTALL,
+        "discover_install": CampaignMode.DISCOVER_INSTALL,
+        "mode_4_global_e2e_test": CampaignMode.GLOBAL_TEST,
+        "global_test": CampaignMode.GLOBAL_TEST,
+    }
+    mode = mode_map.get(raw_mode, CampaignMode.GLOBAL_TEST)
+    req = CreateCampaignRequest(
+        name=payload.get("name"),
+        environment_id=payload.get("environment_id", "env-datacenter-01"),
+        mode=mode,
+        created_by=payload.get("approved_by") or payload.get("created_by") or DEFAULT_OPERATOR,
+    )
+    camp = campaign_store.create_campaign(req)
+    cid = camp.get("campaign_id") or camp.get("id")
+    try:
+        camp = campaign_store.execute_campaign(cid, force_install_agents=False)
+    except Exception:
+        pass
+    return camp
 
 
 @router.post("/campaigns")
@@ -52,6 +88,19 @@ def clear_all_campaigns(x_cloudmove_role: Optional[str] = Header(default=None)):
     _require_operator_role(x_cloudmove_role, "campaigns.delete")
     count = campaign_store.clear_all_campaigns()
     return {"status": "CLEARED", "deleted_count": count}
+
+
+@router.delete("/campaigns/{campaign_id}")
+def delete_campaign(
+    campaign_id: str,
+    x_cloudmove_role: Optional[str] = Header(default=None),
+):
+    """Eliminar permanentemente una campaña de descubrimiento específica."""
+    _require_operator_role(x_cloudmove_role, "campaigns.delete")
+    deleted = campaign_store.delete_campaign(campaign_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Campaña '{campaign_id}' no encontrada.")
+    return {"status": "DELETED", "campaign_id": campaign_id}
 
 
 @router.get("/campaigns/{campaign_id}")

@@ -263,7 +263,13 @@ def test_use_case_2_vm_image_migration_fidelity_qcow2_and_live_ram_blocker():
 def test_use_case_3_datacenter_campaign_pause_resume_retry_cmir_and_migration():
     camps_resp = client.get("/api/v1/campaigns")
     assert camps_resp.status_code == 200
-    campaign_id = camps_resp.json()["campaigns"][0]["id"]
+    camps = camps_resp.json().get("campaigns", [])
+    if not camps:
+        create_resp = client.post("/api/v1/campaigns/launch", json={"mode": "mode_2_discover_and_plan"})
+        assert create_resp.status_code == 200
+        campaign_id = create_resp.json().get("campaign_id") or create_resp.json().get("id")
+    else:
+        campaign_id = camps[0]["id"]
 
     # 1. Pause campaign
     pause_resp = client.post(f"/api/v1/campaigns/{campaign_id}/pause?reason=Ventana_Mantenimiento")

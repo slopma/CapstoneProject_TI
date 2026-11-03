@@ -1,0 +1,16 @@
+[Unit]
+Description=CloudMove Migrated Application - CocoaApp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/srv/cocoaapp
+EnvironmentFile=/etc/cocoaapp/cocoaapp.env
+ExecStart=["nginx", "-g", "daemon off;"]
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

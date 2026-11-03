@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useCallback } from "react";
 import IaCViewer from "./IaCViewer";
 import RepositoryTreeViewer from "./RepositoryTreeViewer";
+import ExternalServicesCredentialsCard from "./ExternalServicesCredentialsCard";
+import TargetArchitectureView from "./TargetArchitectureView";
+import AutomatedCloudDeployerPanel from "./AutomatedCloudDeployerPanel";
 import { apiFetch } from "../../utils/apiClient";
 import {
   AwsPageHeader,
@@ -2360,10 +2363,12 @@ export default function MigrationOrchestratorWorkspace({
               tabs={[
                 {
                   id: "execution",
-                  label: "Ejecución",
+                  label: "Ejecución y Despliegue",
                   badge:
                     currentJob.blockers?.length > 0 ? `${currentJob.blockers.length} bloqueo(s)` : undefined,
                 },
+                { id: "target_arch", label: "Arquitectura Objetivo (Cloud)" },
+                { id: "credentials", label: "Servicios Externos y Credenciales" },
                 { id: "source", label: currentJob.use_case === "app_source" ? "GitHub → Nube" : "Origen" },
                 { id: "compatibility", label: "Fidelidad y pruebas" },
                 { id: "iac", label: "Terraform y CMIR" },
@@ -2611,6 +2616,31 @@ export default function MigrationOrchestratorWorkspace({
                   ))}
                 </div>
               </div>
+            )}
+
+            {/* Ejecutor de Despliegue Automatizado en la pestaña de Ejecución */}
+            {inspectorTab === "execution" && (
+              <AutomatedCloudDeployerPanel
+                job={currentJob}
+                onDeploymentCompleted={() => {
+                  fetchJobDetails(currentJob.migration_id);
+                }}
+              />
+            )}
+
+            {/* Vista de Arquitectura Objetivo en la Nube */}
+            {inspectorTab === "target_arch" && (
+              <TargetArchitectureView job={currentJob} />
+            )}
+
+            {/* Vista de Servicios Externos y Gestión de Credenciales */}
+            {inspectorTab === "credentials" && (
+              <ExternalServicesCredentialsCard
+                job={currentJob}
+                onCredentialsSaved={(creds) => {
+                  setJobDecisions((prev) => ({ ...prev, ...creds }));
+                }}
+              />
             )}
 
             {/* =================================================================

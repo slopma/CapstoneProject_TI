@@ -1127,6 +1127,9 @@ def _analyze_source_payload(
         "components": discovered_components,
         "deep_insights": deep_insights,
     }
+    from app.migration.external_services import detect_external_services
+    out["external_services"] = detect_external_services(out)
+
     if deep_insights.get("alembic_detected"):
         out["database_migrations"] = {
             "tool": "Alembic",

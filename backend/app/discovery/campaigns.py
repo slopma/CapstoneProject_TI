@@ -1335,11 +1335,39 @@ class DataCenterCampaignStore:
         self._save()
         return self.get_campaign_detail(campaign_id)
 
+    def delete_campaign(self, campaign_id: str) -> bool:
+        """Permanently delete a single datacenter campaign, its discovery tasks, and database record."""
+        campaigns = self.state.get("campaigns", {})
+        target_id = campaign_id
+        if target_id not in campaigns:
+            # Check case-insensitive match or match by id attribute
+            matched = [
+                cid for cid, c in campaigns.items()
+                if cid.lower() == campaign_id.lower() or str(c.get("campaign_id", "")).lower() == campaign_id.lower() or str(c.get("id", "")).lower() == campaign_id.lower()
+            ]
+            if not matched:
+                return False
+            target_id = matched[0]
+
+        del self.state["campaigns"][target_id]
+        if "discovery_tasks" in self.state and target_id in self.state["discovery_tasks"]:
+            del self.state["discovery_tasks"][target_id]
+        self._record_audit(DEFAULT_OPERATOR, "campaign.deleted", target_id, {"deleted_at": _utc_now()})
+        self._save()
+        db = get_transactional_db()
+        try:
+            with db.transaction(write=True) as conn:
+                conn.execute("DELETE FROM campaigns WHERE id = ?", (target_id,))
+        except Exception:
+            pass
+        return True
+
     def clear_all_campaigns(self) -> int:
         """Permanently clear all datacenter campaigns and discovery tasks."""
         count = len(self.state.get("campaigns", {}))
         self.state["campaigns"] = {}
         self.state["discovery_tasks"] = {}
+        self._record_audit(DEFAULT_OPERATOR, "campaigns.cleared_all", "all", {"cleared_count": count})
         self._save()
         db = get_transactional_db()
         with db.transaction(write=True) as conn:
@@ -1960,12 +1988,8 @@ class DataCenterCampaignStore:
         return camp
 
     def list_campaigns(self) -> List[Dict[str, Any]]:
-        camps = list(self.state["campaigns"].values())
+        camps = list(self.state.get("campaigns", {}).values())
         camps.sort(key=lambda c: c.get("created_at", ""), reverse=True)
-        if not camps:
-            # Crear una campaña inicial en modo discover_plan para que el tablero tenga datos inmediatos
-            default_camp = self.create_campaign(CreateCampaignRequest(mode=CampaignMode.DISCOVER_PLAN))
-            return [default_camp]
         return [self.get_campaign_detail(c["id"]) for c in camps]
 
     def get_campaign_assets(self, campaign_id: str) -> List[Dict[str, Any]]:
@@ -2017,6 +2041,7 @@ class DataCenterCampaignStore:
 
         return {
             **camp,
+            "campaign_id": camp.get("campaign_id") or camp.get("id"),
             "policy": policy,
             "metrics": {
                 "discovered_count": total_discovered,

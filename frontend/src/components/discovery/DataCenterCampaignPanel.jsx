@@ -8,6 +8,7 @@ import {
   AwsTabs,
   AwsStatusIndicator,
   AwsAlert,
+  AwsEmptyState,
 } from "../cloudscape/AwsPrimitives";
 
 const EXECUTION_MODES = [
@@ -82,7 +83,7 @@ export default function DataCenterCampaignPanel({
         const list = data.campaigns || [];
         setCampaigns(list);
         if (selectId) {
-          const found = list.find((c) => c.campaign_id === selectId);
+          const found = list.find((c) => (c.campaign_id || c.id) === selectId);
           if (found) {
             setActiveCampaign(found);
             if (onActiveCampaignChange) onActiveCampaignChange(found);
@@ -92,11 +93,14 @@ export default function DataCenterCampaignPanel({
         if (list.length > 0) {
           setActiveCampaign((prev) => {
             const next = prev
-              ? list.find((c) => c.campaign_id === prev.campaign_id) || list[0]
+              ? list.find((c) => (c.campaign_id || c.id) === (prev.campaign_id || prev.id)) || list[0]
               : list[0];
             if (onActiveCampaignChange) onActiveCampaignChange(next);
             return next;
           });
+        } else {
+          setActiveCampaign(null);
+          if (onActiveCampaignChange) onActiveCampaignChange(null);
         }
       } catch (err) {
         setError(`Error conectando con API de campañas: ${err.message}`);
@@ -108,6 +112,60 @@ export default function DataCenterCampaignPanel({
   useEffect(() => {
     loadCampaigns();
   }, [loadCampaigns]);
+
+  const handleDeleteCampaign = async (campaignId) => {
+    if (!window.confirm(`¿Estás seguro de que deseas eliminar permanentemente la campaña "${campaignId}"? Esta acción borrará todas sus tareas y métricas asociadas.`)) {
+      return;
+    }
+    setLoading(true);
+    setError("");
+    setBanner("");
+    try {
+      const res = await apiFetch(`/api/v1/campaigns/${campaignId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || `Error al eliminar la campaña (HTTP ${res.status})`);
+      }
+      setBanner(`Campaña ${campaignId} eliminada permanentemente.`);
+      const remaining = campaigns.filter((c) => (c.campaign_id || c.id) !== campaignId);
+      setCampaigns(remaining);
+      if ((activeCampaign?.campaign_id || activeCampaign?.id) === campaignId) {
+        const next = remaining.length > 0 ? remaining[0] : null;
+        setActiveCampaign(next);
+        if (onActiveCampaignChange) onActiveCampaignChange(next);
+      }
+    } catch (err) {
+      setError(`No se pudo eliminar la campaña: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClearAllCampaigns = async () => {
+    if (!window.confirm("¿Estás seguro de que deseas eliminar TODAS las campañas de Data Center registradas? Esta acción es irreversible.")) {
+      return;
+    }
+    setLoading(true);
+    setError("");
+    setBanner("");
+    try {
+      const res = await apiFetch("/api/v1/campaigns", { method: "DELETE" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || `Error al limpiar las campañas (HTTP ${res.status})`);
+      }
+      const data = await res.json();
+      setCampaigns([]);
+      setActiveCampaign(null);
+      if (onActiveCampaignChange) onActiveCampaignChange(null);
+      setBanner(`Se eliminaron permanentemente todas las campañas (${data.deleted_count || 0}).`);
+      setActiveSubTab("campaigns-list");
+    } catch (err) {
+      setError(`No se pudieron eliminar las campañas: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleLaunchCampaign = async (modeOverride = null) => {
     const modeToRun = modeOverride || selectedMode;
@@ -407,10 +465,25 @@ export default function DataCenterCampaignPanel({
         );
       })()}
 
+      {campaigns.length === 0 && !activeCampaign && (
+        <AwsAlert
+          type="info"
+          title="Sin campañas de Data Center"
+          style={{ marginBottom: 16 }}
+        >
+          No hay campañas registradas actualmente en la plataforma. Puedes configurar y lanzar una nueva campaña desde la pestaña "Nueva / Configuración" o ejecutar una prueba para inventariar servidores físicos, hipervisores, bases de datos y almacenamiento on-premise.
+        </AwsAlert>
+      )}
+
       <AwsTabs
         activeTabId={activeSubTab}
         onTabChange={setActiveSubTab}
         tabs={[
+          {
+            id: "campaigns-list",
+            label: "Campañas registradas",
+            count: campaigns.length,
+          },
           {
             id: "nodes-inventory",
             label: "Inventario de hosts",
@@ -418,7 +491,7 @@ export default function DataCenterCampaignPanel({
           },
           {
             id: "campaign-config",
-            label: "Configuración",
+            label: "Nueva / Configuración",
           },
           {
             id: "diagnostics-databases",
@@ -432,6 +505,132 @@ export default function DataCenterCampaignPanel({
           },
         ]}
       />
+
+      {activeSubTab === "campaigns-list" && (
+        <AwsContainer
+          title="Campañas de descubrimiento del Data Center"
+          description="Historial, estado y gestión operativa del ciclo de vida de campañas de descubrimiento on-premise."
+          counter={campaigns.length}
+          actions={
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button
+                type="button"
+                className="cm-btn primary"
+                onClick={() => setActiveSubTab("campaign-config")}
+              >
+                + Nueva campaña
+              </button>
+              <button
+                type="button"
+                className="cm-btn danger"
+                disabled={campaigns.length === 0 || loading}
+                onClick={handleClearAllCampaigns}
+                title="Elimina permanentemente todas las campañas de descubrimiento persistidas"
+              >
+                Eliminar todas las campañas
+              </button>
+            </div>
+          }
+        >
+          {campaigns.length === 0 ? (
+            <AwsEmptyState
+              title="No hay campañas de Data Center registradas"
+              description="Actualmente no existen campañas en la base de datos. Puedes configurar e iniciar una nueva campaña para identificar hipervisores, servidores físicos, bases de datos y cargas de trabajo on-premise."
+              action={
+                <button
+                  type="button"
+                  className="cm-btn primary"
+                  onClick={() => setActiveSubTab("campaign-config")}
+                >
+                  Configurar y lanzar campaña
+                </button>
+              }
+            />
+          ) : (
+            <div className="cm-table-wrap" style={{ border: "none", borderRadius: 0 }}>
+              <table className="cm-table">
+                <thead>
+                  <tr>
+                    <th>ID / Nombre de la campaña</th>
+                    <th>Modo de recolección</th>
+                    <th>Estado</th>
+                    <th>Hosts descubiertos</th>
+                    <th>Fecha de creación</th>
+                    <th style={{ textAlign: "right" }}>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {campaigns.map((c) => {
+                    const cid = c.campaign_id || c.id;
+                    const isCurrent = (activeCampaign?.campaign_id || activeCampaign?.id) === cid;
+                    const hostCount = c.metrics?.discovered_count ?? (c.assets?.length ?? 0);
+                    const modeLabel = c.mode_label || c.mode || "discover_only";
+
+                    return (
+                      <tr key={cid} style={{ backgroundColor: isCurrent ? "#f0fdf4" : undefined }}>
+                        <td>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <strong style={{ color: "#0f172a" }}>{c.name || cid}</strong>
+                            {isCurrent && (
+                              <span className="cm-badge validated" style={{ fontSize: 11 }}>
+                                Activa
+                              </span>
+                            )}
+                          </div>
+                          <div className="cm-hint"><code>{cid}</code> · Entorno: {c.environment_id || "env-datacenter-01"}</div>
+                        </td>
+                        <td>
+                          <span className="cm-badge info" style={{ fontSize: 11.5 }}>
+                            {modeLabel}
+                          </span>
+                        </td>
+                        <td>
+                          <span className={`cm-badge ${c.status === "completed" ? "validated" : c.status === "in_progress" ? "info" : "observed"}`}>
+                            {c.status}
+                          </span>
+                        </td>
+                        <td>
+                          <strong>{hostCount}</strong> activos
+                        </td>
+                        <td>
+                          <span style={{ fontSize: 12.5, color: "#64748b" }}>
+                            {c.created_at ? new Date(c.created_at).toLocaleString() : "—"}
+                          </span>
+                        </td>
+                        <td style={{ textAlign: "right" }}>
+                          <div style={{ display: "inline-flex", gap: 6 }}>
+                            <button
+                              type="button"
+                              className={`cm-btn ${isCurrent ? "secondary" : "primary"}`}
+                              style={{ padding: "4px 10px", fontSize: 12 }}
+                              onClick={() => {
+                                setActiveCampaign(c);
+                                if (onActiveCampaignChange) onActiveCampaignChange(c);
+                                setActiveSubTab("nodes-inventory");
+                              }}
+                            >
+                              {isCurrent ? "Ver inventario" : "Seleccionar"}
+                            </button>
+                            <button
+                              type="button"
+                              className="cm-btn danger"
+                              style={{ padding: "4px 8px", fontSize: 12 }}
+                              onClick={() => handleDeleteCampaign(cid)}
+                              title={`Eliminar campaña ${cid}`}
+                            >
+                              🗑 Eliminar
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </AwsContainer>
+      )}
 
       {activeSubTab === "campaign-config" && (
         <AwsContainer

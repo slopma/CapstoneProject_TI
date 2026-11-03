@@ -418,6 +418,16 @@ class MigrationOrchestrator:
                     s["attempts"] = 1
                     s["evidence"].append(f"Completado durante evaluación inicial ({now}).")
 
+                from app.migration.app_migrator import generate_app_migration_artifacts
+                artifacts = generate_app_migration_artifacts(app_disc, cmir_obj, target_provider=provider)
+                job["generated_artifacts"] = artifacts
+                if len(stages) >= 4:
+                    stages[3]["status"] = "COMPLETED"
+                    stages[3]["started_at"] = now
+                    stages[3]["completed_at"] = now
+                    stages[3]["attempts"] = 1
+                    stages[3]["evidence"].append("Módulos Terraform (main.tf, variables.tf, user_data.sh) sintetizados exitosamente.")
+
                 job["source_environment"] = app_disc
                 job["cmir"] = cmir_obj.model_dump()
                 job["selected_resources"] = [app_disc["app_id"]]
@@ -1150,7 +1160,7 @@ class MigrationOrchestrator:
         return items
 
     def delete_migration(self, migration_id: str, actor_id: str = "operator@cloudmove.local") -> bool:
-        """Permanently delete a migration job from memory, the database, and its staging directory."""
+        """Permanently delete a migration job from memory, database, filesystem artifacts, zip packages, and staging."""
         job = self.jobs.get(migration_id)
         deleted = self.db.delete_migration_job(migration_id)
         if migration_id in self.jobs:
@@ -1162,18 +1172,38 @@ class MigrationOrchestrator:
             )
         except Exception:
             pass
-        if job:
-            from app.migration.deployment_guide_generator import _slug
-            job_slug = _slug(job.get("name", ""))
-            if job_slug:
-                staging_root = PROJECT_ROOT / "generated" / "staging_images"
-                for target_dir in [staging_root / f"live_capture_{job_slug}", staging_root / job_slug]:
-                    if target_dir.is_dir():
-                        shutil.rmtree(target_dir, ignore_errors=True)
+
+        # Thorough filesystem cleanup: remove all generated deployment folders, zips, and staging
+        try:
+            # 1. Project root folders matching migration_id (e.g. cloudmove-app_source-aws-mig-app-aws-a5da0c)
+            for item in PROJECT_ROOT.glob(f"*{migration_id}*"):
+                if item.name.startswith("cloudmove-"):
+                    if item.is_dir():
+                        shutil.rmtree(item, ignore_errors=True)
+                    elif item.is_file():
+                        item.unlink(missing_ok=True)
+
+            # 2. Deployments directory
+            dep_dir = PROJECT_ROOT / "generated" / "deployments" / migration_id
+            if dep_dir.is_dir():
+                shutil.rmtree(dep_dir, ignore_errors=True)
+
+            # 3. Staging images matching job_slug
+            if job:
+                from app.migration.deployment_guide_generator import _slug
+                job_slug = _slug(job.get("name", ""))
+                if job_slug:
+                    staging_root = PROJECT_ROOT / "generated" / "staging_images"
+                    for target_dir in [staging_root / f"live_capture_{job_slug}", staging_root / job_slug]:
+                        if target_dir.is_dir():
+                            shutil.rmtree(target_dir, ignore_errors=True)
+        except Exception:
+            pass
+
         return deleted
 
     def clear_all_migrations(self, actor_id: str = "operator@cloudmove.local", clean_staging_images: bool = True) -> int:
-        """Permanently clear all migration jobs from memory, transactional db, and staging images."""
+        """Permanently clear all migration jobs from memory, transactional db, project zips, folders, and staging images."""
         count = self.db.clear_all_migration_jobs()
         self.jobs.clear()
         try:
@@ -1183,6 +1213,26 @@ class MigrationOrchestrator:
             )
         except Exception:
             pass
+
+        # Clean all generated cloudmove directories and zip bundles in project root
+        try:
+            for item in PROJECT_ROOT.glob("cloudmove-*-mig-*"):
+                if item.is_dir():
+                    shutil.rmtree(item, ignore_errors=True)
+                elif item.is_file():
+                    item.unlink(missing_ok=True)
+            for item in PROJECT_ROOT.glob("cloudmove-*-mig-*.zip"):
+                if item.is_file():
+                    item.unlink(missing_ok=True)
+
+            dep_root = PROJECT_ROOT / "generated" / "deployments"
+            if dep_root.is_dir():
+                for item in dep_root.iterdir():
+                    if item.is_dir():
+                        shutil.rmtree(item, ignore_errors=True)
+        except Exception:
+            pass
+
         if clean_staging_images:
             staging_root = PROJECT_ROOT / "generated" / "staging_images"
             if staging_root.is_dir():
