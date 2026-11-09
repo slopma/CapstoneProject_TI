@@ -146,6 +146,7 @@ class ImageInspectRequest(BaseModel):
     capture_live_host: bool = Field(False, description="Capture live host operating system where CloudMove/agent runs")
     output_format: str = Field("QCOW2", description="QCOW2 | RAW | VMDK")
     agent_id: Optional[str] = Field(None, description="Enrolled agent identifier if capturing remotely")
+    user_decisions: Optional[Dict[str, str]] = Field(None, description="User choices for EBS volume sizing, compute mode, instance type, and SG ports")
 
 
 def _load_cmir():
@@ -1172,11 +1173,16 @@ def inspect_use_case_2_vm_image(request: Optional[ImageInspectRequest] = None):
             source_type=source_type,
             prefer_continuous_replication=req.prefer_continuous_replication,
         )
-        cmir_obj = build_vm_image_cmir(manifest, target_provider=target)
+        cmir_obj = build_vm_image_cmir(
+            manifest,
+            target_provider=target,
+            user_decisions=req.user_decisions,
+        )
         return {
             "use_case": "vm_image",
             "target_provider": target,
             "manifest": manifest,
+            "transformation_catalog": manifest.get("transformation_catalog"),
             "compatibility": compat,
             "cmir": cmir_obj.model_dump(),
         }
@@ -1258,6 +1264,7 @@ def orchestrate_use_case_2_migration(request: Optional[ImageInspectRequest] = No
                 "capture_live_host": req.capture_live_host,
                 "output_format": req.output_format,
                 "agent_id": req.agent_id,
+                "user_decisions": req.user_decisions,
             },
             auto_assess_and_plan=True,
         )

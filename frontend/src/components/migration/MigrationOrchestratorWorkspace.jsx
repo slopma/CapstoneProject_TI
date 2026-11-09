@@ -709,7 +709,7 @@ export default function MigrationOrchestratorWorkspace({
   const [showAdvancedGithub, setShowAdvancedGithub] = useState(false);
 
   // Case 2 specific options
-  const [uc2SourceMode, setUc2SourceMode] = useState("file_path"); // "file_path" | "live_capture"
+  const [uc2SourceMode, setUc2SourceMode] = useState("live_capture"); // "file_path" | "live_capture"
   const [uc2OutputFormat, setUc2OutputFormat] = useState("QCOW2");
   const [uc2TargetHost, setUc2TargetHost] = useState("local_host");
   const [imagePath, setImagePath] = useState("");
@@ -721,6 +721,12 @@ export default function MigrationOrchestratorWorkspace({
   const requireLiveRam = consistencyStrategy === "demo_live_ram";
   const preferContinuousReplication = consistencyStrategy === "continuous_replication";
   const [uc2PreInspection, setUc2PreInspection] = useState(null);
+  const [uc2Decisions, setUc2Decisions] = useState({
+    ebs_storage_sizing: "aws_academy_30gb",
+    compute_provisioning_mode: "autonomous_cloud_init",
+    instance_sizing_profile: "free_tier_t3_micro",
+    security_group_ports_policy: "curated_deduplicated_ports",
+  });
   const [fidelityFilter, setFidelityFilter] = useState("ALL");
   const [wizardCollapsed, setWizardCollapsed] = useState(false);
   const [showDeploymentGuide, setShowDeploymentGuide] = useState(true);
@@ -1023,11 +1029,18 @@ export default function MigrationOrchestratorWorkspace({
           capture_live_host: isLive,
           output_format: uc2OutputFormat,
           source_type: isLive ? "live_server" : "standalone_offline_disk_image",
+          user_decisions: uc2Decisions,
         }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "No se pudo inspeccionar o capturar la imagen de SO.");
       setUc2PreInspection(data);
+      const catDecisions =
+        data.transformation_catalog?.applied_decisions ||
+        data.manifest?.transformation_catalog?.applied_decisions;
+      if (catDecisions) {
+        setUc2Decisions((prev) => ({ ...prev, ...catDecisions }));
+      }
       if (isLive) {
         setStatusBanner(
           `Captura de SO en vivo completada exitosamente: ${data.manifest?.os?.distro || "Linux"} (${data.manifest?.name}) · Formato ${data.manifest?.format} · SHA-256 ${data.manifest?.sha256?.slice(0, 16)}...`
@@ -1084,6 +1097,9 @@ export default function MigrationOrchestratorWorkspace({
         sourceConfig.capture_live_host = isLive;
         sourceConfig.source_type = isLive ? "live_server" : "standalone_offline_disk_image";
         sourceConfig.output_format = uc2OutputFormat;
+        if (Object.keys(uc2Decisions).length > 0) {
+          sourceConfig.user_decisions = uc2Decisions;
+        }
       }
 
       let planName = newName.trim();
@@ -1243,7 +1259,13 @@ export default function MigrationOrchestratorWorkspace({
   };
 
   useEffect(() => {
-    if (selectedJob?.use_case === "app_source") {
+    if (newUseCase === "vm_image" && !hostDevicesData && !queryingDevices) {
+      handleQueryLiveDevices(false);
+    }
+  }, [newUseCase, hostDevicesData, queryingDevices, handleQueryLiveDevices]);
+
+  useEffect(() => {
+    if (selectedJob?.use_case === "app_source" || selectedJob?.use_case === "vm_image") {
       const cat = selectedJob?.source_environment?.transformation_catalog;
       const savedDecisions =
         cat?.applied_decisions ||
@@ -2012,7 +2034,26 @@ export default function MigrationOrchestratorWorkspace({
                                     <code>{dev.path}</code> ({dev.model})
                                   </label>
                                   <span className="cm-badge" style={{ backgroundColor: "#e2e8f0", color: "#334155", fontSize: 12.5 }}>
-                                    {dev.size_gib} GiB · {dev.type?.toUpperCase()}
+                                    {dev.size_gib} GiB Físicos · {dev.type?.toUpperCase()}
+                                  </span>
+                                  <span
+                                    className="cm-badge"
+                                    style={{
+                                      backgroundColor: "#dcfce7",
+                                      color: "#166534",
+                                      border: "1px solid #86efac",
+                                      fontSize: 12.5,
+                                      fontWeight: 700,
+                                    }}
+                                  >
+                                    En AWS Academy (Pvoclabs2): se crea como{" "}
+                                    {uc2Decisions.ebs_storage_sizing === "aws_academy_max_100gb"
+                                      ? "100 GiB gp3"
+                                      : uc2Decisions.ebs_storage_sizing === "full_physical_capacity"
+                                      ? `${dev.size_gib} GiB (1:1)`
+                                      : uc2Decisions.ebs_storage_sizing === "aws_academy_root_only_30gb"
+                                      ? "Solo Raíz 30 GiB gp3"
+                                      : "30 GiB gp3 (Evita bloqueo >100 GiB)"}
                                   </span>
                                   {dev.is_boot_device && (
                                     <span className="cm-badge observed" style={{ fontSize: 12.5 }}>
@@ -2314,69 +2355,133 @@ export default function MigrationOrchestratorWorkspace({
               targetProvider={newProvider}
               isJobView={false}
             />
+
+            {/* Gráfica Interactiva en Vivo de Cómo Quedará la Arquitectura en la Nube (Caso 1) */}
+            <div style={{ marginTop: 14 }}>
+              <TargetArchitectureView
+                job={{
+                  use_case: "app_source",
+                  target_provider: newProvider,
+                  name: uc1PreInspection.application?.app_name || newName || "Aplicación",
+                  source_environment: uc1PreInspection.application,
+                  source_config: { user_decisions: uc1Decisions },
+                }}
+              />
+            </div>
           </div>
         )}
 
-        {newUseCase === "vm_image" && uc2PreInspection?.manifest && (
+        {/* Selector Interactivo de Decisiones AWS Academy + Gráfica de Arquitectura en la Nube para Caso 2 (Visible desde el inicio) */}
+        {newUseCase === "vm_image" && (uc2PreInspection?.transformation_catalog || hostDevicesData?.transformation_catalog) && (
           <div className="cm-step-card" style={{ marginTop: 14 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <strong>
-                  {uc2PreInspection.manifest.is_live_capture
-                    ? `Captura de SO en Vivo: ${uc2PreInspection.manifest.name}`
-                    : `Pre-Inspección Binaria: ${uc2PreInspection.manifest.name}`} ({uc2PreInspection.manifest.format})
-                </strong>
-                <span className={`cm-badge ${uc2PreInspection.manifest.is_authentic_binary_image ? "observed" : "warning"}`}>
-                  {uc2PreInspection.manifest.binary_inspection?.authenticity_classification || "Binario Verificado"}
-                </span>
-                {uc2PreInspection.manifest.is_live_capture && (
-                  <span className="cm-badge" style={{ backgroundColor: "#dcfce7", color: "#166534" }}>
-                    Host: {uc2PreInspection.manifest.live_capture_details?.host_captured || "Local"}
+            {uc2PreInspection?.manifest && (
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <strong>
+                      {uc2PreInspection.manifest.is_live_capture
+                        ? `Captura de SO en Vivo: ${uc2PreInspection.manifest.name}`
+                        : `Pre-Inspección Binaria: ${uc2PreInspection.manifest.name}`} ({uc2PreInspection.manifest.format})
+                    </strong>
+                    <span className={`cm-badge ${uc2PreInspection.manifest.is_authentic_binary_image ? "observed" : "warning"}`}>
+                      {uc2PreInspection.manifest.binary_inspection?.authenticity_classification || "Binario Verificado"}
+                    </span>
+                    {uc2PreInspection.manifest.is_live_capture && (
+                      <span className="cm-badge" style={{ backgroundColor: "#dcfce7", color: "#166534" }}>
+                        Host: {uc2PreInspection.manifest.live_capture_details?.host_captured || "Local"}
+                      </span>
+                    )}
+                  </div>
+                  <span className="cm-badge observed">
+                    Snapshot: {uc2PreInspection.manifest.snapshot_consistency?.consistency_type || "application_quiesced"}
                   </span>
-                )}
-              </div>
-              <span className="cm-badge observed">
-                Snapshot: {uc2PreInspection.manifest.snapshot_consistency?.consistency_type || "application_quiesced"}
-              </span>
-            </div>
-            <div style={{ fontSize: 13.5, color: "var(--color-text-secondary)", lineHeight: 1.6 }}>
-              <div>
-                <strong>Sistema Operativo:</strong> {uc2PreInspection.manifest.os?.distro} {uc2PreInspection.manifest.os?.version} · Kernel: <code>{uc2PreInspection.manifest.os?.kernel}</code> ({uc2PreInspection.manifest.os?.architecture}) · Arranque: <code>{uc2PreInspection.manifest.boot_mode}</code> ({uc2PreInspection.manifest.partition_scheme})
-              </div>
-              <div>
-                <strong>Almacenamiento y Discos:</strong> {uc2PreInspection.manifest.total_provisioned_gib} GiB provisionados ({uc2PreInspection.manifest.total_used_gib} GiB en uso) · Archivo generado: <code>{uc2PreInspection.manifest.source_file}</code>
-              </div>
-              <div>
-                <strong>Usuarios Locales:</strong> {uc2PreInspection.manifest.local_users?.join(", ") || "root"} · <strong>Paquetes Instalados:</strong> {uc2PreInspection.manifest.installed_packages_summary?.total_count || 0} paquetes inventariados
-              </div>
-              <div>
-                <strong>Interfaces de Red Reales:</strong> {uc2PreInspection.manifest.network_interfaces?.map(i => `${i.name} [${i.type}]`).join(", ") || "eth0"} · <strong>Servicios / Runtimes:</strong> {uc2PreInspection.manifest.databases?.length ? uc2PreInspection.manifest.databases.map(d => d.name).join(", ") : "Servicios base del SO"}
-              </div>
-              <div>
-                <strong>Suma Criptográfica:</strong> SHA-256 <code>{uc2PreInspection.manifest.sha256}</code>
-              </div>
-              {uc2PreInspection.manifest.live_capture_details?.system_image_snapshot_archive && (
-                <div style={{ marginTop: 6, padding: "8px 12px", backgroundColor: "#f0fdf4", borderRadius: 4, border: "1px solid #bbf7d0", color: "#166534" }}>
-                  <div>
-                    <strong>Imagen de Sistema (System Image Bundle):</strong> <code>{uc2PreInspection.manifest.live_capture_details.system_image_snapshot_archive}</code> ({Math.round((uc2PreInspection.manifest.live_capture_details.system_image_bundle_size_bytes || 0) / 1024)} KB)
-                  </div>
-                  <div style={{ fontSize: 13.5, marginTop: 3 }}>
-                    Incluye configuración de /etc, manifiesto de {uc2PreInspection.manifest.installed_packages_summary?.total_count} paquetes, usuarios, redes, systemd y script de restauración automática <code>restore_system_image.sh</code>.
-                  </div>
-                  {uc2PreInspection.manifest.live_capture_details.raw_disk_clone_script && (
-                    <div style={{ fontSize: 13.5, marginTop: 4 }}>
-                      <strong>Herramienta de Clonado Bit a Bit:</strong> <code>{uc2PreInspection.manifest.live_capture_details.raw_disk_clone_script}</code> (permite streaming directo hacia AWS S3 o GCP Storage sin consumir disco local).
-                    </div>
-                  )}
                 </div>
-              )}
+                <div style={{ fontSize: 13.5, color: "var(--color-text-secondary)", lineHeight: 1.6 }}>
+                  <div>
+                    <strong>Sistema Operativo:</strong> {uc2PreInspection.manifest.os?.distro} {uc2PreInspection.manifest.os?.version} · Kernel: <code>{uc2PreInspection.manifest.os?.kernel}</code> ({uc2PreInspection.manifest.os?.architecture}) · Arranque: <code>{uc2PreInspection.manifest.boot_mode}</code> ({uc2PreInspection.manifest.partition_scheme})
+                  </div>
+                  <div>
+                    <strong>Almacenamiento Físico vs. AWS Academy:</strong> {uc2PreInspection.manifest.total_provisioned_gib} GiB físicos ({uc2PreInspection.manifest.total_used_gib} GiB en uso) → Se aprovisionará en nube como{" "}
+                    <strong>
+                      {uc2Decisions.ebs_storage_sizing === "aws_academy_max_100gb"
+                        ? "100 GiB gp3"
+                        : uc2Decisions.ebs_storage_sizing === "full_physical_capacity"
+                        ? `${uc2PreInspection.manifest.total_provisioned_gib} GiB gp3`
+                        : uc2Decisions.ebs_storage_sizing === "aws_academy_root_only_30gb"
+                        ? "Solo Raíz 30 GiB gp3"
+                        : "30 GiB gp3 (Compatible Pvoclabs2)"}
+                    </strong>{" "}
+                    · Archivo generado: <code>{uc2PreInspection.manifest.source_file}</code>
+                  </div>
+                  <div>
+                    <strong>Usuarios Locales:</strong> {uc2PreInspection.manifest.local_users?.join(", ") || "root"} · <strong>Paquetes Instalados:</strong> {uc2PreInspection.manifest.installed_packages_summary?.total_count || 0} paquetes inventariados · <strong>Procesos Activos:</strong> {(uc2PreInspection.manifest.running_processes || []).length}
+                  </div>
+                  <div>
+                    <strong>Suma Criptográfica:</strong> SHA-256 <code>{uc2PreInspection.manifest.sha256}</code>
+                  </div>
+                </div>
+              </div>
+            )}
 
+            {/* Selector Interactivo de Opciones de Tamaño EBS, Cómputo, Instancia y Puertos (Caso 2) */}
+            <GithubToCloudTransformationSelector
+              catalog={
+                uc2PreInspection?.transformation_catalog ||
+                uc2PreInspection?.manifest?.transformation_catalog ||
+                hostDevicesData?.transformation_catalog
+              }
+              decisions={uc2Decisions}
+              onSelectDecision={(itemId, optId) =>
+                setUc2Decisions((prev) => ({ ...prev, [itemId]: optId }))
+              }
+              targetProvider={newProvider}
+              isJobView={false}
+            />
+
+            {/* Gráfica Interactiva en Vivo de Cómo Quedará la Arquitectura en la Nube según las Opciones Escogidas (Caso 2) */}
+            <div style={{ marginTop: 14 }}>
+              <TargetArchitectureView
+                job={{
+                  use_case: "vm_image",
+                  target_provider: newProvider,
+                  name:
+                    uc2PreInspection?.manifest?.name ||
+                    (hostDevicesData?.host?.hostname
+                      ? `${hostDevicesData.host.hostname}-live-os`
+                      : "live-os"),
+                  source_environment: uc2PreInspection?.manifest || {
+                    name: hostDevicesData?.host?.hostname
+                      ? `${hostDevicesData.host.hostname}-live-os`
+                      : "live-os",
+                    boot_mode: hostDevicesData?.host?.boot_mode || "UEFI",
+                    partition_scheme: hostDevicesData?.host?.partition_scheme || "GPT",
+                    total_provisioned_gib: hostDevicesData?.primary_boot_device?.size_gib || 476,
+                    total_used_gib: hostDevicesData?.root_mount_info?.used_gib || 15,
+                    os: {
+                      distro: hostDevicesData?.host?.distro || "Linux",
+                      version: hostDevicesData?.host?.version || "",
+                      kernel: hostDevicesData?.host?.kernel || "",
+                    },
+                    disks: [
+                      {
+                        device: hostDevicesData?.primary_boot_device?.path || "/dev/nvme0n1",
+                        size_gib: hostDevicesData?.primary_boot_device?.size_gib || 476,
+                      },
+                    ],
+                    listening_ports: [80, 443, 3000, 5173, 8000],
+                  },
+                  source_config: { user_decisions: uc2Decisions },
+                }}
+              />
+            </div>
+
+            {uc2PreInspection?.manifest && (
               <VmOsToCloudTransformationMap
                 manifest={uc2PreInspection.manifest}
                 targetProvider={newProvider}
                 consistencyStrategy={consistencyStrategy}
               />
-            </div>
+            )}
           </div>
         )}
           </>
@@ -3351,7 +3456,33 @@ export default function MigrationOrchestratorWorkspace({
                   </div>
                 )}
 
-                {/* Mapa de Transformación SO / VM -> Nube */}
+                {/* Selector Interactivo de Decisiones AWS Academy + Mapa de Transformación SO / VM -> Nube */}
+                {srcEnv.transformation_catalog && (
+                  <GithubToCloudTransformationSelector
+                    catalog={srcEnv.transformation_catalog}
+                    decisions={jobDecisions}
+                    onSelectDecision={(itemId, optId) =>
+                      setJobDecisions((prev) => ({ ...prev, [itemId]: optId }))
+                    }
+                    targetProvider={currentJob.target_provider}
+                    onApplyToExistingJob={handleUpdateJobDecisions}
+                    applyingChanges={updatingDecisions}
+                    isJobView={true}
+                  />
+                )}
+
+                <div style={{ marginTop: 14 }}>
+                  <TargetArchitectureView
+                    job={{
+                      ...currentJob,
+                      source_config: {
+                        ...(currentJob.source_config || {}),
+                        user_decisions: jobDecisions,
+                      },
+                    }}
+                  />
+                </div>
+
                 <VmOsToCloudTransformationMap
                   manifest={srcEnv}
                   targetProvider={currentJob.target_provider}

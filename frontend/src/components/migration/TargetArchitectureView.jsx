@@ -28,11 +28,46 @@ export default function TargetArchitectureView({ job }) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
-  const decisions = job.source_config?.user_decisions || job.user_decisions || job.decisions || {};
-  
+  const decisions =
+    job.source_config?.user_decisions ||
+    srcEnv.user_decisions ||
+    srcEnv.transformation_catalog?.applied_decisions ||
+    job.user_decisions ||
+    job.decisions ||
+    {};
+
   const compChoice = decisions.compute_architecture || "single_instance_containerized";
-  const isHA = !isVmCase && (compChoice === "ha_asg_alb_containerized" || compChoice === "ha_alb_asg");
-  
+  const vmComputeChoice = decisions.compute_provisioning_mode || "autonomous_cloud_init";
+  const isHA = isVmCase
+    ? vmComputeChoice === "ha_launch_template_asg"
+    : compChoice === "ha_asg_alb_containerized" || compChoice === "ha_alb_asg";
+
+  const ebsChoice = decisions.ebs_storage_sizing || "aws_academy_30gb";
+  const rawDiskGib = Number(srcEnv.total_provisioned_gib || srcEnv.disks?.[0]?.size_gib || 476);
+  const skipExtraEbs = isVmCase && ebsChoice === "aws_academy_root_only_30gb";
+  const provEbsGib =
+    ebsChoice === "aws_academy_max_100gb"
+      ? Math.min(100, rawDiskGib)
+      : ebsChoice === "full_physical_capacity"
+      ? rawDiskGib
+      : Math.min(30, rawDiskGib);
+  const rootVolGib =
+    ebsChoice === "aws_academy_max_100gb"
+      ? 50
+      : ebsChoice === "full_physical_capacity"
+      ? Math.min(500, rawDiskGib)
+      : 30;
+
+  const sizingProfile = decisions.instance_sizing_profile || "free_tier_t3_micro";
+  const vmInstanceType =
+    sizingProfile === "balanced_t3_medium"
+      ? "t3.medium"
+      : sizingProfile === "host_matched_t3_xlarge"
+      ? "t3.xlarge"
+      : "t3.micro";
+
+  const portsPolicy = decisions.security_group_ports_policy || "curated_deduplicated_ports";
+
   const isCloudDB = Object.entries(decisions).some(
     ([k, v]) => (k.includes("database") || k.includes("supabase") || k.includes("dep:")) && v === "provision_cloud_db"
   );
@@ -47,8 +82,13 @@ export default function TargetArchitectureView({ job }) {
         { name: "backend", tier: "backend", framework: "FastAPI", container_ports: [8000], host_ports: [8000] },
       ];
 
+  const rawVmPorts = (srcEnv.listening_ports || [80, 443, 3000, 8000]).filter(
+    (p) => Number(p) !== 22 && Number(p) < 32768
+  );
   const ports = isVmCase
-    ? (srcEnv.listening_ports || [22, 80, 443, 3000, 8000]).slice(0, 20)
+    ? portsPolicy === "strict_web_ssh_only"
+      ? [22, 80, 443, 3000, 8000]
+      : [22, ...Array.from(new Set([80, 443, 3000, 8000, ...rawVmPorts]))].slice(0, 16)
     : srcEnv.exposed_ports || [80, 443, 3000, 8000];
 
   // Terraform Inventory Mapping (matches the exact resources in main.tf)
@@ -63,9 +103,24 @@ export default function TargetArchitectureView({ job }) {
         { type: "aws_route_table", name: "public_rt", layer: "Enrutamiento", desc: "Tabla de rutas con destino 0.0.0.0/0 direccionado a aws_internet_gateway.igw" },
         { type: "aws_route_table_association", name: "public_a", layer: "Enrutamiento", desc: "Asociación de Subred Pública A a la tabla de rutas públicas" },
         { type: "aws_route_table_association", name: "public_b", layer: "Enrutamiento", desc: "Asociación de Subred Pública B a la tabla de rutas públicas" },
-        { type: "aws_security_group", name: "app_sg", layer: "Perímetro de Seguridad", desc: `Security Group con ingress en los puertos detectados en el SO: ${ports.join(", ")}` },
-        { type: "aws_instance", name: `vm_${slug}`, layer: "Cómputo VM / SO", desc: `Instancia EC2 (${srcEnv.boot_mode || "UEFI"} / ${srcEnv.partition_scheme || "GPT"}) con root_block_device gp3 cifrado y user_data.sh` },
-        { type: "aws_ebs_volume", name: `disk_${slug}_1`, layer: "Almacenamiento de Bloques", desc: `Volumen EBS gp3 cifrado (${srcEnv.total_provisioned_gib || 50} GiB) correspondiente a ${srcEnv.disks?.[0]?.device || "/dev/nvme0n1"}` },
+        { type: "aws_security_group", name: "app_sg", layer: "Perímetro de Seguridad", desc: `Security Group deduplicado (SSH 22 único + puertos TCP): ${ports.join(", ")}` },
+        ...(isHA
+          ? [
+              { type: "aws_lb", name: "app_alb", layer: "Balanceo de Carga", desc: "Application Load Balancer Multi-AZ" },
+              { type: "aws_autoscaling_group", name: `vm_${slug}_asg`, layer: "Auto Scaling", desc: `Auto Scaling Group Multi-AZ (${vmInstanceType})` },
+            ]
+          : []),
+        { type: "aws_instance", name: `vm_${slug}`, layer: "Cómputo VM / SO", desc: `Instancia EC2 (${vmInstanceType} · ${srcEnv.boot_mode || "UEFI"}) con root_block_device ${rootVolGib} GiB gp3 cifrado y user_data.sh` },
+        ...(!skipExtraEbs
+          ? [
+              {
+                type: "aws_ebs_volume",
+                name: `disk_${slug}_1`,
+                layer: "Almacenamiento de Bloques",
+                desc: `Volumen EBS gp3 cifrado de ${provEbsGib} GiB (Origen físico: ${rawDiskGib} GiB en ${srcEnv.disks?.[0]?.device || "/dev/nvme0n1"} · Compatible Pvoclabs2)`,
+              },
+            ]
+          : []),
       ]
     : [
         { type: "aws_vpc", name: "target_vpc", layer: "Red y Aislamiento", desc: "VPC aislada 10.0.0.0/16 con DNS hostnames y DNS support habilitados" },
@@ -154,27 +209,53 @@ export default function TargetArchitectureView({ job }) {
           <div className="cm-card-subtle" style={{ padding: 10, borderLeft: isHA ? "4px solid #8b5cf6" : "4px solid #16a34a" }}>
             <span style={{ fontSize: 11.5, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>Cómputo en HCL</span>
             <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
-              {isHA ? "aws_lb + aws_autoscaling_group" : "aws_instance (t3.micro)"}
+              {isHA
+                ? "aws_lb + aws_autoscaling_group"
+                : isVmCase
+                ? `aws_instance (${vmInstanceType})`
+                : "aws_instance (t3.micro)"}
             </div>
             <div style={{ fontSize: 12, color: "#475569" }}>
-              {isHA ? "Balanceo L7 + 2-3 Instancias Multi-AZ" : "Ubuntu 22.04 LTS + Swap 2GB"}
+              {isHA
+                ? "Balanceo L7 + 2-3 Instancias Multi-AZ"
+                : isVmCase
+                ? `${srcEnv.os?.distro || "Linux"} · Raíz ${rootVolGib} GiB gp3`
+                : "Ubuntu 22.04 LTS + Swap 2GB"}
             </div>
           </div>
 
           <div className="cm-card-subtle" style={{ padding: 10, borderLeft: isCloudDB ? "4px solid #2563eb" : "4px solid #0284c7" }}>
-            <span style={{ fontSize: 11.5, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>Persistencia</span>
+            <span style={{ fontSize: 11.5, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>
+              {isVmCase ? "Volumen EBS (Pvoclabs2)" : "Persistencia"}
+            </span>
             <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
-              {isCloudDB ? "aws_db_instance (RDS Multi-AZ)" : "Supabase BaaS Externo"}
+              {isVmCase
+                ? skipExtraEbs
+                  ? `Solo Raíz (${rootVolGib} GiB gp3)`
+                  : `aws_ebs_volume (${provEbsGib} GiB gp3)`
+                : isCloudDB
+                ? "aws_db_instance (RDS Multi-AZ)"
+                : "Supabase BaaS Externo"}
             </div>
             <div style={{ fontSize: 12, color: "#475569" }}>
-              {isCloudDB ? "PostgreSQL 15 aislado en subredes privadas" : "Conexión cifrada sin costo de RDS"}
+              {isVmCase
+                ? `Físico: ${rawDiskGib} GiB → Nube: ${provEbsGib} GiB (<= 100 GiB)`
+                : isCloudDB
+                ? "PostgreSQL 15 aislado en subredes privadas"
+                : "Conexión cifrada sin costo de RDS"}
             </div>
           </div>
 
           <div className="cm-card-subtle" style={{ padding: 10, borderLeft: "4px solid #f59e0b" }}>
-            <span style={{ fontSize: 11.5, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>Seguridad & Secretos</span>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>aws_secretsmanager_secret</div>
-            <div style={{ fontSize: 12, color: "#475569" }}>IAM Instance Profile con mínimo privilegio</div>
+            <span style={{ fontSize: 11.5, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>
+              {isVmCase ? "Security Group & Cloud-Init" : "Seguridad & Secretos"}
+            </span>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
+              {isVmCase ? `app_sg (${ports.length} puertos sin dup.)` : "aws_secretsmanager_secret"}
+            </div>
+            <div style={{ fontSize: 12, color: "#475569" }}>
+              {isVmCase ? "SSH 22 único + user_data.sh (< 12 KB)" : "IAM Instance Profile con mínimo privilegio"}
+            </div>
           </div>
         </div>
       </div>
@@ -287,15 +368,21 @@ export default function TargetArchitectureView({ job }) {
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                         <strong style={{ fontSize: 13, color: "#0f172a" }}>
                           {isHA
-                            ? `aws_autoscaling_group.compute_host_asg (Min: 1, Max: 3)`
+                            ? `aws_autoscaling_group.${isVmCase ? `vm_${slug}_asg` : "compute_host_asg"} (Min: 1, Max: 3)`
+                            : isVmCase
+                            ? `aws_instance.vm_${slug} (${vmInstanceType} · Raíz ${rootVolGib} GiB gp3)`
                             : `aws_instance.compute_host (t3.micro Free Tier / Ubuntu 22.04 LTS)`}
                         </strong>
                         <span className="cm-badge observed" style={{ fontSize: 11 }}>
-                          {isHA ? "aws_launch_template.compute_host_lt" : "Swap 2GB anti-OOM"}
+                          {isHA
+                            ? "aws_launch_template"
+                            : isVmCase
+                            ? `Compatible AWS Academy (<= 100 GiB)`
+                            : "Swap 2GB anti-OOM"}
                         </span>
                       </div>
 
-                      {/* Contenedores desplegados en el host */}
+                      {/* Contenedores / Servicios desplegados en el host */}
                       <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(180px, 1fr))`, gap: 8, marginTop: 8 }}>
                         {components.map((c, idx) => (
                           <div
@@ -308,10 +395,11 @@ export default function TargetArchitectureView({ job }) {
                             }}
                           >
                             <div style={{ fontWeight: 700, fontSize: 12.5, color: idx === 0 ? "#1d4ed8" : "#7e22ce" }}>
-                              Contenedor {c.name ? c.name.charAt(0).toUpperCase() + c.name.slice(1) : "App"}
+                              {isVmCase ? "Servicio " : "Contenedor "}
+                              {c.name ? c.name.charAt(0).toUpperCase() + c.name.slice(1) : "App"}
                             </div>
                             <div style={{ fontSize: 11.5, color: "#475569" }}>
-                              {c.framework || c.language || "Servicio"} ({c.runtime || "container"})
+                              {c.framework || c.language || "Servicio"} ({c.runtime || (isVmCase ? "systemd" : "container")})
                             </div>
                             <div style={{ fontSize: 11.5, color: "#16a34a", marginTop: 2 }}>
                               Puerto mapeado: <code>{c.host_ports?.[0] || 80}:{c.container_ports?.[0] || 80}</code>
@@ -321,7 +409,9 @@ export default function TargetArchitectureView({ job }) {
                       </div>
 
                       <div style={{ fontSize: 11.5, color: "#64748b", marginTop: 8, textAlign: "center" }}>
-                        ↔ Inicializado con script <code>user_data.sh</code> y orquestado vía <code>docker-compose.cloudmove.yml</code>
+                        {isVmCase
+                          ? `↔ Rehidratado con user_data.sh (< 12 KB) + system_image_snapshot.tar.gz`
+                          : `↔ Inicializado con script user_data.sh y orquestado vía docker-compose.cloudmove.yml`}
                       </div>
                     </div>
                   </div>
@@ -356,49 +446,102 @@ export default function TargetArchitectureView({ job }) {
                   )}
                 </div>
 
-                {/* Columna Derecha: Secretos e Integración Externa */}
+                {/* Columna Derecha: Almacenamiento EBS (Caso 2) o Secretos/Supabase (Caso 1) */}
                 {!isCloudDB && (
                   <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    <div
-                      style={{
-                        padding: 12,
-                        backgroundColor: "#fefce8",
-                        borderRadius: 6,
-                        border: "1px solid #fde047",
-                      }}
-                    >
-                      <div style={{ fontWeight: 700, fontSize: 12.5, color: "#854d0e" }}>
-                        aws_secretsmanager_secret.secrets
-                      </div>
-                      <div style={{ fontSize: 11.5, color: "#713f12", marginTop: 4 }}>
-                        ID: <code>cloudmove/production/{appName.toLowerCase()}-secrets</code>
-                      </div>
-                      <div style={{ fontSize: 11, color: "#a16207", marginTop: 4 }}>
-                        Asociado a <code>aws_iam_role.identity_sa</code> para inyección en el arranque (Zero-Trust).
-                      </div>
-                    </div>
+                    {isVmCase ? (
+                      <>
+                        <div
+                          style={{
+                            padding: 12,
+                            backgroundColor: "#f0fdf4",
+                            borderRadius: 6,
+                            border: "1.5px solid #86efac",
+                          }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <strong style={{ fontSize: 12.5, color: "#14532d" }}>
+                              {skipExtraEbs
+                                ? `root_block_device (${rootVolGib} GiB)`
+                                : `aws_ebs_volume.disk_${slug}_1`}
+                            </strong>
+                            <span className="cm-badge observed" style={{ fontSize: 10.5 }}>
+                              {skipExtraEbs ? "SOLO RAÍZ" : `${provEbsGib} GiB gp3`}
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 11.5, color: "#166534", marginTop: 4 }}>
+                            Disco físico origen: <strong>{rawDiskGib} GiB</strong> ({srcEnv.disks?.[0]?.device || "/dev/nvme0n1"})
+                          </div>
+                          <div style={{ fontSize: 11, color: "#15803d", marginTop: 4, fontWeight: 600 }}>
+                            [OK] Ajustado a {provEbsGib} GiB para cumplir política Pvoclabs2 (&lt;= 100 GiB) en AWS Academy
+                          </div>
+                        </div>
 
-                    <div
-                      style={{
-                        padding: 12,
-                        backgroundColor: "#f8fafc",
-                        borderRadius: 6,
-                        border: "2px dashed #94a3b8",
-                      }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <strong style={{ fontSize: 12.5, color: "#0f172a" }}>BaaS Supabase</strong>
-                        <span className="cm-badge" style={{ fontSize: 10, backgroundColor: "#e2e8f0", color: "#334155" }}>
-                          EXTERNO
-                        </span>
-                      </div>
-                      <div style={{ fontSize: 11.5, color: "#475569", marginTop: 4 }}>
-                        PostgreSQL 15 Cloud + Auth
-                      </div>
-                      <div style={{ fontSize: 11, color: "#166534", marginTop: 4, fontWeight: 600 }}>
-                        [OK] Preservado externamente sin costo de RDS redundante
-                      </div>
-                    </div>
+                        <div
+                          style={{
+                            padding: 12,
+                            backgroundColor: "#fefce8",
+                            borderRadius: 6,
+                            border: "1px solid #fde047",
+                          }}
+                        >
+                          <div style={{ fontWeight: 700, fontSize: 12.5, color: "#854d0e" }}>
+                            Bundle de Captura del SO en Vivo
+                          </div>
+                          <div style={{ fontSize: 11.5, color: "#713f12", marginTop: 4 }}>
+                            • <code>system_image_snapshot.tar.gz</code>
+                            <br />• <code>restore_system_image.sh</code>
+                            <br />• <code>create_full_raw_disk_clone.sh</code>
+                          </div>
+                          <div style={{ fontSize: 11, color: "#a16207", marginTop: 4 }}>
+                            {(srcEnv.local_users || ["root"]).length} usuarios · {(srcEnv.systemd_services || []).length} servicios systemd
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div
+                          style={{
+                            padding: 12,
+                            backgroundColor: "#fefce8",
+                            borderRadius: 6,
+                            border: "1px solid #fde047",
+                          }}
+                        >
+                          <div style={{ fontWeight: 700, fontSize: 12.5, color: "#854d0e" }}>
+                            aws_secretsmanager_secret.secrets
+                          </div>
+                          <div style={{ fontSize: 11.5, color: "#713f12", marginTop: 4 }}>
+                            ID: <code>cloudmove/production/{appName.toLowerCase()}-secrets</code>
+                          </div>
+                          <div style={{ fontSize: 11, color: "#a16207", marginTop: 4 }}>
+                            Asociado a <code>aws_iam_role.identity_sa</code> para inyección en el arranque (Zero-Trust).
+                          </div>
+                        </div>
+
+                        <div
+                          style={{
+                            padding: 12,
+                            backgroundColor: "#f8fafc",
+                            borderRadius: 6,
+                            border: "2px dashed #94a3b8",
+                          }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <strong style={{ fontSize: 12.5, color: "#0f172a" }}>BaaS Supabase</strong>
+                            <span className="cm-badge" style={{ fontSize: 10, backgroundColor: "#e2e8f0", color: "#334155" }}>
+                              EXTERNO
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 11.5, color: "#475569", marginTop: 4 }}>
+                            PostgreSQL 15 Cloud + Auth
+                          </div>
+                          <div style={{ fontSize: 11, color: "#166534", marginTop: 4, fontWeight: 600 }}>
+                            [OK] Preservado externamente sin costo de RDS redundante
+                          </div>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
               </div>

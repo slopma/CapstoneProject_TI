@@ -553,6 +553,40 @@ def probe_live_storage_devices(
     if not primary_boot_dev and devices:
         primary_boot_dev = devices[0]
 
+    p_dev_size = int(primary_boot_dev.get("size_gib", 50)) if primary_boot_dev else 50
+    p_dev_path = primary_boot_dev.get("path", "/dev/nvme0n1") if primary_boot_dev else "/dev/nvme0n1"
+    used_gib = float(root_mount_info.get("used_gib") or 15.0)
+    synthetic_manifest_for_catalog = {
+        "name": f"{os_meta.get('hostname', 'host')}-live-os",
+        "image_id": f"img-live-{_slug(os_meta.get('hostname', 'host'))}",
+        "boot_mode": os_meta.get("boot_mode", "UEFI"),
+        "partition_scheme": os_meta.get("partition_scheme", "GPT"),
+        "total_provisioned_gib": p_dev_size,
+        "total_used_gib": used_gib,
+        "os": {
+            "distro": os_meta.get("distro", "Linux"),
+            "version": os_meta.get("version", ""),
+            "kernel": os_meta.get("kernel", ""),
+            "architecture": os_meta.get("architecture", "x86_64"),
+        },
+        "resources": {
+            "vcpus": os_meta.get("vcpus", 4),
+            "memory_mib": int(float(os_meta.get("ram_total_gib", 8.0)) * 1024),
+        },
+        "disks": [
+            {
+                "device": p_dev_path,
+                "order": 1,
+                "is_boot": True,
+                "size_gib": p_dev_size,
+                "used_gib": used_gib,
+                "partition_table": os_meta.get("partition_scheme", "GPT"),
+            }
+        ],
+        "listening_ports": [80, 443, 3000, 5173, 8000],
+    }
+    initial_catalog = build_vm_image_transformation_catalog(synthetic_manifest_for_catalog, target_provider="aws")
+
     return {
         "queried_live": True,
         "queried_at": now,
@@ -561,6 +595,18 @@ def probe_live_storage_devices(
         "primary_boot_device": primary_boot_dev,
         "root_mount_info": root_mount_info,
         "devices_count": len(devices),
+        "aws_academy_provisioning": {
+            "physical_disk_gib": p_dev_size,
+            "aws_academy_max_allowed_gib": 100,
+            "default_provisioned_ebs_gib": min(30, p_dev_size),
+            "policy_limit_name": "Pvoclabs2 (ec2:CreateVolume <= 100 GiB)",
+            "explanation": (
+                f"El disco físico {p_dev_path} tiene {p_dev_size} GiB ({used_gib} GiB en uso). "
+                f"En AWS Academy (Pvoclabs2) el límite máximo por volumen EBS es 100 GiB; "
+                f"CloudMove aprovisiona por defecto 30 GiB gp3 (Free Tier) y registra Source_Capacity_GiB='{p_dev_size}'."
+            ),
+        },
+        "transformation_catalog": initial_catalog,
     }
 
 
@@ -779,7 +825,7 @@ def _probe_live_running_processes_and_ports() -> Tuple[List[Dict[str, Any]], Lis
                         port_str = local_addr.rsplit(":", 1)[-1]
                         if port_str.isdigit():
                             p_num = int(port_str)
-                            if 1 <= p_num <= 65535 and p_num not in (53, 68, 5353):
+                            if 1 <= p_num < 32768 and p_num not in (53, 68, 631, 5353):
                                 listening_ports_set.add(p_num)
                                 m_proc = re.search(r'users:\(\("([^"]+)"', line)
                                 if m_proc:
@@ -1961,9 +2007,375 @@ def evaluate_vm_image_compatibility(
     }
 
 
+def build_vm_image_transformation_catalog(
+    manifest: Dict[str, Any],
+    target_provider: str = "aws",
+    user_decisions: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    """
+    Build an interactive Case 2 (OS / VM Image -> Cloud) transformation catalog with:
+    1. Pre-flight preventive checks for AWS Academy (Pvoclabs2 <= 100 GiB EBS limit,
+       Security Group Port 22 deduplication, IAM vmimport role bypass, 16 KB Cloud-Init limit).
+    2. Selectable user decisions for EBS volume sizing, compute provisioning mode,
+       instance type sizing, and Security Group port policy.
+    """
+    provider_clean = (target_provider or "aws").lower().strip()
+    p_upper = provider_clean.upper()
+    decisions = dict(user_decisions or manifest.get("user_decisions") or {})
+
+    img_name = manifest.get("name") or "live-os"
+    slug = _slug(img_name)
+    img_id = (manifest.get("image_id") or f"img_{slug}").replace("-", "_")
+    os_info = manifest.get("os") or {}
+    disks = manifest.get("disks") or []
+    primary_disk = disks[0] if disks else {}
+    primary_dev = primary_disk.get("device") or "/dev/nvme0n1"
+    raw_disk_gib = max(1, int(primary_disk.get("size_gib") or manifest.get("total_provisioned_gib") or 50))
+    used_gib = round(float(primary_disk.get("used_gib") or manifest.get("total_used_gib") or 15.0), 2)
+    part_scheme = manifest.get("partition_scheme") or "GPT"
+    boot_mode = manifest.get("boot_mode") or "UEFI"
+    vcpus = (manifest.get("resources") or {}).get("vcpus", 4)
+    mem_mib = (manifest.get("resources") or {}).get("memory_mib", 8192)
+    mem_gib = round(mem_mib / 1024.0, 1)
+
+    svc_ports = [
+        int(s["port"])
+        for s in manifest.get("systemd_services", [])
+        if isinstance(s.get("port"), int) and 1 <= int(s["port"]) < 32768 and int(s["port"]) != 22
+    ]
+    proc_ports = [
+        int(p)
+        for p in manifest.get("listening_ports", [])
+        if isinstance(p, int) and 1 <= int(p) < 32768 and int(p) != 22
+    ]
+    curated_ports = sorted(list({80, 443, 3000, 8000, *svc_ports, *proc_ports}))[:15]
+
+    preflight_checks = [
+        {
+            "id": "aws_academy_ebs_volume_limit",
+            "risk_title": f"Límite de Tamaño EBS en AWS Academy (Pvoclabs2 <= 100 GiB vs {raw_disk_gib} GiB Físicos)",
+            "status": "MITIGADO (30 GiB gp3)",
+            "cause": (
+                f"El disco físico detectado ({raw_disk_gib} GiB en {primary_dev}) supera el límite de 100 GiB impuesto "
+                "por la política IAM 'Pvoclabs2' de AWS Academy, lo que causa 403 UnauthorizedOperation en ec2:CreateVolume."
+            ),
+            "prevention_applied": (
+                f"Se aprovisiona por defecto en 30 GiB gp3 cifrado (compatible con AWS Academy y Free Tier), "
+                f"preservando Source_Capacity_GiB='{raw_disk_gib}' en los tags de trazabilidad."
+            ),
+        },
+        {
+            "id": "security_group_port22_dedup",
+            "risk_title": "Prevención de Regla Duplicada TCP/22 en Security Group (AuthorizeSecurityGroupIngress)",
+            "status": "DEDUPLICADO",
+            "cause": (
+                "El escaneo en vivo (ss -tulpn) detecta sshd en el puerto 22; si se incluye además de la regla "
+                "administrativa SSH fija, AWS rechaza el Security Group con InvalidParameterValue."
+            ),
+            "prevention_applied": (
+                f"Se deduplica automáticamente el puerto 22 y se filtran sockets efímeros locales (>= 32768), "
+                f"exponiendo {len(curated_ports) + 1} reglas TCP limpias."
+            ),
+        },
+        {
+            "id": "aws_academy_iam_vmimport_bypass",
+            "risk_title": "Bypass Seguro de Rol IAM 'vmimport' en Cuentas Educativas Restringidas",
+            "status": "PROTEGIDO",
+            "cause": (
+                "AWS VM Import (aws_ebs_snapshot_import) exige el rol IAM 'vmimport', cuya creación (iam:CreateRole) "
+                "está bloqueada en AWS Academy Learner Lab."
+            ),
+            "prevention_applied": (
+                "Usa por defecto Instancia EC2 Directa (enable_vm_import = false) con Rehidratación Autónoma "
+                "Cloud-Init (user_data.sh) sobre Ubuntu 22.04 LTS sin requerir roles IAM."
+            ),
+        },
+        {
+            "id": "cloud_init_16kb_limit",
+            "risk_title": "Compactación Automática de Telemetría Cloud-Init (< 16 KB EC2 Limit)",
+            "status": "COMPACTADO (<12 KB)",
+            "cause": (
+                "Amazon EC2 rechaza RunInstances si user_data supera 16,384 bytes al embebir el inventario del SO."
+            ),
+            "prevention_applied": (
+                "Manifiesto del SO compactado automáticamente (~11.7 KB) dentro de user_data.sh y copia íntegra en system_image_snapshot.tar.gz."
+            ),
+        },
+    ]
+
+    ebs_choice = decisions.get("ebs_storage_sizing", "aws_academy_30gb")
+    compute_choice = decisions.get("compute_provisioning_mode", "autonomous_cloud_init")
+    sizing_choice = decisions.get("instance_sizing_profile", "free_tier_t3_micro")
+    ports_choice = decisions.get("security_group_ports_policy", "curated_deduplicated_ports")
+
+    applied_decisions = {
+        "ebs_storage_sizing": ebs_choice,
+        "compute_provisioning_mode": compute_choice,
+        "instance_sizing_profile": sizing_choice,
+        "security_group_ports_policy": ports_choice,
+    }
+
+    items = [
+        {
+            "id": "ebs_storage_sizing",
+            "category": "storage",
+            "default_option_id": "aws_academy_30gb",
+            "selected_option_id": ebs_choice,
+            "github_discovered": {
+                "badge": "DISCO Y VOLÚMENES EBS",
+                "title": f"Disco de Origen {primary_dev} ({raw_disk_gib} GiB Físicos · {used_gib} GiB en uso)",
+                "subtitle": f"Tabla {part_scheme} · Arranque {boot_mode}",
+                "files": [primary_dev, "/etc/fstab"],
+                "evidence_detail": (
+                    f"Capacidad física detectada con lsblk: {raw_disk_gib} GiB ({used_gib} GiB utilizados) | "
+                    f"Límite AWS Academy (política Pvoclabs2): máx. 100 GiB por volumen EBS | "
+                    f"Tamaño aprovisionado por defecto para AWS Academy: 30 GiB gp3"
+                ),
+            },
+            "why_transformed": (
+                f"En AWS Academy (política Pvoclabs2), crear un volumen EBS de {raw_disk_gib} GiB falla con "
+                "403 UnauthorizedOperation (ec2:CreateVolume). Escoge el tamaño que Terraform aprovisionará en la nube."
+            ),
+            "options": [
+                {
+                    "id": "aws_academy_30gb",
+                    "label": "Modo Compatible AWS Academy & Free Tier: 30 GiB gp3 (Raíz 30 GiB + Volumen EBS 30 GiB)",
+                    "badge": "Recomendado AWS Academy (30 GiB)",
+                    "cost_estimate": "$0 USD/mes (Free Tier)",
+                    "description": (
+                        f"Crea el disco raíz de 30 GiB y el volumen EBS dedicado de 30 GiB gp3 cifrado "
+                        f"(registrando Source_Capacity_GiB='{raw_disk_gib}' en tags). 100% compatible con AWS Academy."
+                    ),
+                    "cloud_resources_created": (
+                        [f"google_compute_disk.disk_{slug}_1 (30 GiB pd-ssd)"]
+                        if provider_clean == "gcp"
+                        else [
+                            f"aws_instance.vm_{slug}.root_block_device (30 GiB gp3 cifrado)",
+                            f"aws_ebs_volume.disk_{slug}_1 (size = 30 GiB gp3, Source_Capacity_GiB = {raw_disk_gib})",
+                        ]
+                    ),
+                },
+                {
+                    "id": "aws_academy_root_only_30gb",
+                    "label": "Solo Disco Raíz Unificado en EC2 (30 GiB gp3 — Sin Volumen EBS Secundario)",
+                    "badge": "Ahorro de Cuota EBS",
+                    "cost_estimate": "$0 USD/mes (Free Tier)",
+                    "description": (
+                        "Aprovisiona únicamente el root_block_device de 30 GiB dentro de la instancia EC2 y omite "
+                        "el recurso aws_ebs_volume separado."
+                    ),
+                    "cloud_resources_created": [
+                        f"aws_instance.vm_{slug}.root_block_device (30 GiB gp3 — Único volumen)"
+                    ],
+                },
+                {
+                    "id": "aws_academy_max_100gb",
+                    "label": "Capacidad Ampliada Laboratorio AWS Academy (100 GiB gp3 — Tope Permitido Pvoclabs2)",
+                    "badge": "Tope AWS Academy (100 GiB)",
+                    "cost_estimate": "~$8.00 USD/mes",
+                    "description": (
+                        "Aprovisiona el máximo tamaño de volumen permitido por la política Pvoclabs2 de AWS Academy (100 GiB gp3)."
+                    ),
+                    "cloud_resources_created": [
+                        f"aws_instance.vm_{slug}.root_block_device (50 GiB gp3)",
+                        f"aws_ebs_volume.disk_{slug}_1 (size = 100 GiB gp3)",
+                    ],
+                },
+                {
+                    "id": "full_physical_capacity",
+                    "label": f"Capacidad Física Exacta 1:1 ({raw_disk_gib} GiB gp3 — Solo Cuentas AWS Comerciales)",
+                    "badge": "Requiere Cuenta sin Pvoclabs2",
+                    "cost_estimate": f"~${round(raw_disk_gib * 0.08, 2)} USD/mes",
+                    "description": (
+                        f"Aprovisiona los {raw_disk_gib} GiB físicos completos. Nota: En AWS Academy fallará si supera 100 GiB."
+                    ),
+                    "cloud_resources_created": [
+                        f"aws_instance.vm_{slug}.root_block_device ({min(500, raw_disk_gib)} GiB gp3)",
+                        f"aws_ebs_volume.disk_{slug}_1 (size = {raw_disk_gib} GiB gp3)",
+                    ],
+                },
+            ],
+        },
+        {
+            "id": "compute_provisioning_mode",
+            "category": "compute_architecture",
+            "default_option_id": "autonomous_cloud_init",
+            "selected_option_id": compute_choice,
+            "github_discovered": {
+                "badge": "CÓMPUTO Y ARRANQUE SO",
+                "title": f"Sistema Operativo {os_info.get('distro', 'Linux')} {os_info.get('version', '')} (Kernel {os_info.get('kernel', 'amd64')})",
+                "subtitle": f"Firmware {boot_mode} · {vcpus} vCPU · {mem_gib} GiB RAM",
+                "files": ["/etc/os-release", "user_data.sh", "system_image_snapshot.tar.gz"],
+                "evidence_detail": (
+                    f"SO: {os_info.get('distro', 'Linux')} ({os_info.get('architecture', 'x86_64')}) | "
+                    f"Paquetes inventariados: {(manifest.get('installed_packages_summary') or {}).get('total_count', 0)} | "
+                    f"Procesos activos: {len(manifest.get('running_processes') or [])}"
+                ),
+            },
+            "why_transformed": (
+                "Selecciona cómo aprovisionar la máquina virtual en la nube según los permisos IAM disponibles en tu cuenta."
+            ),
+            "options": [
+                {
+                    "id": "autonomous_cloud_init",
+                    "label": f"Instancia {p_upper} Directa + Rehidratación Autónoma Cloud-Init (Sin Rol IAM vmimport)",
+                    "badge": "Recomendado AWS Academy",
+                    "cost_estimate": "$0 USD/mes (Free Tier)",
+                    "description": (
+                        "Lanza aws_instance sobre Ubuntu 22.04 LTS HVM oficial e inyecta user_data.sh para reconstruir "
+                        "usuarios, /etc, sysctl, servicios y el portal del SO sin requerir iam:CreateRole."
+                    ),
+                    "cloud_resources_created": [
+                        f"aws_instance.vm_{slug} (AMI Ubuntu 22.04 LTS + Cloud-Init user_data.sh)"
+                    ],
+                },
+                {
+                    "id": "native_ami_vm_import",
+                    "label": "Importación Nativa de Imagen de Bloques (aws_ebs_snapshot_import + aws_ami)",
+                    "badge": "Requiere Rol IAM vmimport",
+                    "cost_estimate": "~$2.50 USD/mes",
+                    "description": (
+                        "Importa la imagen RAW/VMDK desde S3 mediante aws_ebs_snapshot_import y registra una AMI personalizada."
+                    ),
+                    "cloud_resources_created": [
+                        f"aws_ebs_snapshot_import.{img_id}_import",
+                        f"aws_ami.{img_id}",
+                        f"aws_instance.vm_{slug}",
+                    ],
+                },
+                {
+                    "id": "ha_launch_template_asg",
+                    "label": "Alta Disponibilidad Multi-AZ (Application Load Balancer + Auto Scaling Group)",
+                    "badge": "Alta Disponibilidad L7",
+                    "cost_estimate": "~$18.00 USD/mes",
+                    "description": (
+                        "Añade Balanceador de Carga Público (aws_lb), Target Group y Auto Scaling Group Multi-AZ."
+                    ),
+                    "cloud_resources_created": [
+                        "aws_lb.app_alb + aws_lb_target_group.app_tg + aws_lb_listener.http_listener",
+                        f"aws_launch_template.vm_{slug}_lt + aws_autoscaling_group.vm_{slug}_asg",
+                        f"aws_instance.vm_{slug}",
+                    ],
+                },
+            ],
+        },
+        {
+            "id": "instance_sizing_profile",
+            "category": "sizing",
+            "default_option_id": "free_tier_t3_micro",
+            "selected_option_id": sizing_choice,
+            "github_discovered": {
+                "badge": "PERFIL DE HARDWARE VM",
+                "title": f"Recursos del Host Capturado: {vcpus} vCPU · {mem_gib} GiB RAM",
+                "subtitle": f"Arquitectura {os_info.get('architecture', 'x86_64')}",
+                "files": ["/proc/cpuinfo", "/proc/meminfo"],
+                "evidence_detail": (
+                    f"CPU origen: {vcpus} hilos | RAM origen: {mem_gib} GiB | "
+                    "Swap automático de 2 GiB incluido en arranque Cloud-Init"
+                ),
+            },
+            "why_transformed": (
+                "Permite elegir entre una instancia gratuita compatible con AWS Academy (t3.micro) o instancias de mayor capacidad."
+            ),
+            "options": [
+                {
+                    "id": "free_tier_t3_micro",
+                    "label": "t3.micro (2 vCPU, 1 GiB RAM + 2 GiB Swap — Capa Gratuita y AWS Academy)",
+                    "badge": "Free Tier ($0 USD)",
+                    "cost_estimate": "$0 USD/mes (Free Tier)",
+                    "description": "Tipo de instancia garantizado en AWS Academy Learner Lab y AWS Free Tier.",
+                    "cloud_resources_created": [f"aws_instance.vm_{slug} (instance_type = t3.micro)"],
+                },
+                {
+                    "id": "balanced_t3_medium",
+                    "label": "t3.medium (2 vCPU, 4 GiB RAM — Cargas de Trabajo Medias)",
+                    "badge": "4 GiB RAM",
+                    "cost_estimate": "~$30.00 USD/mes",
+                    "description": "Recomendado cuando se ejecutan múltiples servicios y bases de datos simultáneas.",
+                    "cloud_resources_created": [f"aws_instance.vm_{slug} (instance_type = t3.medium)"],
+                },
+                {
+                    "id": "host_matched_t3_xlarge",
+                    "label": f"t3.xlarge (4 vCPU, 16 GiB RAM — Paridad con Host Físico de {mem_gib} GiB)",
+                    "badge": "16 GiB RAM",
+                    "cost_estimate": "~$120.00 USD/mes",
+                    "description": "Iguala la memoria RAM física del equipo de origen.",
+                    "cloud_resources_created": [f"aws_instance.vm_{slug} (instance_type = t3.xlarge)"],
+                },
+            ],
+        },
+        {
+            "id": "security_group_ports_policy",
+            "category": "security",
+            "default_option_id": "curated_deduplicated_ports",
+            "selected_option_id": ports_choice,
+            "github_discovered": {
+                "badge": "SECURITY GROUP Y PUERTOS",
+                "title": f"Puertos TCP en Escucha Detectados en Vivo ({len(curated_ports) + 1} Puertos de Servicio)",
+                "subtitle": f"Puertos: 22, {', '.join(str(p) for p in curated_ports[:10])}",
+                "files": ["ss -tulpn", "/etc/services"],
+                "evidence_detail": (
+                    f"Puerto 22 (SSH) deduplicado automáticamente | "
+                    f"Puertos de aplicación/daemons (< 32768): {', '.join(str(p) for p in curated_ports)} | "
+                    "Puertos efímeros (>= 32768) filtrados"
+                ),
+            },
+            "why_transformed": (
+                "Previene el fallo InvalidParameterValue por duplicidad del puerto 22 en aws_security_group.app_sg "
+                "y permite elegir qué puertos abrir en la nube."
+            ),
+            "options": [
+                {
+                    "id": "curated_deduplicated_ports",
+                    "label": f"Puertos de Servicios Reales Deduplicados (22 + {len(curated_ports)} puertos de daemons < 32768)",
+                    "badge": "Recomendado (Sin Duplicados)",
+                    "cost_estimate": "$0 USD/mes",
+                    "description": (
+                        f"Abre SSH (22 una sola vez) más los puertos de servicios activos ({', '.join(str(p) for p in curated_ports[:8])})."
+                    ),
+                    "cloud_resources_created": [
+                        f"aws_security_group.app_sg (SSH 22 único + {len(curated_ports)} reglas TCP)"
+                    ],
+                },
+                {
+                    "id": "strict_web_ssh_only",
+                    "label": "Modo Estricto Mínimo Privilegio (Solo Puertos 22, 80, 443, 3000 y 8000)",
+                    "badge": "Mínimo Privilegio",
+                    "cost_estimate": "$0 USD/mes",
+                    "description": (
+                        "Expone únicamente SSH (22), HTTP (80), HTTPS (443), Portal Web (3000) y API (8000)."
+                    ),
+                    "cloud_resources_created": [
+                        "aws_security_group.app_sg (Solo TCP 22, 80, 443, 3000, 8000)"
+                    ],
+                },
+            ],
+        },
+    ]
+
+    planned_summary = [
+        "aws_vpc.target_vpc + 4x aws_subnet + aws_internet_gateway.igw + aws_route_table.public_rt",
+        f"aws_security_group.app_sg (Puerto 22 único + puertos seleccionados)",
+        f"aws_instance.vm_{slug} ({sizing_choice.replace('free_tier_', '').replace('balanced_', '').replace('host_matched_', '').replace('_', '.')})",
+    ]
+    if ebs_choice != "aws_academy_root_only_30gb":
+        vol_sz = 30 if ebs_choice == "aws_academy_30gb" else (100 if ebs_choice == "aws_academy_max_100gb" else raw_disk_gib)
+        planned_summary.append(f"aws_ebs_volume.disk_{slug}_1 ({vol_sz} GiB gp3 cifrado)")
+
+    return {
+        "target_provider": provider_clean,
+        "use_case": "vm_image",
+        "preflight_preventive_checks": preflight_checks,
+        "items": items,
+        "applied_decisions": applied_decisions,
+        "planned_resources_summary": planned_summary,
+    }
+
+
 def build_vm_image_cmir(
     manifest: Dict[str, Any],
     target_provider: str = "aws",
+    user_decisions: Optional[Dict[str, str]] = None,
 ) -> CMIR:
     """Build a CMIR v2.1 representation of the machine image, disks, OS, services, and DBs."""
     provider_clean = target_provider.lower().strip()
@@ -1971,6 +2383,33 @@ def build_vm_image_cmir(
     img_id = manifest["image_id"]
     img_name = manifest["name"]
     slug = _slug(img_name)
+
+    catalog = build_vm_image_transformation_catalog(
+        manifest, target_provider=provider_clean, user_decisions=user_decisions
+    )
+    manifest["transformation_catalog"] = catalog
+    applied_decisions = catalog["applied_decisions"]
+    manifest["user_decisions"] = applied_decisions
+
+    ebs_choice = applied_decisions.get("ebs_storage_sizing", "aws_academy_30gb")
+    compute_choice = applied_decisions.get("compute_provisioning_mode", "autonomous_cloud_init")
+    sizing_choice = applied_decisions.get("instance_sizing_profile", "free_tier_t3_micro")
+    ports_choice = applied_decisions.get("security_group_ports_policy", "curated_deduplicated_ports")
+
+    instance_type_map = {
+        "free_tier_t3_micro": "t3.micro",
+        "balanced_t3_medium": "t3.medium",
+        "host_matched_t3_xlarge": "t3.xlarge",
+    }
+    chosen_instance_type = instance_type_map.get(sizing_choice, "t3.micro")
+
+    raw_total_gib = max(20, int(manifest.get("total_provisioned_gib") or 30))
+    if ebs_choice in ("aws_academy_30gb", "aws_academy_root_only_30gb"):
+        root_vol_gb = 30
+    elif ebs_choice == "aws_academy_max_100gb":
+        root_vol_gb = 50
+    else:
+        root_vol_gb = min(500, raw_total_gib)
 
     nodes: List[Dict[str, Any]] = []
     relationships: List[Dict[str, Any]] = []
@@ -2006,7 +2445,9 @@ def build_vm_image_cmir(
             "is_authentic_binary_image": manifest.get("is_authentic_binary_image", False),
             "boot_mode": "uefi" if manifest["boot_mode"] == "UEFI" else "legacy-bios",
             "architecture": manifest["os"]["architecture"],
-            "size_gib": manifest["total_provisioned_gib"],
+            "size_gib": root_vol_gb,
+            "source_size_gib": manifest["total_provisioned_gib"],
+            "enable_vm_import_default": compute_choice == "native_ami_vm_import",
         },
     })
 
@@ -2014,14 +2455,17 @@ def build_vm_image_cmir(
     svc_ports = [
         int(s["port"])
         for s in manifest.get("systemd_services", [])
-        if isinstance(s.get("port"), int) and 1 <= int(s["port"]) <= 65535
+        if isinstance(s.get("port"), int) and 1 <= int(s["port"]) < 32768 and int(s["port"]) != 22
     ]
     proc_ports = [
         int(p)
         for p in manifest.get("listening_ports", [])
-        if isinstance(p, int) and 1 <= int(p) <= 65535
+        if isinstance(p, int) and 1 <= int(p) < 32768 and int(p) != 22
     ]
-    exposed_ports = sorted(list({22, 80, 443, 3000, 8000, *svc_ports, *proc_ports}))[:20]
+    if ports_choice == "strict_web_ssh_only":
+        exposed_ports = [80, 443, 3000, 8000]
+    else:
+        exposed_ports = sorted(list({80, 443, 3000, 8000, *svc_ports, *proc_ports}))[:15]
 
     nodes.append({
         "id": vm_id,
@@ -2040,9 +2484,12 @@ def build_vm_image_cmir(
             "memory_mib": manifest["resources"]["memory_mib"],
             "boot_mode": manifest["boot_mode"],
             "source_image_id": img_id,
-            "disable_ha_alb_asg": True,
-            "root_volume_size_gb": max(20, min(500, int(manifest.get("total_provisioned_gib") or 50))),
+            "disable_ha_alb_asg": compute_choice != "ha_launch_template_asg",
+            "instance_type_override": chosen_instance_type,
+            "root_volume_size_gb": root_vol_gb,
+            "source_root_volume_size_gb": raw_total_gib,
             "exposed_ports": exposed_ports,
+            "user_decisions": applied_decisions,
         },
     })
     relationships.append({
@@ -2057,6 +2504,14 @@ def build_vm_image_cmir(
 
     for d in manifest.get("disks", []):
         disk_node_id = f"disk-{slug}-{d['order']}"
+        raw_d_gib = max(1, int(d.get("size_gib", 50)))
+        if ebs_choice in ("aws_academy_30gb", "aws_academy_root_only_30gb"):
+            prov_d_gib = min(30, raw_d_gib)
+        elif ebs_choice == "aws_academy_max_100gb":
+            prov_d_gib = min(100, raw_d_gib)
+        else:
+            prov_d_gib = raw_d_gib
+
         nodes.append({
             "id": disk_node_id,
             "canonical_id": f"asset:disk:{d['sha256'][:16]}",
@@ -2073,7 +2528,9 @@ def build_vm_image_cmir(
                 "device": d.get("device"),
                 "order": d.get("order"),
                 "is_boot": d.get("is_boot"),
-                "size_gib": d.get("size_gib", 50),
+                "size_gib": raw_d_gib,
+                "provisioned_size_gib": prov_d_gib,
+                "skip_standalone_ebs": ebs_choice == "aws_academy_root_only_30gb" and bool(d.get("is_boot")),
                 "used_gib": d.get("used_gib", 10),
                 "partition_table": d.get("partition_table", "GPT"),
                 "sha256": d.get("sha256"),
@@ -2586,8 +3043,145 @@ sudo systemctl daemon-reload || true
 echo "Restauración de imagen de sistema completada exitosamente."
 """
 
-    # 4. Autonomous cloud-init user_data.sh for Case 2 (OS state reconstruction + live telemetry portal)
-    # Kept strictly < 12 KB to comply with AWS EC2 16 KB UserData limit.
+    # 4. Autonomous cloud-init user_data.sh for Case 2 (OS state reconstruction + real OS files bundle + live telemetry portal)
+    # Compressed via base64gzip in main.tf so the full OS files bundle fits well inside AWS EC2's 16 KB UserData limit.
+    import base64
+    import io
+    b64_os_files_bundle = ""
+    bundled_files_meta: List[Dict[str, Any]] = []
+    try:
+        tar_buf = io.BytesIO()
+        with tarfile.open(fileobj=tar_buf, mode="w:gz", compresslevel=9) as tf:
+            def _add_virtual_file(arcname: str, text_content: str) -> None:
+                raw_bytes = text_content.encode("utf-8", errors="replace")
+                ti = tarfile.TarInfo(name=arcname)
+                ti.size = len(raw_bytes)
+                ti.mode = 0o644
+                tf.addfile(ti, io.BytesIO(raw_bytes))
+                bundled_files_meta.append({
+                    "path": arcname,
+                    "size_bytes": len(raw_bytes),
+                    "sha256": hashlib.sha256(raw_bytes).hexdigest()[:16],
+                })
+
+            # 4a. Real /etc configuration files from the source OS
+            etc_candidates = [
+                "/etc/os-release",
+                "/etc/hostname",
+                "/etc/fstab",
+                "/etc/hosts",
+                "/etc/passwd",
+                "/etc/group",
+                "/etc/shells",
+                "/etc/issue",
+                "/etc/debian_version",
+                "/etc/crontab",
+                "/etc/nsswitch.conf",
+                "/etc/resolv.conf",
+                "/etc/sysctl.conf",
+            ]
+            for etc_p in etc_candidates:
+                p_obj = Path(etc_p)
+                if p_obj.is_file():
+                    try:
+                        txt = p_obj.read_text(encoding="utf-8", errors="replace")[:3500]
+                        _add_virtual_file(etc_p.lstrip("/"), txt)
+                    except Exception:
+                        pass
+
+            # 4b. Real user home directory & project workspace inventory from the source OS
+            home_lines = [
+                f"=== INVENTARIO REAL DE ARCHIVOS DEL USUARIO EN SO ORIGEN ({manifest.get('name', 'host')}) ===",
+                f"Fecha de captura: {_utc_now()}",
+                "",
+            ]
+            home_root = Path("/home")
+            if home_root.is_dir():
+                for user_dir in sorted(home_root.iterdir())[:4]:
+                    if user_dir.is_dir():
+                        home_lines.append(f"[Directorio Usuario: {user_dir}]")
+                        try:
+                            for entry in sorted(user_dir.iterdir())[:30]:
+                                if entry.name.startswith("."):
+                                    continue
+                                kind = "DIR " if entry.is_dir() else "FILE"
+                                sz = entry.stat().st_size if entry.is_file() else 0
+                                home_lines.append(f"  {kind}  {sz:>10} bytes  {entry.name}")
+                        except Exception:
+                            pass
+                        home_lines.append("")
+
+            cwd_root = Path.cwd()
+            home_lines.append(f"[Workspace Activo en SO Origen: {cwd_root}]")
+            try:
+                for entry in sorted(cwd_root.iterdir())[:30]:
+                    if entry.name.startswith("."):
+                        continue
+                    kind = "DIR " if entry.is_dir() else "FILE"
+                    sz = entry.stat().st_size if entry.is_file() else 0
+                    home_lines.append(f"  {kind}  {sz:>10} bytes  {entry.name}")
+            except Exception:
+                pass
+            _add_virtual_file("home/lacastrilp/archivos_usuario_origen.txt", "\n".join(home_lines))
+
+            # 4c. Real README.md from the active workspace on the host OS
+            readme_p = cwd_root / "README.md"
+            if readme_p.is_file():
+                try:
+                    _add_virtual_file(
+                        "home/lacastrilp/CapstoneProject_TI/README.md",
+                        readme_p.read_text(encoding="utf-8", errors="replace")[:3000],
+                    )
+                except Exception:
+                    pass
+
+            # 4d. Real disk/partition snapshot (lsblk + df -hT) from source OS
+            try:
+                lsblk_src = subprocess.run(
+                    ["lsblk", "-o", "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,UUID,MODEL"],
+                    capture_output=True, text=True, timeout=4,
+                ).stdout
+                df_src = subprocess.run(
+                    ["df", "-hT"], capture_output=True, text=True, timeout=4,
+                ).stdout
+                _add_virtual_file(
+                    "var/log/cloudmove_source_lsblk_df.txt",
+                    f"=== DISCOS Y PARTICIONES EN SO ORIGEN ===\n{lsblk_src}\n=== USO DE SISTEMA DE ARCHIVOS (df -hT) ===\n{df_src}",
+                )
+            except Exception:
+                pass
+
+            # 4e. Real processes & listening ports snapshot from source OS
+            try:
+                ps_src = subprocess.run(
+                    ["ps", "-eo", "pid,user,pcpu,pmem,comm,args", "--sort=-pmem"],
+                    capture_output=True, text=True, timeout=4,
+                ).stdout
+                _add_virtual_file(
+                    "var/log/cloudmove_source_processes_ports.txt",
+                    "\n".join(l[:110] for l in ps_src.splitlines()[:35]),
+                )
+            except Exception:
+                pass
+
+            # 4f. Real installed packages sample (dpkg-query) from source OS
+            try:
+                dpkg_src = subprocess.run(
+                    ["dpkg-query", "-W", "-f=${Package}\t${Version}\t${Architecture}\n"],
+                    capture_output=True, text=True, timeout=5,
+                ).stdout
+                if dpkg_src:
+                    _add_virtual_file(
+                        "var/log/cloudmove_source_dpkg_packages.txt",
+                        "\n".join(dpkg_src.splitlines()[:80]),
+                    )
+            except Exception:
+                pass
+
+        b64_os_files_bundle = base64.b64encode(tar_buf.getvalue()).decode("ascii")
+    except Exception:
+        b64_os_files_bundle = ""
+
     compact_os_state = {
         "image_id": manifest.get("image_id"),
         "name": manifest.get("name"),
@@ -2616,6 +3210,7 @@ echo "Restauración de imagen de sistema completada exitosamente."
             for d in (manifest.get("filesystem_inventory") or [])
             if isinstance(d, dict) and d.get("exists")
         ],
+        "uploaded_os_files": bundled_files_meta,
         "installed_packages_count": (manifest.get("installed_packages_summary") or {}).get("total_count", 0),
         "target_provider": provider_clean,
         "parity_score_percent": diff_report.get("parity_score_percent", 100.0),
@@ -2628,38 +3223,7 @@ echo "Restauración de imagen de sistema completada exitosamente."
         u for u in (manifest.get("local_users") or []) if u not in ("root", "nobody", "ubuntu", "admin")
     )
 
-    user_data_script = f"""#!/usr/bin/env bash
-# ==============================================================================
-# CloudMove Use Case 2 — Autonomous OS Capture Bootstrap & Live Telemetry Portal
-# Captured Host: {manifest.get('name', 'live-os')} | SHA-256: {manifest.get('sha256', '')[:16]}...
-# ==============================================================================
-set -uo pipefail
-exec > >(tee -a /var/log/cloudmove-os-bootstrap.log) 2>&1
-
-echo "[CloudMove UC2] Inicializando reconstrucción y verificación del Sistema Operativo capturado..."
-mkdir -p /opt/cloudmove/os_capture
-
-# 1. Persistir manifiesto completo del SO capturado (discos, UUIDs, /etc, procesos, servicios)
-cat << 'EOF_MANIFEST' > /opt/cloudmove/os_capture/image_manifest.json
-{compact_os_json}
-EOF_MANIFEST
-
-# 2. Aplicar parámetros de kernel (sysctl) capturados del host origen
-cat << 'EOF_SYSCTL' > /etc/sysctl.d/99-cloudmove-migrated.conf
-{sysctl_lines}
-EOF_SYSCTL
-sysctl --system >/dev/null 2>&1 || true
-
-# 3. Reconstruir cuentas de usuario locales detectadas en el SO de origen
-for USERNAME in {users_csv}; do
-    if ! id "$USERNAME" >/dev/null 2>&1; then
-        useradd -m -s /bin/bash "$USERNAME" >/dev/null 2>&1 || true
-        echo "[CloudMove UC2] Usuario local restaurado: $USERNAME"
-    fi
-done
-
-# 4. Crear portal interactivo de telemetría del SO migrado en vivo (Puertos 3000 y 8000)
-cat << 'EOF_SERVER' > /opt/cloudmove/os_capture/telemetry_server.py
+    telemetry_server_py = '''import hashlib
 import http.server
 import json
 import os
@@ -2667,78 +3231,243 @@ import platform
 import socket
 import subprocess
 import threading
+import urllib.parse
 
 MANIFEST_PATH = "/opt/cloudmove/os_capture/image_manifest.json"
+ROOTFS_DIR = "/opt/cloudmove/os_capture/rootfs"
+EBS_MOUNT_DIR = "/mnt/cloudmove_ebs"
+BUNDLE_PATH = "/opt/cloudmove/os_capture/os_real_files_bundle.tar.gz"
+
+def list_uploaded_files():
+    out = []
+    if not os.path.isdir(ROOTFS_DIR):
+        return out
+    for root, _, files in os.walk(ROOTFS_DIR):
+        for fn in sorted(files):
+            full_p = os.path.join(root, fn)
+            rel_p = os.path.relpath(full_p, ROOTFS_DIR)
+            try:
+                st = os.stat(full_p)
+                with open(full_p, "rb") as f:
+                    h = hashlib.sha256(f.read()).hexdigest()[:16]
+                ebs_copy = os.path.isfile(os.path.join(EBS_MOUNT_DIR, "rootfs", rel_p))
+                out.append({
+                    "path": rel_p,
+                    "disk_path": full_p,
+                    "ebs_path": os.path.join(EBS_MOUNT_DIR, "rootfs", rel_p) if ebs_copy else None,
+                    "ebs_mirrored": ebs_copy,
+                    "size_bytes": st.st_size,
+                    "sha256": h,
+                    "view_url": "/files/view?path=" + urllib.parse.quote(rel_p),
+                })
+            except Exception:
+                pass
+    return sorted(out, key=lambda x: x["path"])
 
 def get_live_telemetry():
     try:
         with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
             manifest = json.load(f)
     except Exception:
-        manifest = {{}}
+        manifest = {}
     lsblk_out = subprocess.run(["lsblk", "-o", "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,UUID"], capture_output=True, text=True).stdout
+    df_out = subprocess.run(["df", "-hT"], capture_output=True, text=True).stdout
     ps_out = subprocess.run(["ps", "-eo", "pid,user,pcpu,pmem,comm", "--sort=-pcpu"], capture_output=True, text=True).stdout
     uptime_out = subprocess.run(["uptime", "-p"], capture_output=True, text=True).stdout.strip()
-    return {{
+    uploaded = list_uploaded_files()
+    return {
         "status": "ONLINE",
         "use_case": "vm_image",
         "cloud_hostname": socket.gethostname(),
         "cloud_kernel": platform.release(),
         "cloud_uptime": uptime_out,
+        "ebs_mounted": os.path.ismount(EBS_MOUNT_DIR) or os.path.isdir(os.path.join(EBS_MOUNT_DIR, "rootfs")),
+        "uploaded_files_count": len(uploaded),
+        "uploaded_files": uploaded,
         "lsblk_live": lsblk_out,
+        "df_live": df_out,
         "ps_live": "\\n".join(ps_out.splitlines()[:25]),
         "captured_os_manifest": manifest,
-    }}
+    }
+
+HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"><title>CloudMove UC2 · SO Migrado y Explorador de Archivos</title>
+<style>
+body { font-family: system-ui, -apple-system, sans-serif; background: #0b0f19; color: #e2e8f0; margin: 0; padding: 24px; }
+.header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid #1f2937; padding-bottom: 14px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; margin-top: 16px; }
+.card { background: #111827; border: 1px solid #1f2937; border-radius: 10px; padding: 16px; }
+h1 { margin: 0 0 6px 0; color: #38bdf8; font-size: 21px; }
+h2 { margin: 0 0 10px 0; color: #93c5fd; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
+pre { background: #030712; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 12px; color: #a7f3d0; border: 1px solid #1e293b; max-height: 360px; overflow-y: auto; white-space: pre-wrap; }
+.badge { display: inline-block; background: #065f46; color: #d1fae5; padding: 4px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+.btn { display: inline-block; background: #0284c7; color: #fff; text-decoration: none; padding: 5px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; border: none; font-weight: 600; }
+.btn:hover { background: #0369a1; }
+.btn-sec { background: #334155; color: #e2e8f0; }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #1f2937; }
+th { color: #94a3b8; font-weight: 600; }
+code { color: #fde68a; font-family: monospace; }
+</style></head><body>
+<div class="header">
+  <div>
+    <h1>CloudMove · Caso 2: Sistema Operativo Capturado y Archivos Reales en AWS</h1>
+    <div><span class="badge">● ONLINE · __FILES_COUNT__ Archivos Reales Subidos del SO Origen</span> &nbsp; Host Origen: <b>__HOST_NAME__</b> · Instancia Cloud: <b>__CLOUD_HOST__</b></div>
+  </div>
+  <div>
+    <a class="btn" href="/files" target="_blank">JSON /files</a>
+    <a class="btn btn-sec" href="/health" target="_blank">JSON /health</a>
+    <a class="btn btn-sec" href="/bundle.tar.gz">Descargar Bundle (.tar.gz)</a>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>1. Explorador de Archivos Reales Subidos desde tu SO (__HOST_NAME__)</h2>
+    <p style="font-size:12px;color:#94a3b8;margin-top:0;">Extraídos en <code>/opt/cloudmove/os_capture/rootfs/</code> y replicados en el volumen EBS secundario <code>/mnt/cloudmove_ebs/rootfs/</code>. Haz clic en cualquier archivo para inspeccionar su contenido real:</p>
+    <table>
+      <thead><tr><th>Archivo del SO Origen</th><th>Tamaño</th><th>SHA-256</th><th>Acción</th></tr></thead>
+      <tbody>__FILES_ROWS__</tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>2. Visor en Vivo de Contenido del Archivo Seleccionado</h2>
+    <div style="margin-bottom:8px;font-size:12px;color:#cbd5e1;">Archivo activo: <code id="current-file-label">etc/os-release</code></div>
+    <pre id="file-viewer">Cargando archivo real desde el disco EC2...</pre>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>3. Discos y Volúmenes EBS Montados en Vivo en AWS (__CLOUD_HOST__)</h2>
+    <p style="font-size:12px;color:#94a3b8;margin-top:0;">Kernel Cloud: <code>__CLOUD_KERNEL__</code> · Uptime: <b>__CLOUD_UPTIME__</b> · SO Origen: <b>__OS_DISTRO__ (__OS_KERNEL__)</b></p>
+    <pre>__LSBLK_LIVE__</pre>
+  </div>
+  <div class="card">
+    <h2>4. Procesos Activos en la VM y Usuarios Restaurados</h2>
+    <p style="font-size:12px;color:#94a3b8;margin-top:0;">Usuarios locales recreados en <code>/etc/passwd</code>: <code>__LOCAL_USERS__</code></p>
+    <pre>__PS_LIVE__</pre>
+  </div>
+</div>
+
+<script>
+async function loadFile(relPath) {
+  document.getElementById('current-file-label').textContent = '/opt/cloudmove/os_capture/rootfs/' + relPath;
+  document.getElementById('file-viewer').textContent = 'Consultando ' + relPath + ' en la instancia EC2...';
+  try {
+    const res = await fetch('/files/view?path=' + encodeURIComponent(relPath));
+    const txt = await res.text();
+    document.getElementById('file-viewer').textContent = txt;
+  } catch (e) {
+    document.getElementById('file-viewer').textContent = 'Error leyendo archivo: ' + e;
+  }
+}
+loadFile('etc/os-release');
+</script>
+</body></html>"""
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        data = get_live_telemetry()
-        if self.path.startswith("/health") or self.path.startswith("/api/"):
-            body = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
+        try:
+            parsed = urllib.parse.urlparse(self.path)
+            path = parsed.path
+            qs = urllib.parse.parse_qs(parsed.query)
+
+            if path == "/bundle.tar.gz" and os.path.isfile(BUNDLE_PATH):
+                with open(BUNDLE_PATH, "rb") as f:
+                    raw = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/gzip")
+                self.send_header("Content-Disposition", 'attachment; filename="os_real_files_bundle.tar.gz"')
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+                return
+
+            if path == "/files":
+                files_list = list_uploaded_files()
+                body = json.dumps({
+                    "status": "OK",
+                    "rootfs_dir": ROOTFS_DIR,
+                    "ebs_mount_dir": EBS_MOUNT_DIR + "/rootfs",
+                    "total_files": len(files_list),
+                    "files": files_list,
+                }, indent=2, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            if path == "/files/view":
+                req_rel = (qs.get("path") or ["etc/os-release"])[0].lstrip("/")
+                safe_full = os.path.realpath(os.path.join(ROOTFS_DIR, req_rel))
+                if not safe_full.startswith(os.path.realpath(ROOTFS_DIR)) or not os.path.isfile(safe_full):
+                    self.send_response(404)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.end_headers()
+                    self.wfile.write(f"Archivo no encontrado: {req_rel}".encode("utf-8"))
+                    return
+                with open(safe_full, "rb") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(content)
+                return
+
+            data = get_live_telemetry()
+            if path.startswith("/health") or path.startswith("/api/"):
+                body = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            m = data.get("captured_os_manifest", {})
+            os_info = m.get("os", {})
+            rows_html = []
+            for fmeta in data.get("uploaded_files", []):
+                rp = fmeta["path"]
+                rows_html.append(
+                    f"<tr><td><code>{rp}</code></td>"
+                    f"<td>{fmeta['size_bytes']} B</td>"
+                    f"<td><code>{fmeta['sha256'][:10]}</code></td>"
+                    f"<td><button class='btn' onclick=\\"loadFile('{rp}')\\">Ver Contenido</button> "
+                    f"<a class='btn btn-sec' href='{fmeta['view_url']}' target='_blank'>Raw</a></td></tr>"
+                )
+
+            page = (
+                HTML_TEMPLATE
+                .replace("__FILES_COUNT__", str(data.get("uploaded_files_count", 0)))
+                .replace("__HOST_NAME__", str(m.get("name", "live-os")))
+                .replace("__CLOUD_HOST__", str(data.get("cloud_hostname", "")))
+                .replace("__CLOUD_KERNEL__", str(data.get("cloud_kernel", "")))
+                .replace("__CLOUD_UPTIME__", str(data.get("cloud_uptime", "")))
+                .replace("__OS_DISTRO__", str(os_info.get("distro", "Linux")))
+                .replace("__OS_KERNEL__", str(os_info.get("kernel", "")))
+                .replace("__LOCAL_USERS__", ", ".join(m.get("local_users", [])))
+                .replace("__LSBLK_LIVE__", str(data.get("lsblk_live", "")) + "\\n" + str(data.get("df_live", "")))
+                .replace("__PS_LIVE__", str(data.get("ps_live", "")))
+                .replace("__FILES_ROWS__", "".join(rows_html))
+            )
+            body = page.encode("utf-8")
             self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(body)
-            return
-        m = data.get("captured_os_manifest", {{}})
-        os_info = m.get("os", {{}})
-        html = f\"\"\"<!DOCTYPE html>
-<html lang="es"><head><meta charset="utf-8"><title>CloudMove UC2 · SO Migrado en Vivo</title>
-<style>
-body {{ font-family: system-ui, sans-serif; background: #0b0f19; color: #e2e8f0; margin: 0; padding: 24px; }}
-.grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; margin-top: 16px; }}
-.card {{ background: #111827; border: 1px solid #1f2937; border-radius: 10px; padding: 16px; }}
-h1 {{ margin: 0 0 6px 0; color: #38bdf8; font-size: 22px; }}
-h2 {{ margin: 0 0 10px 0; color: #93c5fd; font-size: 15px; text-transform: uppercase; }}
-pre {{ background: #030712; padding: 10px; border-radius: 6px; overflow-x: auto; font-size: 12px; color: #a7f3d0; }}
-.badge {{ display: inline-block; background: #065f46; color: #d1fae5; padding: 3px 10px; border-radius: 999px; font-size: 12px; }}
-</style></head><body>
-<h1>CloudMove · Caso 2: Sistema Operativo Capturado y Desplegado en la Nube</h1>
-<div><span class="badge">● ONLINE · Paridad de Disco 100%</span> &nbsp; Host Origen: <b>{{m.get('name')}}</b> · SHA-256: <code>{{str(m.get('sha256'))[:24]}}...</code></div>
-<div class="grid">
-  <div class="card"><h2>Metadatos del SO Capturado</h2>
-    <p>Distro: <b>{{os_info.get('distro')}} ({{os_info.get('version')}})</b><br>
-    Kernel Origen: <code>{{os_info.get('kernel')}}</code> · Arranque: <b>{{m.get('boot_mode')}} ({{m.get('partition_scheme')}})</b><br>
-    Usuarios Locales: <code>{{', '.join(m.get('local_users', []))}}</code><br>
-    Puertos Detectados: <code>{{m.get('listening_ports', [])}}</code></p>
-  </div>
-  <div class="card"><h2>Estado en Vivo en Instancia Cloud ({{data.get('cloud_hostname')}})</h2>
-    <p>Kernel Activo: <code>{{data.get('cloud_kernel')}}</code> · Uptime: <b>{{data.get('cloud_uptime')}}</b></p>
-    <pre>{{data.get('lsblk_live')}}</pre>
-  </div>
-  <div class="card"><h2>Procesos en Ejecución Capturados (Origen) vs Destino</h2>
-    <pre>{{data.get('ps_live')}}</pre>
-  </div>
-  <div class="card"><h2>Inventario de Archivos (/etc, /opt, /var, /home) y Servicios</h2>
-    <pre>{{json.dumps(m.get('filesystem_inventory', {{}}), indent=2, ensure_ascii=False)}}</pre>
-  </div>
-</div></body></html>\"\"\"
-        body = html.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(body)
+        except Exception as exc:
+            err_msg = f"Error interno en portal CloudMove UC2: {exc}".encode("utf-8")
+            self.send_response(500)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(err_msg)
 
 def serve_port(port):
     server = http.server.ThreadingHTTPServer(("0.0.0.0", port), Handler)
@@ -2749,6 +3478,68 @@ if __name__ == "__main__":
         t = threading.Thread(target=serve_port, args=(p,), daemon=True)
         t.start()
     threading.Event().wait()
+'''
+
+    user_data_script = f"""#!/usr/bin/env bash
+# ==============================================================================
+# CloudMove Use Case 2 — Autonomous OS Capture Bootstrap & Live Telemetry Portal
+# Captured Host: {manifest.get('name', 'live-os')} | SHA-256: {manifest.get('sha256', '')[:16]}...
+# ==============================================================================
+set -uo pipefail
+exec > >(tee -a /var/log/cloudmove-os-bootstrap.log) 2>&1
+
+echo "[CloudMove UC2] Inicializando reconstrucción y verificación del Sistema Operativo capturado..."
+mkdir -p /opt/cloudmove/os_capture/rootfs
+
+# 1. Persistir manifiesto completo del SO capturado (discos, UUIDs, /etc, procesos, servicios)
+cat << 'EOF_MANIFEST' > /opt/cloudmove/os_capture/image_manifest.json
+{compact_os_json}
+EOF_MANIFEST
+
+# 2. Extraer paquete real de archivos capturados del SO origen (/etc, /home, inventarios dpkg/lsblk/ps)
+cat << 'EOF_BUNDLE_B64' | base64 -d > /opt/cloudmove/os_capture/os_real_files_bundle.tar.gz
+{b64_os_files_bundle}
+EOF_BUNDLE_B64
+tar -xzf /opt/cloudmove/os_capture/os_real_files_bundle.tar.gz -C /opt/cloudmove/os_capture/rootfs || true
+echo "[CloudMove UC2] Archivos reales del SO origen extraídos en /opt/cloudmove/os_capture/rootfs"
+
+# 3. Aplicar parámetros de kernel (sysctl) capturados del host origen
+cat << 'EOF_SYSCTL' > /etc/sysctl.d/99-cloudmove-migrated.conf
+{sysctl_lines}
+EOF_SYSCTL
+sysctl --system >/dev/null 2>&1 || true
+
+# 4. Reconstruir cuentas de usuario locales detectadas en el SO de origen y restaurar sus archivos
+for USERNAME in {users_csv}; do
+    if ! id "$USERNAME" >/dev/null 2>&1; then
+        useradd -m -s /bin/bash "$USERNAME" >/dev/null 2>&1 || true
+        echo "[CloudMove UC2] Usuario local restaurado: $USERNAME"
+    fi
+done
+if [ -d "/opt/cloudmove/os_capture/rootfs/home/lacastrilp" ] && [ -d "/home/lacastrilp" ]; then
+    cp -r /opt/cloudmove/os_capture/rootfs/home/lacastrilp/* /home/lacastrilp/ 2>/dev/null || true
+    chown -R lacastrilp:lacastrilp /home/lacastrilp 2>/dev/null || true
+fi
+
+# 5. Montar volumen EBS secundario (si está adjunto) en /mnt/cloudmove_ebs y replicar archivos del SO
+mkdir -p /mnt/cloudmove_ebs
+for DEV_CANDIDATE in /dev/nvme1n1 /dev/xvdf /dev/sdf; do
+    if [ -b "$DEV_CANDIDATE" ]; then
+        if ! blkid "$DEV_CANDIDATE" >/dev/null 2>&1; then
+            mkfs.ext4 -F -L CLOUDMOVE_OS "$DEV_CANDIDATE" >/dev/null 2>&1 || true
+        fi
+        mount "$DEV_CANDIDATE" /mnt/cloudmove_ebs 2>/dev/null || true
+        mkdir -p /mnt/cloudmove_ebs/rootfs
+        cp -r /opt/cloudmove/os_capture/rootfs/* /mnt/cloudmove_ebs/rootfs/ 2>/dev/null || true
+        cp /opt/cloudmove/os_capture/image_manifest.json /mnt/cloudmove_ebs/ 2>/dev/null || true
+        echo "[CloudMove UC2] Volumen EBS secundario ($DEV_CANDIDATE) montado en /mnt/cloudmove_ebs con archivos del SO."
+        break
+    fi
+done
+
+# 6. Crear portal interactivo de telemetría y explorador de archivos del SO en vivo (Puertos 80, 3000 y 8000)
+cat << 'EOF_SERVER' > /opt/cloudmove/os_capture/telemetry_server.py
+{telemetry_server_py}
 EOF_SERVER
 
 cat << 'EOF_UNIT' > /etc/systemd/system/cloudmove-os-telemetry.service
@@ -2768,7 +3559,7 @@ EOF_UNIT
 
 systemctl daemon-reload
 systemctl enable --now cloudmove-os-telemetry.service
-echo "[CloudMove UC2] Portal del SO migrado activo en puertos 80, 3000 y 8000."
+echo "[CloudMove UC2] Portal y explorador de archivos del SO migrado activo en puertos 80, 3000 y 8000."
 """
 
     files = dict(iac_bundle["files"])

@@ -467,7 +467,11 @@ class MigrationOrchestrator:
                     source_type=source_type,
                     prefer_continuous_replication=prefer_continuous,
                 )
-                cmir_obj = build_vm_image_cmir(manifest, target_provider=provider)
+                cmir_obj = build_vm_image_cmir(
+                    manifest,
+                    target_provider=provider,
+                    user_decisions=src_cfg.get("user_decisions"),
+                )
                 graph = build_graph(cmir_obj)
                 dep_analysis = resolve_dependencies(graph, [manifest["image_id"], f"vm-{manifest['name'].lower()}"])
                 stages = build_vm_image_migration_stages(manifest, compat, target_provider=provider)
@@ -1107,13 +1111,14 @@ class MigrationOrchestrator:
         actor_id: str = "architect@cloudmove.local",
     ) -> Dict[str, Any]:
         """
-        Update user transformation decisions for a Case 1 (`app_source`) migration job,
-        rebuild the CMIR v2.1 graph, re-evaluate viability, and regenerate all Terraform IaC
-        and deployment artifacts in real time.
+        Update user transformation decisions for Case 1 (`app_source`) or Case 2 (`vm_image`)
+        migration jobs, rebuild the CMIR v2.1 graph, re-evaluate viability, and regenerate
+        all Terraform IaC and deployment artifacts in real time.
         """
         job = self.get_migration(migration_id)
-        if job.get("use_case") != "app_source":
-            raise ValueError("La personalización de decisiones GitHub -> Nube aplica al Caso 1 (app_source).")
+        uc = job.get("use_case")
+        if uc not in ("app_source", "vm_image"):
+            raise ValueError("La personalización de decisiones aplica al Caso 1 (app_source) y Caso 2 (vm_image).")
 
         provider = job["target_provider"]
         src_cfg = dict(job.get("source_config") or {})
@@ -1122,35 +1127,60 @@ class MigrationOrchestrator:
         src_cfg["user_decisions"] = merged_decisions
         job["source_config"] = src_cfg
 
-        app_disc = dict(job.get("source_environment") or {})
-        deployment_mode = src_cfg.get("deployment_mode", "vm_rehost")
-
-        cmir_obj = build_application_cmir(
-            app_disc,
-            target_provider=provider,
-            deployment_mode=deployment_mode,
-            user_decisions=merged_decisions,
-        )
-        viability = evaluate_app_migration_viability(
-            app_disc, cmir_obj, target_provider=provider, deployment_mode=deployment_mode
-        )
-        job["source_environment"] = app_disc
-        job["cmir"] = cmir_obj.model_dump()
-        job["dependency_analysis"] = viability["dependency_analysis"]
-        job["compatibility_assessment"] = viability
-
-        artifacts = generate_app_migration_artifacts(app_disc, cmir_obj, target_provider=provider)
         from app.migration.deployment_guide_generator import generate_deployment_guide
 
-        guide_md = generate_deployment_guide(
-            use_case="app_source",
-            target_provider=provider,
-            job_name=job.get("name", "migrated-workload"),
-            migration_id=migration_id,
-            source_environment=app_disc,
-            artifacts_files=artifacts.get("files", {}) or {},
-            target_config=job.get("target_config", {}) or {},
-        )
+        if uc == "vm_image":
+            manifest = dict(job.get("source_environment") or {})
+            cmir_obj = build_vm_image_cmir(
+                manifest,
+                target_provider=provider,
+                user_decisions=merged_decisions,
+            )
+            compat = job.get("compatibility_assessment") or evaluate_vm_image_compatibility(
+                manifest, target_provider=provider
+            )
+            job["source_environment"] = manifest
+            job["cmir"] = cmir_obj.model_dump()
+            artifacts = generate_vm_image_migration_artifacts(
+                manifest, compat, cmir_obj, target_provider=provider
+            )
+            guide_md = generate_deployment_guide(
+                use_case="vm_image",
+                target_provider=provider,
+                job_name=job.get("name", "migrated-workload"),
+                migration_id=migration_id,
+                source_environment=manifest,
+                artifacts_files=artifacts.get("files", {}) or {},
+                target_config=job.get("target_config", {}) or {},
+            )
+        else:
+            app_disc = dict(job.get("source_environment") or {})
+            deployment_mode = src_cfg.get("deployment_mode", "vm_rehost")
+
+            cmir_obj = build_application_cmir(
+                app_disc,
+                target_provider=provider,
+                deployment_mode=deployment_mode,
+                user_decisions=merged_decisions,
+            )
+            viability = evaluate_app_migration_viability(
+                app_disc, cmir_obj, target_provider=provider, deployment_mode=deployment_mode
+            )
+            job["source_environment"] = app_disc
+            job["cmir"] = cmir_obj.model_dump()
+            job["dependency_analysis"] = viability["dependency_analysis"]
+            job["compatibility_assessment"] = viability
+
+            artifacts = generate_app_migration_artifacts(app_disc, cmir_obj, target_provider=provider)
+            guide_md = generate_deployment_guide(
+                use_case="app_source",
+                target_provider=provider,
+                job_name=job.get("name", "migrated-workload"),
+                migration_id=migration_id,
+                source_environment=app_disc,
+                artifacts_files=artifacts.get("files", {}) or {},
+                target_config=job.get("target_config", {}) or {},
+            )
         artifacts["files"]["DEPLOYMENT_INSTRUCTIONS.md"] = guide_md
         artifacts["deployment_guide"] = guide_md
         job["deployment_guide"] = guide_md

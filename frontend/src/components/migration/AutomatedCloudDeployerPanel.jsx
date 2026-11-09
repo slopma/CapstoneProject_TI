@@ -1085,22 +1085,34 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                 >
                   <div>
                     <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>
-                      {isVmCase ? "Portal Web del SO Migrado en Vivo (Puerto 3000)" : "Aplicación Frontend (Puerto 3000)"}
+                      {isVmCase ? "Portal Web y Explorador de Archivos del SO (Puerto 3000)" : "Aplicación Frontend (Puerto 3000)"}
                     </div>
                     <div style={{ fontSize: 12, color: "#475569", marginBottom: 4 }}>
                       {isVmCase
-                        ? "Muestra discos lsblk, procesos ps aux, archivos /etc y paridad del SO en la VM:"
+                        ? "Explorador interactivo de archivos reales subidos (/etc, /home), discos lsblk y procesos:"
                         : "Interfaz web principal desplegada en la instancia:"}
                     </div>
                     {publicIp ? (
-                      <a
-                        href={`http://${publicIp}:3000`}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ fontSize: 13, fontWeight: 700, color: "#0972d3", fontFamily: "monospace" }}
-                      >
-                        http://{publicIp}:3000 ↗
-                      </a>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                        <a
+                          href={`http://${publicIp}:3000`}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ fontSize: 13, fontWeight: 700, color: "#0972d3", fontFamily: "monospace" }}
+                        >
+                          http://{publicIp}:3000 ↗ (Portal + Explorador)
+                        </a>
+                        {isVmCase && (
+                          <a
+                            href={`http://${publicIp}:3000/files`}
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{ fontSize: 12, fontWeight: 600, color: "#0284c7", fontFamily: "monospace" }}
+                          >
+                            http://{publicIp}:3000/files ↗ (JSON Archivos Subidos)
+                          </a>
+                        )}
+                      </div>
                     ) : (
                       <code style={{ fontSize: 12, color: "#0369a1" }}>http://&lt;IP_PUBLICA_EC2&gt;:3000 (Disponible tras terraform apply)</code>
                     )}
@@ -1108,22 +1120,44 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
 
                   <div>
                     <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>
-                      {isVmCase ? "API JSON de Telemetría y Manifiesto del SO (Puerto 8000)" : "Backend API & Healthcheck (Puerto 8000)"}
+                      {isVmCase ? "API JSON de Telemetría y Consultas Directas de Archivos" : "Backend API & Healthcheck (Puerto 8000)"}
                     </div>
                     <div style={{ fontSize: 12, color: "#475569", marginBottom: 4 }}>
                       {isVmCase
-                        ? "Devuelve el JSON completo del SO capturado y estado en vivo del kernel cloud:"
+                        ? "Consulta directa de telemetría JSON y lectura de archivos reales en la VM:"
                         : "Documentación OpenAPI y sonda de salud:"}
                     </div>
                     {publicIp ? (
-                      <a
-                        href={`http://${publicIp}:8000/health`}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ fontSize: 13, fontWeight: 700, color: "#0972d3", fontFamily: "monospace" }}
-                      >
-                        http://{publicIp}:8000/health ↗
-                      </a>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                        <a
+                          href={`http://${publicIp}:8000/health`}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ fontSize: 13, fontWeight: 700, color: "#0972d3", fontFamily: "monospace" }}
+                        >
+                          http://{publicIp}:8000/health ↗
+                        </a>
+                        {isVmCase && (
+                          <>
+                            <a
+                              href={`http://${publicIp}:3000/files/view?path=etc/os-release`}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{ fontSize: 11.5, color: "#0369a1", fontFamily: "monospace" }}
+                            >
+                              Ver /etc/os-release en VM ↗
+                            </a>
+                            <a
+                              href={`http://${publicIp}:3000/files/view?path=home/lacastrilp/archivos_usuario_origen.txt`}
+                              target="_blank"
+                              rel="noreferrer"
+                              style={{ fontSize: 11.5, color: "#0369a1", fontFamily: "monospace" }}
+                            >
+                              Ver archivos de /home/lacastrilp en VM ↗
+                            </a>
+                          </>
+                        )}
+                      </div>
                     ) : (
                       <code style={{ fontSize: 12, color: "#0369a1" }}>http://&lt;IP_PUBLICA_EC2&gt;:8000/health</code>
                     )}
@@ -1179,16 +1213,15 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                     }}
                   >
 {isVmCase
-  ? `# 1. Consultar manifiesto completo del SO capturado (discos, particiones, procesos, archivos y servicios):
-cat generated/deployments/${migrationId}/image_manifest.json | head -n 45
+  ? `# 1. Abrir el Explorador Interactivo de Archivos Reales del SO en la VM (Puerto 3000):
+curl -s http://${publicIp || "<IP_PUBLICA_EC2>"}:3000/files | python3 -m json.tool
 
-# 2. Consultar los ${(srcEnv.running_processes || []).length} procesos en ejecución y ${(srcEnv.listening_ports || []).length} puertos detectados:
-cat generated/deployments/${migrationId}/processes_manifest.json
+# 2. Consultar archivos reales de tu SO (/etc/os-release, /etc/fstab, /home/lacastrilp) subidos a la VM en AWS:
+curl -s "http://${publicIp || "<IP_PUBLICA_EC2>"}:3000/files/view?path=etc/os-release"
+curl -s "http://${publicIp || "<IP_PUBLICA_EC2>"}:3000/files/view?path=etc/fstab"
+curl -s "http://${publicIp || "<IP_PUBLICA_EC2>"}:3000/files/view?path=home/lacastrilp/archivos_usuario_origen.txt"
 
-# 3. Consultar inventario de archivos del SO (/etc, /opt, /srv, /var, /home) y módulos del kernel:
-cat generated/deployments/${migrationId}/filesystem_manifest.json
-
-# 4. Consultar telemetría del SO desplegado en AWS EC2 (una vez ejecutado terraform apply):
+# 3. Consultar telemetría en vivo (discos EBS montados lsblk, procesos ps y manifiesto del SO):
 curl -s http://${publicIp || "<IP_PUBLICA_EC2>"}:8000/health | python3 -m json.tool`
   : `# 1. Consultar recursos planificados / creados en el workspace de Terraform:
 terraform -chdir=generated/deployments/${migrationId} state list
@@ -1325,6 +1358,44 @@ curl -Iv http://${publicIp || "<IP_PUBLICA_EC2>"}:8000/docs`}
             {/* PESTAÑA 5: ARCHIVOS DEL SO (/ETC, /OPT, /VAR, /HOME) Y SERVICIOS SYSTEMD */}
             {consultTab === "files_services" && isVmCase && (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ backgroundColor: "#f0fdf4", padding: 12, borderRadius: 6, border: "1px solid #86efac" }}>
+                  <strong style={{ fontSize: 13, color: "#14532d", display: "block", marginBottom: 6 }}>
+                    Archivos Reales Subidos de tu SO a la VM en AWS (<code>/opt/cloudmove/os_capture/rootfs</code> y EBS <code>/mnt/cloudmove_ebs/rootfs</code>):
+                  </strong>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {[
+                      "etc/os-release",
+                      "etc/fstab",
+                      "etc/hostname",
+                      "etc/hosts",
+                      "etc/passwd",
+                      "etc/crontab",
+                      "home/lacastrilp/archivos_usuario_origen.txt",
+                      "home/lacastrilp/CapstoneProject_TI/README.md",
+                      "var/log/cloudmove_source_lsblk_df.txt",
+                      "var/log/cloudmove_source_dpkg_packages.txt",
+                      "var/log/cloudmove_source_processes_ports.txt",
+                    ].map((relPath) =>
+                      publicIp ? (
+                        <a
+                          key={relPath}
+                          href={`http://${publicIp}:3000/files/view?path=${encodeURIComponent(relPath)}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="cm-badge observed"
+                          style={{ textDecoration: "none", fontSize: 12, cursor: "pointer" }}
+                        >
+                          <code>/{relPath}</code> ↗
+                        </a>
+                      ) : (
+                        <span key={relPath} className="cm-badge neutral" style={{ fontSize: 12 }}>
+                          <code>/{relPath}</code>
+                        </span>
+                      )
+                    )}
+                  </div>
+                </div>
+
                 <div style={{ backgroundColor: "#ffffff", padding: 12, borderRadius: 6, border: "1px solid #cbd5e1" }}>
                   <strong style={{ fontSize: 13, color: "#0f172a", display: "block", marginBottom: 8 }}>
                     Inventario de Directorios y Archivos Críticos del Sistema Operativo:
