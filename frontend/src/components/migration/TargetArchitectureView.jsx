@@ -6,7 +6,7 @@ export default function TargetArchitectureView({ job }) {
   if (!job) {
     return (
       <div className="cm-card" style={{ padding: 40, textAlign: "center" }}>
-        <div style={{ fontSize: 44, marginBottom: 12 }}>☁️</div>
+        <div style={{ fontSize: 44, marginBottom: 12 }}></div>
         <h3 style={{ fontSize: 18, color: "#0f172a", marginBottom: 8, fontWeight: 700 }}>
           Sin arquitectura objetivo activa
         </h3>
@@ -93,21 +93,21 @@ export default function TargetArchitectureView({ job }) {
             className={`cm-btn sm ${activeViewTab === "diagram" ? "primary" : "secondary"}`}
             onClick={() => setActiveViewTab("diagram")}
           >
-            🗺️ Diagrama Visual de Infraestructura
+            Diagrama Visual de Infraestructura
           </button>
           <button
             type="button"
             className={`cm-btn sm ${activeViewTab === "tf_inventory" ? "primary" : "secondary"}`}
             onClick={() => setActiveViewTab("tf_inventory")}
           >
-            📜 Recursos Terraform Creados ({terraformResources.length})
+            Recursos Terraform Creados ({terraformResources.length})
           </button>
           <button
             type="button"
             className={`cm-btn sm ${activeViewTab === "flows" ? "primary" : "secondary"}`}
             onClick={() => setActiveViewTab("flows")}
           >
-            ⚡ Malla de Tráfico y Puertos
+            Malla de Tráfico y Puertos
           </button>
         </div>
 
@@ -180,7 +180,7 @@ export default function TargetArchitectureView({ job }) {
             >
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
                 <strong style={{ fontSize: 14.5, color: "#0972d3" }}>
-                  ☁ AWS Cloud (us-east-1 N. Virginia) · Definido en <code>provider.tf</code>
+                  AWS Cloud (us-east-1 N. Virginia) · Definido en <code>provider.tf</code>
                 </strong>
                 <span className="cm-badge" style={{ backgroundColor: "#eff6ff", color: "#1d4ed8" }}>
                   Infraestructura CloudMove Gestionada
@@ -200,7 +200,7 @@ export default function TargetArchitectureView({ job }) {
                 >
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                     <strong style={{ fontSize: 13.5, color: "#166534" }}>
-                      🔒 aws_vpc.target_vpc (10.0.0.0/16) · cloudmove-target-vpc
+                      aws_vpc.target_vpc (10.0.0.0/16) · cloudmove-target-vpc
                     </strong>
                     <span style={{ fontSize: 11.5, color: "#15803d", fontWeight: 600 }}>
                       aws_internet_gateway.igw + aws_route_table.public_rt
@@ -231,7 +231,7 @@ export default function TargetArchitectureView({ job }) {
                       <div style={{ padding: 10, backgroundColor: "#faf5ff", borderRadius: 6, border: "1px solid #c084fc", marginBottom: 10 }}>
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                           <strong style={{ fontSize: 13, color: "#6b21a8" }}>
-                            ⚖ aws_lb.app_alb (ALB Multi-AZ) + aws_lb_target_group.app_tg
+                            aws_lb.app_alb (ALB Multi-AZ) + aws_lb_target_group.app_tg
                           </strong>
                           <span className="cm-badge validated" style={{ fontSize: 11 }}>
                             HTTP :80 /health
@@ -255,8 +255,8 @@ export default function TargetArchitectureView({ job }) {
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                         <strong style={{ fontSize: 13, color: "#0f172a" }}>
                           {isHA
-                            ? `🖥 aws_autoscaling_group.compute_host_asg (Min: 1, Max: 3)`
-                            : `🖥 aws_instance.compute_host (t3.micro Free Tier / Ubuntu 22.04 LTS)`}
+                            ? `aws_autoscaling_group.compute_host_asg (Min: 1, Max: 3)`
+                            : `aws_instance.compute_host (t3.micro Free Tier / Ubuntu 22.04 LTS)`}
                         </strong>
                         <span className="cm-badge observed" style={{ fontSize: 11 }}>
                           {isHA ? "aws_launch_template.compute_host_lt" : "Swap 2GB anti-OOM"}
@@ -336,7 +336,7 @@ export default function TargetArchitectureView({ job }) {
                       }}
                     >
                       <div style={{ fontWeight: 700, fontSize: 12.5, color: "#854d0e" }}>
-                        🔐 aws_secretsmanager_secret.secrets
+                        aws_secretsmanager_secret.secrets
                       </div>
                       <div style={{ fontSize: 11.5, color: "#713f12", marginTop: 4 }}>
                         ID: <code>cloudmove/production/{appName.toLowerCase()}-secrets</code>
@@ -355,7 +355,7 @@ export default function TargetArchitectureView({ job }) {
                       }}
                     >
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <strong style={{ fontSize: 12.5, color: "#0f172a" }}>⚡ BaaS Supabase</strong>
+                        <strong style={{ fontSize: 12.5, color: "#0f172a" }}>BaaS Supabase</strong>
                         <span className="cm-badge" style={{ fontSize: 10, backgroundColor: "#e2e8f0", color: "#334155" }}>
                           EXTERNO
                         </span>
@@ -364,7 +364,7 @@ export default function TargetArchitectureView({ job }) {
                         PostgreSQL 15 Cloud + Auth
                       </div>
                       <div style={{ fontSize: 11, color: "#166534", marginTop: 4, fontWeight: 600 }}>
-                        ✓ Preservado externamente sin costo de RDS redundante
+                        [OK] Preservado externamente sin costo de RDS redundante
                       </div>
                     </div>
                   </div>

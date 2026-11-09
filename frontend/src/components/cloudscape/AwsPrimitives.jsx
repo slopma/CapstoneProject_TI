@@ -186,13 +186,13 @@ export function AwsTabs({
  */
 export function AwsStatusIndicator({ type = "info", children }) {
   const icons = {
-    success: "✓",
-    observed: "✓",
-    validated: "✓",
-    warning: "⚠",
-    inferred: "⚠",
-    error: "✕",
-    danger: "✕",
+    success: "OK",
+    observed: "OK",
+    validated: "OK",
+    warning: "!",
+    inferred: "!",
+    error: "X",
+    danger: "X",
     info: "●",
     derived: "●",
     pending: "○",
@@ -231,9 +231,9 @@ export function AwsAlert({
   style,
 }) {
   const icons = {
-    success: "✓",
-    warning: "⚠",
-    error: "✕",
+    success: "OK",
+    warning: "!",
+    error: "X",
     info: "ℹ",
   };
   return (

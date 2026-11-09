@@ -4,6 +4,10 @@ import RepositoryTreeViewer from "./RepositoryTreeViewer";
 import ExternalServicesCredentialsCard from "./ExternalServicesCredentialsCard";
 import TargetArchitectureView from "./TargetArchitectureView";
 import AutomatedCloudDeployerPanel from "./AutomatedCloudDeployerPanel";
+import PlannedCloudStructureGraphModal, {
+  StructuredGithubEvidenceView,
+  PreflightPreventiveChecksBanner,
+} from "./PlannedCloudStructureGraphModal";
 import { apiFetch } from "../../utils/apiClient";
 import {
   AwsPageHeader,
@@ -84,6 +88,8 @@ function GithubToCloudTransformationSelector({
   applyingChanges = false,
   isJobView = false,
 }) {
+  const [showGraphicalStructureModal, setShowGraphicalStructureModal] = useState(false);
+
   if (!catalog || !Array.isArray(catalog.items) || catalog.items.length === 0) {
     return null;
   }
@@ -165,20 +171,53 @@ function GithubToCloudTransformationSelector({
           </p>
         </div>
 
-        {isJobView && onApplyToExistingJob && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <button
             type="button"
-            className="cm-btn primary sm"
-            onClick={onApplyToExistingJob}
-            disabled={applyingChanges}
-            style={{ whiteSpace: "nowrap", fontWeight: 700 }}
+            className="cm-btn sm"
+            onClick={() => setShowGraphicalStructureModal(true)}
+            style={{
+              backgroundColor: "#0F1B2A",
+              color: "#ffffff",
+              border: "1px solid #0972D3",
+              fontWeight: 700,
+              whiteSpace: "nowrap",
+              padding: "7px 14px",
+            }}
           >
-            {applyingChanges
-              ? "Regenerando Terraform..."
-              : `Aplicar Elecciones y Regenerar Terraform (${pUpper})`}
+            Verificar Gráficamente Estructura a Crear en {pUpper}
           </button>
-        )}
+
+          {isJobView && onApplyToExistingJob && (
+            <button
+              type="button"
+              className="cm-btn primary sm"
+              onClick={onApplyToExistingJob}
+              disabled={applyingChanges}
+              style={{ whiteSpace: "nowrap", fontWeight: 700 }}
+            >
+              {applyingChanges
+                ? "Regenerando Terraform..."
+                : `Aplicar Elecciones y Regenerar Terraform (${pUpper})`}
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Diagnóstico Preventivo Pre-Flight Anti-Fallos */}
+      <PreflightPreventiveChecksBanner
+        checks={catalog.preflight_preventive_checks}
+        targetProvider={pUpper}
+      />
+
+      {/* Modal Verificador Gráfico de la Estructura AWS / GCP */}
+      <PlannedCloudStructureGraphModal
+        isOpen={showGraphicalStructureModal}
+        onClose={() => setShowGraphicalStructureModal(false)}
+        catalog={catalog}
+        decisions={activeDecisions}
+        targetProvider={targetProvider}
+      />
 
       {/* Lista de elementos descubiertos en GitHub y sus opciones de transformación en la nube */}
       <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
@@ -230,15 +269,7 @@ function GithubToCloudTransformationSelector({
                       <span style={{ fontSize: 13.5, color: "#5F6B7A" }}>({gh.subtitle})</span>
                     )}
                   </div>
-                  <div style={{ fontSize: 13.5, color: "#16191F", marginTop: 4 }}>
-                    <strong>Evidencia en GitHub:</strong> {gh.evidence_detail}
-                    {Array.isArray(gh.files) && gh.files.length > 0 && (
-                      <span>
-                        {" "}
-                        · Archivos: <code>{gh.files.join(", ")}</code>
-                      </span>
-                    )}
-                  </div>
+                  <StructuredGithubEvidenceView gh={gh} targetProvider={pUpper} />
                   <div
                     style={{
                       fontSize: 13.5,
@@ -423,9 +454,24 @@ function GithubToCloudTransformationSelector({
           <strong style={{ fontSize: 14, color: "#16191F" }}>
             Resumen en Tiempo Real: ¿Qué se va a crear exactamente en {pUpper} según tu selección? ({liveResourcesPreview.length} bloques)
           </strong>
-          <span className="cm-badge observed" style={{ fontSize: 12.5 }}>
-            Sincronizado con Generador Terraform
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="cm-btn sm"
+              onClick={() => setShowGraphicalStructureModal(true)}
+              style={{
+                backgroundColor: "#F2F8FD",
+                color: "#0972D3",
+                border: "1px solid #0972D3",
+                fontWeight: 700,
+              }}
+            >
+              Ver Diagrama Gráfico de la Estructura en {pUpper}
+            </button>
+            <span className="cm-badge observed" style={{ fontSize: 12.5 }}>
+              Sincronizado con Generador Terraform
+            </span>
+          </div>
         </div>
         <div className="cm-table-wrap">
           <table className="cm-table">
@@ -1287,7 +1333,16 @@ export default function MigrationOrchestratorWorkspace({
                     : "Ej. Oleada Datacenter Principal → GCP"
                 }
                 value={newName}
-                onChange={(e) => setNewName(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (/^(ghp_|github_pat_|gho_|ghu_|ghs_|ghr_)/i.test(val.trim())) {
+                    setGithubToken(val.trim());
+                    setShowAdvancedGithub(true);
+                    setStatusBanner("Token de GitHub detectado automáticamente y movido al campo Personal Access Token (PAT).");
+                    return;
+                  }
+                  setNewName(val);
+                }}
               />
             </div>
 
@@ -2367,6 +2422,7 @@ export default function MigrationOrchestratorWorkspace({
                   badge:
                     currentJob.blockers?.length > 0 ? `${currentJob.blockers.length} bloqueo(s)` : undefined,
                 },
+                { id: "terraform_ops", label: "Consola Operativa Terraform" },
                 { id: "target_arch", label: "Arquitectura Objetivo (Cloud)" },
                 { id: "credentials", label: "Servicios Externos y Credenciales" },
                 { id: "source", label: currentJob.use_case === "app_source" ? "GitHub → Nube" : "Origen" },
@@ -2393,7 +2449,7 @@ export default function MigrationOrchestratorWorkspace({
                       role="listitem"
                       className={`cm-state-step ${isCurrent ? "current" : isCompleted ? "completed" : ""}`}
                     >
-                      {isCompleted ? "✓ " : `${idx + 1}. `}
+                      {isCompleted ? "[OK] " : `${idx + 1}. `}
                       {st}
                     </span>
                   );
@@ -2618,12 +2674,13 @@ export default function MigrationOrchestratorWorkspace({
               </div>
             )}
 
-            {/* Ejecutor de Despliegue Automatizado en la pestaña de Ejecución */}
-            {inspectorTab === "execution" && (
+            {/* Ejecutor y Consola Operativa de Despliegue Automatizado Terraform */}
+            {(inspectorTab === "execution" || inspectorTab === "terraform_ops") && (
               <AutomatedCloudDeployerPanel
                 job={currentJob}
                 onDeploymentCompleted={() => {
-                  fetchJobDetails(currentJob.migration_id);
+                  fetchJobs(currentJob.migration_id);
+                  fetchPersistence();
                 }}
               />
             )}
@@ -2830,6 +2887,82 @@ export default function MigrationOrchestratorWorkspace({
                     />
                   )}
                 </div>
+
+                {/* Backups de Base de Datos (.dump / .sql) y Semillas JSON Detectadas */}
+                {srcEnv.database_backups?.has_backups && (
+                  <div className="cm-card" style={{ border: "2px solid #16a34a", backgroundColor: "#f0fdf4" }}>
+                    <div className="cm-card-title">
+                      <span style={{ color: "#14532d", fontWeight: 700 }}>
+                        Backups de Base de Datos y Semillas Detectados para Recreación Automática en {currentJob.target_provider?.toUpperCase()}
+                      </span>
+                      <span className="cm-badge observed">
+                        {srcEnv.database_backups.primary_backup_file} · {srcEnv.database_backups.total_public_tables} Tablas Públicas · {srcEnv.database_backups.total_rows_all_schemas} Filas Totales
+                      </span>
+                    </div>
+                    {(srcEnv.database_backups.backups || []).map((bkp) => (
+                      <div key={bkp.path} className="cm-card-subtle" style={{ backgroundColor: "#ffffff", marginBottom: 10 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                          <div>
+                            <strong style={{ fontSize: 14, color: "#14532d" }}>
+                              <code>{bkp.path}</code>
+                            </strong>{" "}
+                            <span className="cm-badge info">{bkp.format}</span>{" "}
+                            <span className="cm-badge observed">{bkp.engine} (v{bkp.dumped_from_version})</span>
+                          </div>
+                          <span style={{ fontSize: 13, color: "#475569" }}>
+                            Tamaño: <strong>{(bkp.size_bytes / 1024).toFixed(1)} KB</strong> · Dominio public: <strong>{bkp.public_rows_count} filas</strong> · Total (incl. auth/storage): <strong>{bkp.total_rows_count} filas</strong>
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 13, color: "#334155", marginBottom: 8 }}>
+                          <div><strong>Esquemas incluidos:</strong> <code>{(bkp.schemas || []).join(", ")}</code></div>
+                          <div><strong>Extensiones requeridas:</strong> <code>{(bkp.extensions || []).join(", ")}</code></div>
+                          {bkp.public_functions?.length > 0 && (
+                            <div>
+                              <strong>Funciones RPC / SQL Espaciales ({bkp.public_functions.length}):</strong>{" "}
+                              <code>{bkp.public_functions.map((f) => f.signature).join(" · ")}</code>
+                            </div>
+                          )}
+                        </div>
+                        {bkp.non_empty_tables?.length > 0 && (
+                          <div className="cm-table-wrap">
+                            <table className="cm-table">
+                              <thead>
+                                <tr>
+                                  <th>Tabla en Backup</th>
+                                  <th>Filas a Restaurar en {currentJob.target_provider?.toUpperCase()}</th>
+                                  <th>Columnas Detectadas</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {bkp.non_empty_tables.map((t) => (
+                                  <tr key={t.table}>
+                                    <td><strong><code>{t.table}</code></strong></td>
+                                    <td><span className="cm-badge observed">{t.rows} filas</span></td>
+                                    <td><code>{(t.columns || []).join(", ")}</code></td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {srcEnv.database_backups.seed_files?.length > 0 && (
+                      <div className="cm-card-subtle" style={{ backgroundColor: "#ffffff" }}>
+                        <strong style={{ fontSize: 13.5, display: "block", marginBottom: 4 }}>
+                          Archivos Semilla JSON Adicionales en el Repositorio ({srcEnv.database_backups.seed_files.length}):
+                        </strong>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          {srcEnv.database_backups.seed_files.map((sf) => (
+                            <span key={sf.path} className="cm-badge neutral" style={{ fontSize: 12.5 }}>
+                              <code>{sf.path}</code> ({sf.format}: {sf.record_count} registros)
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Variables de Entorno con Redacción de Secretos */}
                 {envVars.length > 0 && (

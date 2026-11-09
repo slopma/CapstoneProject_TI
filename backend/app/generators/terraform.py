@@ -130,6 +130,13 @@ variable "github_token" {
     app_ingress_ports = {80, 443}
     primary_http_port = 80
     health_check_path = "/health"
+    created_instance_ids: List[str] = []
+    created_db_ids: List[str] = []
+
+    expose_db_port_externally = not any(
+        (r.get("metadata") or {}).get("expose_db_port_externally") is False
+        for r in resources
+    )
     for r in resources:
         if r.get("cmir_type") == "port":
             pval = r.get("metadata", {}).get("port")
@@ -147,6 +154,12 @@ variable "github_token" {
             first_hp = meta["health_endpoints"][0]
             if isinstance(first_hp, str) and first_hp.startswith("/"):
                 health_check_path = first_hp
+        if expose_db_port_externally and (
+            r.get("type") in ("containerized_in_compose", "aws_db_instance")
+            or meta.get("database_migration_plan")
+            or "postg" in str(r.get("engine", "")).lower()
+        ):
+            app_ingress_ports.add(5432)
 
     sg_ingress_blocks = [
         '  ingress {',
@@ -169,7 +182,8 @@ variable "github_token" {
         ])
 
     has_managed_db = any(
-        r.get("type") == "aws_db_instance"
+        (r.get("type") in ("aws_db_instance", "database_instance", "database") or r.get("cmir_type") in ("database", "database_instance"))
+        and r.get("type") != "containerized_in_compose"
         for r in resources
     )
     has_cache = any(
@@ -448,6 +462,9 @@ variable "github_token" {
         )
     ]
 
+    created_instance_ids: List[str] = []
+    created_db_ids: List[str] = []
+
     for r in resources:
         r_id = r.get("safe_id", r.get("id").replace("-", "_"))
         r_name = r.get("safe_name", r.get("name"))
@@ -514,7 +531,7 @@ variable "github_token" {
 
         main_lines.append(f'# Migrated Resource: {r.get("name")} ({r.get("id")})')
 
-        if r_type in ("aws_instance", "aws_ecs_task_definition"):
+        if r_type in ("aws_instance", "aws_ecs_task_definition", "container", "virtual_machine", "vm", "host", "compute") or cmir_type in ("virtual_machine", "vm", "host", "compute"):
             ami_expr = "var.ami_id != \"\" ? var.ami_id : data.aws_ami.ubuntu.id"
             for other_r in resources:
                 if other_r.get("type") in ("aws_ami", "machine_image") or other_r.get("cmir_type") in ("machine_image", "vm_image"):
@@ -562,6 +579,8 @@ variable "github_token" {
                     '',
                 ])
 
+            root_vol_gb = int(meta.get("root_volume_size_gb") or 30)
+            created_instance_ids.append(r_id)
             main_lines.extend([
                 f'resource "aws_instance" "{r_id}" {{',
                 f'  ami                         = {ami_expr}',
@@ -570,6 +589,13 @@ variable "github_token" {
                 '  vpc_security_group_ids      = [aws_security_group.app_sg.id]',
                 '  associate_public_ip_address = true',
                 '  user_data                   = file("${path.module}/user_data.sh")',
+                '  user_data_replace_on_change = true',
+                '  root_block_device {',
+                f'    volume_size           = {root_vol_gb}',
+                '    volume_type           = "gp3"',
+                '    encrypted             = true',
+                '    delete_on_termination = true',
+                '  }',
                 '  tags = {',
                 f'    Name      = "{r_name}"',
                 f'    CMIR_Type = "{cmir_type}"',
@@ -621,7 +647,8 @@ variable "github_token" {
                 '}',
                 '',
             ])
-        elif r_type == "aws_db_instance":
+        elif (r_type in ("aws_db_instance", "database_instance", "database") or cmir_type in ("database", "database_instance")) and r_type != "containerized_in_compose":
+            created_db_ids.append(r_id)
             db_engine = "postgres" if "postg" in str(engine).lower() else "mysql" if "mysql" in str(engine).lower() else "postgres"
             main_lines.extend([
                 f'resource "aws_db_instance" "{r_id}" {{',
@@ -629,7 +656,7 @@ variable "github_token" {
                 f'  engine                 = "{db_engine}"',
                 '  instance_class         = "db.t3.micro"',
                 '  allocated_storage      = 20',
-                '  multi_az               = true',
+                '  multi_az               = false',
                 '  storage_encrypted      = true',
                 '  username               = "cloudmove_admin"',
                 '  password               = local.effective_db_password',
@@ -769,58 +796,113 @@ variable "github_token" {
                 f'# Non-compute or logical resource mapped cleanly ({r_type} / {cmir_type}): {r.get("name")} ({r.get("id")})'
             )
 
+    primary_inst_id = created_instance_ids[0] if created_instance_ids else None
+    instance_output_blocks = ""
+    if primary_inst_id:
+        fe_port = 3000 if 3000 in app_ingress_ports else primary_http_port
+        be_port = 8000 if 8000 in app_ingress_ports else primary_http_port
+        db_output_block = ""
+        if 5432 in app_ingress_ports:
+            db_output_block = f"""
+output "database_connection_url" {{
+  description = "PostgreSQL / PostGIS Container Connection URL on the EC2 Instance"
+  value       = "postgresql://postgres:${{local.effective_db_password}}@${{aws_instance.{primary_inst_id}.public_ip}}:5432/postgres"
+  sensitive   = true
+}}
+"""
+        instance_output_blocks = f"""
+output "instance_id" {{
+  description = "ID of the provisioned EC2 Compute Instance"
+  value       = aws_instance.{primary_inst_id}.id
+}}
+
+output "instance_public_ip" {{
+  description = "Public IPv4 address of the EC2 Instance"
+  value       = aws_instance.{primary_inst_id}.public_ip
+}}
+
+output "instance_public_dns" {{
+  description = "Public DNS hostname of the EC2 Instance"
+  value       = aws_instance.{primary_inst_id}.public_dns
+}}
+
+output "frontend_url" {{
+  description = "Direct HTTP URL for the Frontend Web Application"
+  value       = "http://${{aws_instance.{primary_inst_id}.public_ip}}:{fe_port}"
+}}
+
+output "backend_api_url" {{
+  description = "Direct HTTP URL for the Backend API & Swagger Docs"
+  value       = "http://${{aws_instance.{primary_inst_id}.public_ip}}:{be_port}"
+}}
+{db_output_block}
+output "ssh_command" {{
+  description = "SSH command to inspect containers and logs on the EC2 host"
+  value       = "ssh ubuntu@${{aws_instance.{primary_inst_id}.public_ip}}"
+}}
+"""
+
     if enable_ha_alb_asg:
-        outputs_tf = """# ============================================================
+        outputs_tf = f"""# ============================================================
 # AUTOMATICALLY GENERATED BY CLOUDMOVE MIGRATION ENGINE
 # OUTPUTS DEFINITION
 # ============================================================
 
-output "vpc_id" {
+output "vpc_id" {{
   description = "ID of target VPC"
   value       = aws_vpc.target_vpc.id
-}
+}}
 
-output "public_subnet_id" {
+output "public_subnet_id" {{
   description = "ID of Primary Public Subnet (AZ a)"
   value       = aws_subnet.public_subnet.id
-}
+}}
 
-output "public_subnet_b_id" {
+output "public_subnet_b_id" {{
   description = "ID of Secondary Public Subnet (AZ b)"
   value       = aws_subnet.public_subnet_b.id
-}
+}}
 
-output "alb_dns_name" {
+output "alb_dns_name" {{
   description = "Public DNS name of the High Availability Application Load Balancer"
   value       = aws_lb.app_alb.dns_name
-}
+}}
 
-output "app_endpoint" {
+output "app_endpoint" {{
   description = "Public HTTP URL of the migrated application behind the Load Balancer"
-  value       = "http://${aws_lb.app_alb.dns_name}"
-}
-"""
+  value       = "http://${{aws_lb.app_alb.dns_name}}"
+}}
+{instance_output_blocks}"""
     else:
-        outputs_tf = """# ============================================================
+        app_ep_block = ""
+        if primary_inst_id:
+            fe_port = 3000 if 3000 in app_ingress_ports else primary_http_port
+            app_ep_block = f"""
+output "app_endpoint" {{
+  description = "Public HTTP URL of the migrated application on Single Free-Tier EC2 Instance"
+  value       = "http://${{aws_instance.{primary_inst_id}.public_ip}}:{fe_port}"
+}}
+"""
+        outputs_tf = f"""# ============================================================
 # AUTOMATICALLY GENERATED BY CLOUDMOVE MIGRATION ENGINE
 # OUTPUTS DEFINITION (SINGLE FREE-TIER INSTANCE MODE)
 # ============================================================
 
-output "vpc_id" {
+output "vpc_id" {{
   description = "ID of target VPC"
   value       = aws_vpc.target_vpc.id
-}
+}}
 
-output "public_subnet_id" {
+output "public_subnet_id" {{
   description = "ID of Primary Public Subnet (AZ a)"
   value       = aws_subnet.public_subnet.id
-}
+}}
 
-output "public_subnet_b_id" {
+output "public_subnet_b_id" {{
   description = "ID of Secondary Public Subnet (AZ b)"
   value       = aws_subnet.public_subnet_b.id
-}
-"""
+}}
+{app_ep_block}{instance_output_blocks}"""
 
     return {
         "provider.tf": format_terraform_code(provider_tf),
@@ -974,6 +1056,9 @@ variable "custom_image_name" {
             and not (r.get("metadata") or {}).get("component")
         )
     ]
+
+    created_instance_ids: List[str] = []
+    created_db_ids: List[str] = []
 
     for r in resources:
         r_id = r.get("safe_id", str(r.get("id", "res")).replace("-", "_"))
@@ -1299,6 +1384,9 @@ variable "admin_password" {
         '}',
         '',
     ]
+    created_instance_ids: List[str] = []
+    created_db_ids: List[str] = []
+
     for r in resources:
         r_id = r.get("safe_id", r.get("id").replace("-", "_"))
         r_name = r.get("safe_name", r.get("name"))
@@ -1399,6 +1487,9 @@ def generate_k8s_manifest_files(resources: List[Dict[str, Any]]) -> Dict[str, st
 
 def generate_k8s_manifests(resources: List[Dict[str, Any]]) -> str:
     manifests = []
+    created_instance_ids: List[str] = []
+    created_db_ids: List[str] = []
+
     for r in resources:
         r_name = r.get("safe_name", r.get("name"))
         kind = r.get("kind", "Deployment")

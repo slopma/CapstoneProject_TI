@@ -45,7 +45,7 @@ function CanvasToolbar({
             onClick={() => onToggleArchViewMode("target")}
             title="Ver la arquitectura objetivo que quedará desplegada en la nube"
           >
-            ☁ Arquitectura Objetivo (Cloud)
+            Arquitectura Objetivo (Cloud)
           </button>
           <button
             type="button"
@@ -54,7 +54,7 @@ function CanvasToolbar({
             onClick={() => onToggleArchViewMode("source")}
             title="Ver la topología de origen descubierta (Referencia on-premise)"
           >
-            🏢 Topología Origen (Referencia)
+            Topología Origen (Referencia)
           </button>
         </div>
       )}

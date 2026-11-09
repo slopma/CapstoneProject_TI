@@ -358,6 +358,28 @@ def get_migration_job(migration_id: str):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+def _sanitize_job_for_export(job_data: Any) -> Any:
+    """
+    Recursively redact any sensitive credentials (tokens, passwords, secrets, aws keys)
+    from migration jobs before exporting them to JSON or ZIP bundles.
+    """
+    if isinstance(job_data, dict):
+        sanitized = {}
+        for k, v in job_data.items():
+            k_lower = str(k).lower()
+            if any(term in k_lower for term in ("token", "password", "secret", "private_key", "credential", "api_key", "auth")):
+                if v and isinstance(v, str):
+                    sanitized[k] = "[REDACTED]"
+                else:
+                    sanitized[k] = v
+            else:
+                sanitized[k] = _sanitize_job_for_export(v)
+        return sanitized
+    elif isinstance(job_data, list):
+        return [_sanitize_job_for_export(item) for item in job_data]
+    return job_data
+
+
 @router.get("/jobs/{migration_id}/bundle.zip")
 def download_migration_bundle(migration_id: str):
     """
@@ -392,8 +414,9 @@ def download_migration_bundle(migration_id: str):
         )
     files["DEPLOYMENT_INSTRUCTIONS.md"] = guide_content
 
-    # Include full job metadata report for audit
-    files["migration_report.json"] = json.dumps(job, indent=2, ensure_ascii=False)
+    # Include sanitized job metadata report for audit without leaking secrets
+    sanitized_report = _sanitize_job_for_export(job)
+    files["migration_report.json"] = json.dumps(sanitized_report, indent=2, ensure_ascii=False)
 
     # For Case 2 (vm_image), also embed the system image snapshot archive if available on disk (< 50MB)
     if job.get("use_case") == "vm_image":
@@ -1109,7 +1132,7 @@ def orchestrate_use_case_1_migration(request: Optional[AppInspectRequest] = None
                 "deployment_mode": req.deployment_mode,
                 "github_url": req.github_url,
                 "github_ref": req.github_ref,
-                "github_token": req.github_token,
+                "github_token": "[REDACTED]" if req.github_token else None,
                 "user_decisions": req.user_decisions,
             },
             auto_assess_and_plan=True,
@@ -1258,6 +1281,57 @@ class DeployLiveJobRequest(BaseModel):
     secrets: Optional[Dict[str, str]] = None
 
 
+class ExecuteTerraformCommandRequest(BaseModel):
+    action: str = Field(
+        "plan",
+        description="init | validate | plan | apply | continue | refresh | destroy | output | state | unlock | full_deploy | dry_run",
+    )
+    credentials: Optional[Dict[str, str]] = None
+    secrets: Optional[Dict[str, str]] = None
+    async_exec: bool = Field(
+        True,
+        description="Run in background thread to allow live log streaming and immediate cancellation",
+    )
+
+
+def _sync_job_after_terraform(migration_id: str, tf_result: Dict[str, Any]) -> None:
+    """
+    Synchronize the migration orchestrator state machine when a real cloud Terraform
+    action (`apply`, `continue`, `full_deploy`, or `destroy`) completes.
+    """
+    if not tf_result.get("success"):
+        return
+    action = str(tf_result.get("action") or "").lower()
+    if action not in ("apply", "continue", "full_deploy"):
+        return
+    try:
+        job = migration_orchestrator.get_migration(migration_id)
+        prereqs = job.get("prerequisites") or {}
+        prereqs["live_credentials_verified"] = True
+        job["prerequisites"] = prereqs
+        migration_orchestrator._save_job(job, actor_id="cloudmove-terraform-runner@cloudmove.local")
+
+        if job.get("state") == "PLAN_READY":
+            migration_orchestrator.approve_migration(
+                migration_id,
+                approved_by="cloudmove-terraform-runner@cloudmove.local",
+                notes="Aprobado automáticamente tras ejecución exitosa de Terraform Apply en la nube.",
+            )
+
+        for _ in range(5):
+            curr_job = migration_orchestrator.get_migration(migration_id)
+            if curr_job.get("state") in ("APPROVED", "PREPARING", "TESTING", "READY_FOR_CUTOVER"):
+                migration_orchestrator.advance_execution(
+                    migration_id=migration_id,
+                    dry_run=False,
+                    operator_id="cloudmove-terraform-runner@cloudmove.local",
+                )
+            else:
+                break
+    except Exception:
+        pass
+
+
 @router.post("/credentials/validate-external")
 def validate_external_credential_endpoint(request: ValidateExternalCredentialRequest):
     """
@@ -1276,6 +1350,92 @@ def verify_cloud_credentials_endpoint(request: VerifyCloudCredentialsRequest):
     return cloud_deployer.verify_cloud_provider_credentials(request.provider, request.credentials)
 
 
+@router.get("/jobs/{migration_id}/terraform/status")
+def get_job_terraform_status_endpoint(migration_id: str):
+    """
+    Retrieve real-time Terraform execution status, persisted and streaming logs,
+    active subprocess state, `terraform.tfstate` resources, and live cloud outputs.
+    """
+    try:
+        job = migration_orchestrator.get_migration(migration_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    from app.migration.cloud_deployer import cloud_deployer
+    job_dir = cloud_deployer.resolve_job_dir(migration_id, job)
+    artifacts = job.get("generated_artifacts") or {}
+    files = artifacts.get("files") or {}
+    if files and not (job_dir / "main.tf").exists():
+        cloud_deployer.materialize_job_files(job_dir, artifacts_files=files)
+
+    return cloud_deployer.get_terraform_status(migration_id, job_dir)
+
+
+@router.post("/jobs/{migration_id}/terraform/command")
+def execute_job_terraform_command_endpoint(
+    migration_id: str,
+    request: Optional[ExecuteTerraformCommandRequest] = None,
+):
+    """
+    Execute a specific Terraform command (`init`, `validate`, `plan`, `apply`, `continue`,
+    `refresh`, `destroy`, `output`, `state`, `unlock`, `full_deploy`, `dry_run`) in the
+    job's workspace with real-time log streaming and cancellation support.
+    """
+    req = request or ExecuteTerraformCommandRequest()
+    try:
+        job = migration_orchestrator.get_migration(migration_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    from app.migration.cloud_deployer import cloud_deployer
+    job_dir = cloud_deployer.resolve_job_dir(migration_id, job)
+    artifacts = job.get("generated_artifacts") or {}
+    files = artifacts.get("files") or {}
+
+    return cloud_deployer.execute_terraform_command(
+        migration_id=migration_id,
+        job_dir=job_dir,
+        action=req.action,
+        provider=job.get("target_provider", "aws"),
+        credentials=req.credentials,
+        secrets=req.secrets,
+        artifacts_files=files,
+        async_exec=req.async_exec,
+        on_complete=lambda res: _sync_job_after_terraform(migration_id, res),
+    )
+
+
+@router.post("/jobs/{migration_id}/terraform/cancel")
+def cancel_job_terraform_command_endpoint(migration_id: str):
+    """
+    Immediately cancel the currently running Terraform process for `migration_id`
+    and release any stale `.terraform.tfstate.lock.info` lock.
+    """
+    try:
+        job = migration_orchestrator.get_migration(migration_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    from app.migration.cloud_deployer import cloud_deployer
+    job_dir = cloud_deployer.resolve_job_dir(migration_id, job)
+    return cloud_deployer.cancel_terraform_execution(migration_id, job_dir)
+
+
+@router.delete("/jobs/{migration_id}/terraform/logs")
+def clear_job_terraform_logs_endpoint(migration_id: str):
+    """
+    Clear the persisted and in-memory Terraform execution logs for `migration_id`.
+    """
+    try:
+        job = migration_orchestrator.get_migration(migration_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    from app.migration.cloud_deployer import cloud_deployer
+    job_dir = cloud_deployer.resolve_job_dir(migration_id, job)
+    return cloud_deployer.clear_terraform_logs(migration_id, job_dir)
+
+
 @router.post("/jobs/{migration_id}/deploy-live")
 def deploy_live_migration_job_endpoint(migration_id: str, request: Optional[DeployLiveJobRequest] = None):
     """
@@ -1288,10 +1448,7 @@ def deploy_live_migration_job_endpoint(migration_id: str, request: Optional[Depl
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     from app.migration.cloud_deployer import cloud_deployer
-    # Determine directory
-    job_dir = Path.cwd() / f"cloudmove-{job.get('use_case', 'app_source')}-{job.get('target_provider', 'aws')}-{migration_id}"
-    if not job_dir.exists():
-        job_dir = Path("generated/deployments") / migration_id
+    job_dir = cloud_deployer.resolve_job_dir(migration_id, job)
 
     artifacts = job.get("generated_artifacts") or {}
     files = artifacts.get("files") or {}
@@ -1303,17 +1460,12 @@ def deploy_live_migration_job_endpoint(migration_id: str, request: Optional[Depl
         credentials=req.credentials,
         secrets=req.secrets,
         artifacts_files=files,
+        migration_id=migration_id,
     )
 
     if deploy_res.get("success") and not req.dry_run:
-        try:
-            migration_orchestrator.advance_execution(
-                migration_id=migration_id,
-                dry_run=False,
-                operator_id="cloudmove-automated-deployer@cloudmove.local",
-            )
-        except Exception:
-            pass
+        _sync_job_after_terraform(migration_id, deploy_res)
 
     return deploy_res
+
 

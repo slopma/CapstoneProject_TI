@@ -618,7 +618,7 @@ export default function DataCenterCampaignPanel({
                               onClick={() => handleDeleteCampaign(cid)}
                               title={`Eliminar campaña ${cid}`}
                             >
-                              🗑 Eliminar
+                              Eliminar
                             </button>
                           </div>
                         </td>

@@ -40,6 +40,7 @@ from app.discovery.campaigns import campaign_store
 from app.discovery.connectors import SecretRedactor
 from app.graph.builder import build_graph
 from app.migration.app_migrator import (
+    _sanitize_app_name,
     build_app_migration_stages,
     build_application_cmir,
     evaluate_app_migration_viability,
@@ -303,9 +304,12 @@ class MigrationOrchestrator:
         now = _utc_now()
         migration_id = f"mig-{uc[:3]}-{provider_clean}-{uuid.uuid4().hex[:6]}"
 
+        default_job_name = f"Migración {uc.upper()} hacia {provider_clean.upper()}"
+        safe_initial_name = _sanitize_app_name(name, fallback=default_job_name)
+
         job: Dict[str, Any] = {
             "migration_id": migration_id,
-            "name": name or f"Migración {uc.upper()} hacia {provider_clean.upper()}",
+            "name": safe_initial_name,
             "use_case": uc,
             "target_provider": provider_clean,
             "target_config": cfg_validation["normalized_config"],
@@ -429,6 +433,9 @@ class MigrationOrchestrator:
                     stages[3]["evidence"].append("Módulos Terraform (main.tf, variables.tf, user_data.sh) sintetizados exitosamente.")
 
                 job["source_environment"] = app_disc
+                job["name"] = _sanitize_app_name(job.get("name"), fallback=app_disc.get("app_name", "CocoaApp"))
+                if job["name"] == f"Migración {uc.upper()} hacia {provider.upper()}" and app_disc.get("app_name"):
+                    job["name"] = app_disc["app_name"]
                 job["cmir"] = cmir_obj.model_dump()
                 job["selected_resources"] = [app_disc["app_id"]]
                 job["dependency_analysis"] = viability["dependency_analysis"]
@@ -1183,10 +1190,22 @@ class MigrationOrchestrator:
                     elif item.is_file():
                         item.unlink(missing_ok=True)
 
-            # 2. Deployments directory
+            # 2. Deployments directory (preserve if terraform.tfstate still has active managed resources)
             dep_dir = PROJECT_ROOT / "generated" / "deployments" / migration_id
             if dep_dir.is_dir():
-                shutil.rmtree(dep_dir, ignore_errors=True)
+                has_active_tfstate = False
+                tfstate_file = dep_dir / "terraform.tfstate"
+                if tfstate_file.is_file():
+                    try:
+                        st_data = json.loads(tfstate_file.read_text(encoding="utf-8"))
+                        has_active_tfstate = any(
+                            r.get("mode") == "managed" and r.get("instances")
+                            for r in (st_data.get("resources") or [])
+                        )
+                    except Exception:
+                        pass
+                if not has_active_tfstate:
+                    shutil.rmtree(dep_dir, ignore_errors=True)
 
             # 3. Staging images matching job_slug
             if job:
@@ -1229,7 +1248,19 @@ class MigrationOrchestrator:
             if dep_root.is_dir():
                 for item in dep_root.iterdir():
                     if item.is_dir():
-                        shutil.rmtree(item, ignore_errors=True)
+                        has_active_tfstate = False
+                        tfstate_file = item / "terraform.tfstate"
+                        if tfstate_file.is_file():
+                            try:
+                                st_data = json.loads(tfstate_file.read_text(encoding="utf-8"))
+                                has_active_tfstate = any(
+                                    r.get("mode") == "managed" and r.get("instances")
+                                    for r in (st_data.get("resources") or [])
+                                )
+                            except Exception:
+                                pass
+                        if not has_active_tfstate:
+                            shutil.rmtree(item, ignore_errors=True)
         except Exception:
             pass
 

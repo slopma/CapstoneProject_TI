@@ -438,7 +438,50 @@ class DataCenterCampaignStore:
             "relationships": [],
             "agent_installations": {},
             "verification_results": [],
-            "campaigns": {},
+            "campaigns": {
+                "camp-default-01": {
+                    "id": "camp-default-01",
+                    "name": "Campaña Data Center (Modo 2 — Descubrir y Planificar)",
+                    "environment_id": "env-datacenter-01",
+                    "mode": "discover_plan",
+                    "mode_label": "Modo 2 — Descubrir y Planificar",
+                    "status": "planned",
+                    "created_by": "operator",
+                    "created_at": now,
+                    "updated_at": now,
+                    "policy_id": None,
+                    "discovery_sources": [
+                        "hypervisor_apis",
+                        "approved_network_ranges",
+                        "dns_dhcp_ipam",
+                        "agent_inventory",
+                    ],
+                    "scope": {
+                        "environment_id": "env-datacenter-01",
+                        "connector_ids": ["conn-01", "conn-02"],
+                        "site_ids": ["site-dc-a", "site-dc-b"],
+                        "network_range_ids": [
+                            "range-internal-01",
+                            "range-internal-02",
+                            "range-internal-03",
+                        ],
+                        "excluded_range_ids": ["range-excluded-dmz"],
+                        "excluded_asset_ids": [],
+                        "custom_inclusion_cidrs": [],
+                    },
+                    "agent_strategy": {
+                        "allow_install": False,
+                        "preferred_method": "ssh",
+                        "approved_packages_only": True,
+                        "staging_directory": "/opt/cloudmove/agent",
+                    },
+                    "execution_limits": {
+                        "max_concurrency": 4,
+                        "timeout_seconds": 120,
+                        "bandwidth_limit_kbps": 2048,
+                    },
+                }
+            },
             "discovery_tasks": {},
             "audit_events": [],
             "outbox_events": [],
@@ -1044,7 +1087,7 @@ class DataCenterCampaignStore:
             None,
             "Validar alcance autorizado (entorno, conectores, rangos CIDR y límites de concurrencia)",
             "completed",
-            f"Alcance validado: {len(campaign['scope']['connector_ids'])} conectores y {len(campaign['scope']['network_range_ids'])} rangos CIDR aprobados.",
+            f"Alcance validado: {len(campaign.get('scope', {}).get('connector_ids', []))} conectores y {len(campaign.get('scope', {}).get('network_range_ids', []))} rangos CIDR aprobados.",
         )
         add_task(
             LogicalTaskQueue.DISCOVERY_API,

@@ -22,6 +22,19 @@ def _slug(text: str) -> str:
     return re.sub(r"-+", "-", cleaned).strip("-").lower() or "workload"
 
 
+def _sanitize_job_name(job_name: str, src: Dict[str, Any]) -> str:
+    val = str(job_name or "").strip()
+    git_meta = src.get("git_metadata") or src.get("git_meta") or {}
+    fallback = git_meta.get("repo") or src.get("app_name") or "workload"
+    if fallback.lower().startswith(("ghp_", "github_pat_")):
+        fallback = git_meta.get("repo") or "workload"
+    if not val or val.lower().startswith(("ghp_", "github_pat_", "gho_", "ghu_", "ghs_", "ghr_", "glpat-")):
+        return fallback
+    if len(val) >= 32 and re.match(r"^[a-zA-Z0-9_]+$", val) and any(c.isdigit() for c in val) and any(c.isupper() for c in val):
+        return fallback
+    return val
+
+
 def generate_deployment_guide(
     use_case: str,
     target_provider: str,
@@ -39,7 +52,8 @@ def generate_deployment_guide(
     uc_clean = str(use_case or "app_source").lower().strip()
     cfg = target_config or {}
     src = source_environment or {}
-    slug_name = _slug(job_name)
+    safe_job_name = _sanitize_job_name(job_name, src)
+    slug_name = _slug(safe_job_name)
 
     default_region = "us-east-1" if provider_clean == "aws" else "us-central1"
     region = cfg.get("region") or cfg.get("aws_region") or cfg.get("gcp_region") or default_region
@@ -48,7 +62,7 @@ def generate_deployment_guide(
     if uc_clean == "app_source":
         return _build_case_1_guide(
             provider_clean=provider_clean,
-            job_name=job_name,
+            job_name=safe_job_name,
             slug_name=slug_name,
             migration_id=migration_id,
             region=region,
@@ -90,12 +104,60 @@ def _build_case_1_guide(
     src: Dict[str, Any],
     files: Dict[str, str],
 ) -> str:
-    git_meta = src.get("git_meta") or {}
+    git_meta = src.get("git_meta") or src.get("git_metadata") or {}
     repo_url = git_meta.get("repository_url") or src.get("github_url") or f"https://github.com/empresa/{slug_name}"
     git_ref = git_meta.get("ref") or src.get("github_ref") or "main"
     commit_sha = git_meta.get("commit_sha") or git_meta.get("short_sha") or "HEAD"
     short_sha = git_meta.get("short_sha") or (commit_sha[:8] if commit_sha != "HEAD" else "latest")
     commit_msg = git_meta.get("commit_message") or "Release productivo"
+
+    db_backups = src.get("database_backups") or (src.get("deep_insights") or {}).get("database_backups") or {}
+    has_bkp = bool(db_backups.get("has_backups"))
+    primary_bkp = (db_backups.get("backups") or [None])[0]
+    bkp_section_md = ""
+    if has_bkp and primary_bkp:
+        bkp_path = primary_bkp.get("path", "supabase_backup.dump")
+        bkp_fmt = primary_bkp.get("format", "PostgreSQL Custom Binary Dump (PGDMP)")
+        bkp_eng = primary_bkp.get("engine", "PostgreSQL + PostGIS")
+        bkp_ver = primary_bkp.get("dumped_from_version", "17")
+        bkp_exts = ", ".join(f"`{e}`" for e in (primary_bkp.get("extensions") or ["postgis", "pgcrypto", "uuid-ossp"]))
+        bkp_schemas = ", ".join(f"`{s}`" for s in (primary_bkp.get("schemas") or ["public", "auth", "storage"]))
+        bkp_funcs = ", ".join(f"`{f['signature']}`" for f in (primary_bkp.get("public_functions") or [])) or "N/A"
+        bkp_tables_rows = "\n".join(
+            f"  - `{t['table']}`: **{t['rows']} filas** (columnas: `{', '.join(t.get('columns', [])[:6])}`)"
+            for t in (primary_bkp.get("non_empty_tables") or [])[:15]
+        )
+        seed_lines = "\n".join(
+            f"  - `{s['path']}` ({s['format']}): **{s['record_count']} registros**"
+            for s in (db_backups.get("seed_files") or [])
+        )
+        bkp_section_md = f"""
+#### 7.2 Recreacion Automatica de Base de Datos y Restauracion del Backup Detectado (`{bkp_path}`)
+CloudMove detecto e inspecciono automaticamente el backup de base de datos dentro del repositorio:
+- **Archivo de Backup:** `{bkp_path}` ({bkp_fmt}, `{primary_bkp.get('size_bytes', 0)}` bytes)
+- **Motor y Version:** {bkp_eng} (PostgreSQL `{bkp_ver}`)
+- **Esquemas Detectados:** {bkp_schemas}
+- **Extensiones Requeridas:** {bkp_exts}
+- **Funciones SQL / RPC Espaciales:** {bkp_funcs}
+- **Resumen de Tablas y Datos Restaurados ({primary_bkp.get('public_tables_count', 0)} tablas publicas / {primary_bkp.get('total_rows_count', 0)} filas totales):**
+{bkp_tables_rows}
+""" + (f"- **Archivos Semilla JSON Adicionales Detectados:**\n{seed_lines}\n" if seed_lines else "") + f"""
+Durante el arranque de la instancia EC2 (`user_data.sh`), CloudMove levanta automaticamente el contenedor `{slug_name}-postgres-db` (`postgis/postgis:17-3.5`) y ejecuta `migrate_database_data.sh` para recrear todos los esquemas, roles de Supabase, extensiones PostGIS y restaurar la totalidad de los datos del backup `{bkp_path}`.
+
+Para ejecutar o verificar manualmente la restauracion en la instancia EC2 o contra Amazon RDS:
+```bash
+# Restaurar y verificar conteo de filas por tabla (Contenedor PostGIS en EC2 o Amazon RDS):
+chmod +x migrate_database_data.sh
+./migrate_database_data.sh
+
+# Si deseas restaurar directamente hacia un endpoint de Amazon RDS PostgreSQL:
+TARGET_DB_HOST=$(terraform output -raw db_endpoint 2>/dev/null | cut -d: -f1) \\
+TARGET_DB_USER="postgres" \\
+TARGET_DB_PASSWORD="<TU_PASSWORD_RDS>" \\
+TARGET_DB_NAME="postgres" \\
+./migrate_database_data.sh
+```
+"""
 
     # Runtime & Framework detectados
     raw_lang = src.get("language") or src.get("runtime")
@@ -267,22 +329,14 @@ aws secretsmanager update-secret \\
 ```
 
 #### 7.2 Inicializacion y Ejecucion de Migraciones de Base de Datos
-Obten los datos de conexion de la base de datos RDS creada por Terraform:
+Obten los datos de conexion de la base de datos creada por Terraform o en el contenedor PostGIS local:
 ```bash
-DB_ENDPOINT=$(terraform output -raw db_endpoint 2>/dev/null || echo "rds-host:5432")
+DB_ENDPOINT=$(terraform output -raw db_endpoint 2>/dev/null || echo "127.0.0.1:5432")
 echo "Base de datos disponible en: $DB_ENDPOINT"
-
-# Opcion A: Ejecutar migraciones mediante una tarea efimera en ECS Fargate (Recomendado)
-aws ecs run-task \\
-    --cluster "$CLUSTER_NAME" \\
-    --task-definition "{slug_name}-task" \\
-    --launch-type FARGATE \\
-    --network-configuration "awsvpcConfiguration={{subnets=[$(terraform output -raw private_subnet_id 2>/dev/null)],securityGroups=[$(terraform output -raw ecs_security_group_id 2>/dev/null)],assignPublicIp=ENABLED}}" \\
-    --overrides '{{"containerOverrides": [{{"name": "{slug_name}", "command": {json.dumps(migrate_cmd.split())}}}]}}'
-
-# Opcion B: Ejecutar migraciones directamente con herramientas locales si tienes acceso por VPN o Bastion
-# {migrate_cmd}
+chmod +x migrate_database_data.sh
+./migrate_database_data.sh
 ```
+{bkp_section_md}
 
 #### 7.3 Configuracion de Red, CORS y Grupos de Seguridad
 - **Trafico Web:** El balanceador Application Load Balancer (ALB) permite trafico de entrada en el puerto 80 (HTTP) y 443 (HTTPS) desde `0.0.0.0/0`, enrutando al puerto `{detected_port}` del contenedor.

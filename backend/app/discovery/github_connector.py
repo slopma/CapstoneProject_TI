@@ -82,6 +82,13 @@ LANGUAGE_EXTENSIONS: Dict[str, str] = {
     ".md": "Markdown",
     ".rst": "reStructuredText",
     ".sql": "SQL",
+    ".dump": "Database Backup (PGDMP/SQL)",
+    ".pgdump": "Database Backup (PGDMP)",
+    ".backup": "Database Backup",
+    ".bak": "Database Backup",
+    ".sqlite": "SQLite Database",
+    ".sqlite3": "SQLite Database",
+    ".dot": "Graphviz / Schema ERD",
     ".sh": "Shell Script",
     ".bash": "Shell Script",
     ".zsh": "Shell Script",
@@ -141,6 +148,8 @@ def is_manifest_file(filename: str) -> bool:
         return True
     if "alembic.ini" in lower:
         return True
+    if lower.endswith((".dump", ".pgdump", ".backup", ".bak")) or ("backup" in lower and lower.endswith(".sql")):
+        return True
     return False
 
 
@@ -156,6 +165,8 @@ def get_manifest_type(filename: str) -> str:
         return "env_file"
     if "alembic.ini" in lower:
         return "alembic_config"
+    if lower.endswith((".dump", ".pgdump", ".backup", ".bak")) or ("backup" in lower and lower.endswith(".sql")):
+        return "database_backup"
     return "manifest"
 
 

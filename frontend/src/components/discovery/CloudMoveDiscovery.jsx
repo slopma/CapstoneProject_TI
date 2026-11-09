@@ -419,7 +419,7 @@ export default function CloudMoveDiscovery({
                     </td>
                     <td>
                       {isSelected ? (
-                        <span className="cm-badge observed">✓ Elegido para tu PC</span>
+                        <span className="cm-badge observed">[OK] Elegido para tu PC</span>
                       ) : (
                         <span className="cm-hint">Otro OS/Arch</span>
                       )}

@@ -25,11 +25,19 @@ cloudmove-parsed/
 .cursor/
 .gemini/
 .grok/
-# Generated VM images
+# Generated VM images and deployment packages
 /generated/staging_images/
+generated/deployments/
+cloudm/
+cloudmove/
+cocoapp/
+*.zip
 
-# Generated VM images
-/generated/staging_images/
-
-# Generated VM images
-/generated/staging_images/
+# Runtime SQLite databases and transaction logs
+backend/data/*.db
+backend/data/*.db-journal
+backend/data/*.db-wal
+backend/data/*.db.bak
+backend/data/discovery_sessions/
+backend/data/datacenter_campaigns.json
+backend/data/*.json.bak

@@ -84,7 +84,7 @@ export default function ExternalServicesCredentialsCard({
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <span style={{ fontSize: 18 }}>⚡</span>
+              <span style={{ fontSize: 18 }}></span>
               <strong style={{ fontSize: 16, color: "#0f172a" }}>Supabase (PostgreSQL BaaS & Autenticación)</strong>
               <span className="cm-badge observed" style={{ backgroundColor: "#dcfce7", color: "#166534" }}>
                 Detectado en Código
@@ -196,7 +196,7 @@ export default function ExternalServicesCredentialsCard({
             onClick={handleValidate}
             disabled={validating || !supabaseUrl}
           >
-            {validating ? "Probando conexión..." : "🔍 Probar Conexión con Supabase (Live Probe)"}
+            {validating ? "Probando conexión..." : "Probar Conexión con Supabase (Live Probe)"}
           </button>
 
           <button
@@ -205,12 +205,12 @@ export default function ExternalServicesCredentialsCard({
             onClick={handleSave}
             disabled={!supabaseUrl}
           >
-            💾 Guardar para Despliegue en Secrets Manager
+            Guardar para Despliegue en Secrets Manager
           </button>
 
           {savedSuccess && (
             <span style={{ fontSize: 13, color: "#15803d", fontWeight: 600 }}>
-              ✓ Credenciales guardadas y cifradas para el aprovisionamiento.
+              [OK] Credenciales guardadas y cifradas para el aprovisionamiento.
             </span>
           )}
         </div>
@@ -240,10 +240,10 @@ export default function ExternalServicesCredentialsCard({
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <strong>
                 {validationResult.valid
-                  ? "✓ Conexión y Autenticación Exitosas"
+                  ? "[OK] Conexión y Autenticación Exitosas"
                   : validationResult.status === "AUTH_REQUIRED"
                   ? "ℹ Endpoint Activo — Requiere Anon Key"
-                  : "✗ Fallo de Conexión o Validación"}
+                  : "[ERROR] Fallo de Conexión o Validación"}
               </strong>
               {validationResult.latency_ms > 0 && (
                 <span className="cm-badge" style={{ fontSize: 11 }}>
