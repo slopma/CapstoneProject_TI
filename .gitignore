@@ -5,6 +5,7 @@
 # Terraform generated files
 **/.terraform/
 **/*.tfstate
+**/*.tfstate*
 **/*.tfvars
 **/tfplan
 generated/aws/plan-evidence.txt
