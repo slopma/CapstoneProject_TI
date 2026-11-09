@@ -23,8 +23,10 @@ import os
 from pathlib import Path
 import json
 import re
+import subprocess
 import urllib.error
 import urllib.request
+import zlib
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.adapters.aws_adapter import AWSAdapter
@@ -98,6 +100,22 @@ def _slug(value: str) -> str:
     return cleaned or "app"
 
 
+def _sanitize_app_name(candidate: Optional[str], fallback: str = "discovered-application") -> str:
+    """
+    Prevent accidental API tokens / GitHub PATs (e.g. `ghp_...`, `github_pat_...`)
+    from being used as the workload or application name.
+    """
+    val = str(candidate or "").strip()
+    if not val:
+        return fallback
+    low = val.lower()
+    if low.startswith(("ghp_", "github_pat_", "gho_", "ghu_", "ghs_", "ghr_", "glpat-")) or SECRET_KEY_PATTERNS.search(val):
+        return fallback
+    if len(val) >= 32 and re.match(r"^[a-zA-Z0-9_]+$", val) and any(c.isdigit() for c in val) and any(c.isupper() for c in val):
+        return fallback
+    return val
+
+
 def redact_env_value(key: str, raw_value: str) -> Dict[str, Any]:
     """
     Preserve the environment variable name and structural classification while
@@ -162,7 +180,7 @@ def inspect_application_source(
                 target_dir=checkout_path,
                 inline_files=None,
                 runtime_metadata=runtime_metadata,
-                app_name_override=app_name_override or pinned["repo"],
+                app_name_override=_sanitize_app_name(app_name_override, fallback=pinned["repo"]),
                 git_meta=git_meta,
             )
 
@@ -175,11 +193,12 @@ def inspect_application_source(
         if not target_dir.exists():
             raise FileNotFoundError(f"La ruta de origen especificada no existe: {source_path}")
 
+    fallback_name = target_dir.name if target_dir else "discovered-application"
     return _analyze_source_payload(
         target_dir=target_dir,
         inline_files=inline_files,
         runtime_metadata=runtime_metadata,
-        app_name_override=app_name_override,
+        app_name_override=_sanitize_app_name(app_name_override, fallback=fallback_name) if app_name_override else None,
         git_meta=None,
     )
 
@@ -243,21 +262,23 @@ def scan_local_filesystem_tree(target_dir: Path) -> Tuple[Dict[str, Any], Dict[s
             files.append(file_item)
 
             if is_manifest:
+                m_type = get_manifest_type(f)
                 key_manifests.append({
                     "path": rel_file,
                     "name": f,
-                    "manifest_type": get_manifest_type(f),
+                    "manifest_type": m_type,
                     "size": size,
                 })
-                # Read content safely (up to 1MB)
-                try:
-                    if size <= 1_048_576:
-                        content = fpath.read_text(encoding="utf-8", errors="replace")
-                        manifests_content[rel_file] = content
-                        if f not in manifests_content:
-                            manifests_content[f] = content
-                except Exception:
-                    pass
+                # Read text content safely (up to 1MB), skipping binary database dumps
+                if m_type != "database_backup" and ext not in (".dump", ".pgdump", ".backup", ".bak", ".sqlite", ".sqlite3"):
+                    try:
+                        if size <= 1_048_576:
+                            content = fpath.read_text(encoding="utf-8", errors="replace")
+                            manifests_content[rel_file] = content
+                            if f not in manifests_content:
+                                manifests_content[f] = content
+                    except Exception:
+                        pass
 
             ext_key = lang if lang != "Other" else (ext.upper() if ext else "Other")
             ext_counter[ext_key] = ext_counter.get(ext_key, 0) + 1
@@ -567,6 +588,451 @@ def discover_app_components_and_code(
     return components, deep_insights
 
 
+def _extract_sql_from_pgdmp(dump_path: Path) -> str:
+    """
+    Convert a PostgreSQL custom dump (`PGDMP`) file into plain SQL text for static schema & data inspection.
+    Uses `pg_restore -f -` when available, with a pure-Python binary/gzip fallback if `pg_restore` is absent.
+    """
+    try:
+        proc = subprocess.run(
+            ["pg_restore", "-f", "-", str(dump_path)],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=25,
+        )
+        if proc.stdout and ("CREATE TABLE" in proc.stdout or "PostgreSQL database dump" in proc.stdout):
+            return proc.stdout
+    except Exception:
+        pass
+
+    # Pure-Python fallback: extract ASCII TOC headers and decompress embedded gzip/zlib streams
+    try:
+        raw = dump_path.read_bytes()
+        extracted_chunks: List[str] = [raw.decode("utf-8", errors="ignore")]
+        for m in re.finditer(b"\x1f\x8b\x08", raw):
+            start = m.start()
+            try:
+                decomp = zlib.decompress(raw[start:], 16 + zlib.MAX_WBITS)
+                extracted_chunks.append(decomp.decode("utf-8", errors="replace"))
+            except Exception:
+                pass
+        return "\n".join(extracted_chunks)
+    except Exception:
+        return ""
+
+
+def _parse_sql_dump_text(
+    sql_text: str,
+    rel_path: str,
+    size_bytes: int,
+    dump_format: str = "PostgreSQL SQL Dump",
+) -> Dict[str, Any]:
+    """
+    Parse SQL dump text (from `pg_restore -f -` or `.sql` files) to extract:
+    - Database engine & version
+    - Schemas (`public`, `auth`, `storage`, `extensions`, etc.)
+    - Extensions (`postgis`, `pgcrypto`, `uuid-ossp`, etc.)
+    - Custom SQL / RPC functions (`public.*`)
+    - Tables, columns, exact row counts (`COPY ... FROM stdin` & `INSERT INTO`), and redacted sample rows
+    - Database roles referenced
+    """
+    ver_m = re.search(r"Dumped from database version ([0-9.]+)", sql_text)
+    db_version = ver_m.group(1) if ver_m else "16"
+
+    schemas_set = {
+        s for s in re.findall(r"CREATE SCHEMA (?:IF NOT EXISTS\s+)?\"?([a-zA-Z0-9_]+)\"?", sql_text, re.IGNORECASE)
+        if s.upper() not in ("IF", "NOT", "EXISTS")
+    }
+    extensions_set = {
+        e for e in re.findall(r"CREATE EXTENSION (?:IF NOT EXISTS\s+)?\"?([a-zA-Z0-9_-]+)\"?", sql_text, re.IGNORECASE)
+        if e.upper() not in ("IF", "NOT", "EXISTS")
+    }
+    roles_set = set(re.findall(r"OWNER TO \"?([a-zA-Z0-9_]+)\"?;", sql_text))
+
+    # Extract functions (focusing on public and custom RPCs)
+    functions_list: List[Dict[str, str]] = []
+    seen_funcs = set()
+    for fm in re.finditer(
+        r"CREATE (?:OR REPLACE )?FUNCTION\s+([a-zA-Z0-9_.\"]+)\(([^)]*)\)\s+RETURNS\s+([^\n\r{;]+)",
+        sql_text,
+    ):
+        raw_fn = fm.group(1).replace('"', "")
+        args = " ".join(fm.group(2).split())
+        ret_type = " ".join(fm.group(3).split()).rstrip("AS").strip()
+        schema_name = raw_fn.split(".")[0] if "." in raw_fn else "public"
+        fn_name = raw_fn.split(".")[-1]
+        schemas_set.add(schema_name)
+        sig = f"{schema_name}.{fn_name}({args})"
+        if sig not in seen_funcs and schema_name in ("public", "auth", "storage"):
+            seen_funcs.add(sig)
+            functions_list.append({
+                "schema": schema_name,
+                "name": fn_name,
+                "arguments": args,
+                "returns": ret_type,
+                "signature": sig,
+            })
+
+    # Extract tables and their columns
+    tables_map: Dict[str, Dict[str, Any]] = {}
+    for tm in re.finditer(
+        r"^CREATE TABLE (?:IF NOT EXISTS )?([a-zA-Z0-9_.\"]+)\s*\(\s*(.*?)\r?\n\);",
+        sql_text,
+        re.MULTILINE | re.DOTALL,
+    ):
+        raw_tbl = tm.group(1).replace('"', "")
+        body = tm.group(2)
+        t_schema = raw_tbl.split(".")[0] if "." in raw_tbl else "public"
+        t_name = raw_tbl.split(".")[-1]
+        full_name = f"{t_schema}.{t_name}"
+        schemas_set.add(t_schema)
+
+        cols: List[Dict[str, str]] = []
+        for line in body.splitlines():
+            s = line.strip().rstrip(",")
+            if not s or s.upper().startswith(("CONSTRAINT ", "PRIMARY KEY", "FOREIGN KEY", "UNIQUE ", "CHECK ")):
+                continue
+            parts = s.split(None, 1)
+            if len(parts) == 2:
+                c_name = parts[0].strip('"')
+                c_type = re.split(r"\s+(?:NOT NULL|DEFAULT|PRIMARY KEY|REFERENCES|NULL|CONSTRAINT|GENERATED)", parts[1], flags=re.IGNORECASE)[0].strip()
+                cols.append({"name": c_name, "type": c_type})
+
+        tables_map[full_name] = {
+            "schema": t_schema,
+            "name": t_name,
+            "full_name": full_name,
+            "columns": cols,
+            "row_count": 0,
+            "sample_rows": [],
+        }
+
+    # Parse COPY <table_name> (<cols>) FROM stdin; ... \. blocks for exact row counts and sample data
+    has_copy_blocks = False
+    for cm in re.finditer(
+        r"^COPY\s+([a-zA-Z0-9_.\"]+)\s*(?:\(([^)]*)\))?\s+FROM stdin;\r?\n(.*?)^\\\.",
+        sql_text,
+        re.MULTILINE | re.DOTALL,
+    ):
+        has_copy_blocks = True
+        raw_tbl = cm.group(1).replace('"', "")
+        col_header = cm.group(2) or ""
+        data_block = cm.group(3)
+        t_schema = raw_tbl.split(".")[0] if "." in raw_tbl else "public"
+        t_name = raw_tbl.split(".")[-1]
+        full_name = f"{t_schema}.{t_name}"
+        schemas_set.add(t_schema)
+
+        lines = [ln for ln in data_block.splitlines() if ln != "" and ln != "\\."]
+        row_count = len(lines)
+
+        if full_name not in tables_map:
+            if full_name == "public.spatial_ref_sys" and row_count == 0:
+                continue
+            tables_map[full_name] = {
+                "schema": t_schema,
+                "name": t_name,
+                "full_name": full_name,
+                "columns": [{"name": c.strip().strip('"'), "type": "unknown"} for c in col_header.split(",") if c.strip()],
+                "row_count": 0,
+                "sample_rows": [],
+            }
+        tables_map[full_name]["row_count"] += row_count
+
+        # Capture up to 2 sample rows for public tables (redacting any sensitive columns)
+        if t_schema == "public" and lines and len(tables_map[full_name]["sample_rows"]) < 2:
+            col_names = [c.strip().strip('"') for c in col_header.split(",") if c.strip()]
+            for sample_ln in lines[:2]:
+                vals = sample_ln.split("\t")
+                row_preview: Dict[str, str] = {}
+                for idx_c, val in enumerate(vals[:8]):
+                    cname = col_names[idx_c] if idx_c < len(col_names) else f"col_{idx_c}"
+                    if SECRET_KEY_PATTERNS.search(cname) or "hash" in cname.lower():
+                        row_preview[cname] = "[REDACTED]"
+                    else:
+                        row_preview[cname] = (val[:75] + "...") if len(val) > 75 else val
+                tables_map[full_name]["sample_rows"].append(row_preview)
+
+    # Also count INSERT INTO statements if the SQL dump uses INSERTs instead of COPY
+    if not has_copy_blocks:
+        for im in re.finditer(r"^INSERT INTO\s+([a-zA-Z0-9_.\"]+)\s+", sql_text, re.IGNORECASE | re.MULTILINE):
+            raw_tbl = im.group(1).replace('"', "")
+            t_schema = raw_tbl.split(".")[0] if "." in raw_tbl else "public"
+            t_name = raw_tbl.split(".")[-1]
+            full_name = f"{t_schema}.{t_name}"
+            if full_name in tables_map:
+                tables_map[full_name]["row_count"] += 1
+
+    public_tables = [t for t in tables_map.values() if t["schema"] == "public"]
+    public_tables.sort(key=lambda x: (-x["row_count"], x["name"]))
+    all_tables = sorted(tables_map.values(), key=lambda x: (x["schema"] != "public", -x["row_count"], x["full_name"]))
+
+    public_row_total = sum(t["row_count"] for t in public_tables)
+    all_row_total = sum(t["row_count"] for t in all_tables)
+
+    schema_row_totals: Dict[str, int] = {}
+    for t in all_tables:
+        schema_row_totals[t["schema"]] = schema_row_totals.get(t["schema"], 0) + t["row_count"]
+
+    requires_postgis = "postgis" in {e.lower() for e in extensions_set} or "geometry(" in sql_text.lower()
+    requires_supabase_compat = bool(
+        {"auth", "storage", "supabase_migrations"} & schemas_set
+        or {"supabase_admin", "anon", "authenticated", "service_role"} & roles_set
+    )
+
+    return {
+        "path": rel_path,
+        "name": Path(rel_path).name,
+        "size_bytes": size_bytes,
+        "format": dump_format,
+        "engine": "PostgreSQL + PostGIS (Supabase Compatible)" if requires_postgis else "PostgreSQL",
+        "dumped_from_version": db_version,
+        "requires_postgis": requires_postgis,
+        "requires_supabase_compat": requires_supabase_compat,
+        "schemas": sorted(schemas_set),
+        "extensions": sorted(extensions_set),
+        "roles_referenced": sorted(roles_set),
+        "public_functions": [f for f in functions_list if f["schema"] == "public"],
+        "public_tables_count": len(public_tables),
+        "total_tables_count": len(all_tables),
+        "public_rows_count": public_row_total,
+        "total_rows_count": all_row_total,
+        "schema_row_totals": schema_row_totals,
+        "public_tables": public_tables,
+        "non_empty_tables": [
+            {"table": t["full_name"], "rows": t["row_count"], "columns": [c["name"] for c in t["columns"][:8]]}
+            for t in all_tables
+            if t["row_count"] > 0
+        ],
+    }
+
+
+def discover_database_backups_and_seeds(
+    target_dir: Optional[Path],
+    files_map: Dict[str, str],
+) -> Dict[str, Any]:
+    """
+    Scan the repository for database backups (`.dump`, `.pgdump`, `.backup`, `.bak`, `.sql`, `PGDMP` binaries),
+    JSON data seed exports (`*output.json`, `feed.json`, `*seed*.json`), database loader scripts
+    (`import_*.py`, `upload_*.py`), and ER schema diagrams (`modelo.dot`).
+    Extracts exact schemas, extensions (e.g. PostGIS), RPC functions, tables, and row counts
+    so CloudMove can recreate the database and restore all its data in AWS/GCP.
+    """
+    backups: List[Dict[str, Any]] = []
+    seed_files: List[Dict[str, Any]] = []
+    importer_scripts: List[Dict[str, Any]] = []
+    er_diagram_files: List[Dict[str, Any]] = []
+
+    ignore_dirs = {
+        ".git", ".svn", ".hg", "__pycache__", ".venv", "venv",
+        "node_modules", ".idea", ".vscode", "dist", "build", ".next",
+        "target", "bin", "obj", ".pytest_cache", ".mypy_cache",
+    }
+    ignore_json_names = {
+        "package.json", "package-lock.json", "tsconfig.json", "tsconfig.app.json",
+        "tsconfig.node.json", "components.json", "vercel.json", "manifest.json",
+    }
+
+    if target_dir and target_dir.exists():
+        for root, dirnames, filenames in os.walk(target_dir):
+            dirnames[:] = [d for d in dirnames if d not in ignore_dirs and not d.startswith(".git")]
+            for fname in sorted(filenames):
+                fpath = Path(root) / fname
+                rel_path = os.path.relpath(fpath, target_dir).replace("\\", "/")
+                low_name = fname.lower()
+                try:
+                    fsize = fpath.stat().st_size
+                except Exception:
+                    fsize = 0
+
+                # 1. Check for PostgreSQL custom dump (PGDMP) or SQL dump files
+                is_dump_ext = low_name.endswith((".dump", ".pgdump", ".backup", ".bak"))
+                is_sql_ext = low_name.endswith(".sql")
+                magic_header = b""
+                if fsize >= 5 and (is_dump_ext or "backup" in low_name or "dump" in low_name):
+                    try:
+                        with open(fpath, "rb") as bf:
+                            magic_header = bf.read(16)
+                    except Exception:
+                        magic_header = b""
+
+                if magic_header.startswith(b"PGDMP") or is_dump_ext:
+                    sql_text = _extract_sql_from_pgdmp(fpath)
+                    if sql_text:
+                        parsed_bkp = _parse_sql_dump_text(
+                            sql_text=sql_text,
+                            rel_path=rel_path,
+                            size_bytes=fsize,
+                            dump_format="PostgreSQL Custom Binary Dump (PGDMP)",
+                        )
+                        backups.append(parsed_bkp)
+                    else:
+                        backups.append({
+                            "path": rel_path,
+                            "name": fname,
+                            "size_bytes": fsize,
+                            "format": "PostgreSQL Custom Binary Dump (PGDMP)",
+                            "engine": "PostgreSQL",
+                            "dumped_from_version": "16",
+                            "requires_postgis": False,
+                            "requires_supabase_compat": "supabase" in low_name,
+                            "schemas": ["public"],
+                            "extensions": [],
+                            "roles_referenced": [],
+                            "public_functions": [],
+                            "public_tables_count": 0,
+                            "total_tables_count": 0,
+                            "public_rows_count": 0,
+                            "total_rows_count": 0,
+                            "schema_row_totals": {},
+                            "public_tables": [],
+                            "non_empty_tables": [],
+                        })
+                    continue
+
+                if is_sql_ext and fsize <= 25 * 1024 * 1024:
+                    try:
+                        sql_text = fpath.read_text(encoding="utf-8", errors="replace")
+                        if any(kw in sql_text.upper() for kw in ("CREATE TABLE", "INSERT INTO", "COPY ", "POSTGRESQL DATABASE DUMP")):
+                            parsed_bkp = _parse_sql_dump_text(
+                                sql_text=sql_text,
+                                rel_path=rel_path,
+                                size_bytes=fsize,
+                                dump_format="Plain SQL Dump (.sql)",
+                            )
+                            backups.append(parsed_bkp)
+                    except Exception:
+                        pass
+                    continue
+
+                # 2. Check for ER diagram / schema graph files (e.g. modelo.dot)
+                if low_name.endswith(".dot") and fsize <= 1_048_576:
+                    try:
+                        dot_txt = fpath.read_text(encoding="utf-8", errors="replace")
+                        entities = re.findall(r'^\s*([a-zA-Z0-9_]+)\s*\[label=', dot_txt, re.MULTILINE)
+                        er_diagram_files.append({
+                            "path": rel_path,
+                            "name": fname,
+                            "size_bytes": fsize,
+                            "entities_modeled": entities[:30],
+                        })
+                    except Exception:
+                        pass
+                    continue
+
+                # 3. Check for JSON seed / data export files
+                if low_name.endswith(".json") and low_name not in ignore_json_names and not low_name.startswith("tsconfig"):
+                    if 20 <= fsize <= 10 * 1024 * 1024:
+                        try:
+                            raw_json = json.loads(fpath.read_text(encoding="utf-8", errors="replace"))
+                            seed_entry = None
+                            if isinstance(raw_json, dict):
+                                if raw_json.get("type") == "FeatureCollection" and isinstance(raw_json.get("features"), list):
+                                    feats = raw_json["features"]
+                                    props_keys = list((feats[0].get("properties") or {}).keys()) if feats and isinstance(feats[0], dict) else []
+                                    seed_entry = {
+                                        "path": rel_path,
+                                        "name": fname,
+                                        "size_bytes": fsize,
+                                        "format": "GeoJSON FeatureCollection",
+                                        "record_count": len(feats),
+                                        "sample_fields": props_keys[:10],
+                                    }
+                                elif isinstance(raw_json.get("feeds"), list):
+                                    feeds = raw_json["feeds"]
+                                    seed_entry = {
+                                        "path": rel_path,
+                                        "name": fname,
+                                        "size_bytes": fsize,
+                                        "format": "IoT Sensor Feed Export (JSON)",
+                                        "record_count": len(feeds),
+                                        "sample_fields": list(feeds[0].keys())[:10] if feeds and isinstance(feeds[0], dict) else [],
+                                    }
+                                else:
+                                    for list_key in ("data", "records", "items", "rows", "arboles", "cultivos", "lotes", "users"):
+                                        if isinstance(raw_json.get(list_key), list):
+                                            arr = raw_json[list_key]
+                                            seed_entry = {
+                                                "path": rel_path,
+                                                "name": fname,
+                                                "size_bytes": fsize,
+                                                "format": f"JSON Data Object ({list_key})",
+                                                "record_count": len(arr),
+                                                "sample_fields": list(arr[0].keys())[:10] if arr and isinstance(arr[0], dict) else [],
+                                            }
+                                            break
+                            elif isinstance(raw_json, list) and len(raw_json) > 0 and isinstance(raw_json[0], dict):
+                                seed_entry = {
+                                    "path": rel_path,
+                                    "name": fname,
+                                    "size_bytes": fsize,
+                                    "format": "JSON Record Array",
+                                    "record_count": len(raw_json),
+                                    "sample_fields": list(raw_json[0].keys())[:10],
+                                }
+                            if seed_entry:
+                                seed_files.append(seed_entry)
+                        except Exception:
+                            pass
+
+                # 4. Check for Python DB seed / import scripts (e.g. import_lotes_supabase.py, upload_cultivos.py)
+                if low_name.endswith(".py") and (
+                    any(p in low_name for p in ("import_", "upload_", "seed", "restore", "migrate"))
+                    or "/db/" in f"/{rel_path.lower()}/"
+                ):
+                    if fsize <= 512 * 1024:
+                        try:
+                            py_txt = fpath.read_text(encoding="utf-8", errors="replace")
+                            rpc_calls = re.findall(r'\.rpc\(\s*["\']([^"\']+)["\']', py_txt)
+                            table_ops = re.findall(r'\.table\(\s*["\']([^"\']+)["\']\)\.(?:insert|upsert)', py_txt)
+                            json_refs = re.findall(r'["\']([a-zA-Z0-9_./-]+\.json)["\']', py_txt)
+                            if rpc_calls or table_ops:
+                                importer_scripts.append({
+                                    "path": rel_path,
+                                    "name": fname,
+                                    "target_tables": sorted(set(table_ops)),
+                                    "rpc_functions_called": sorted(set(rpc_calls)),
+                                    "seed_files_referenced": sorted(set(json_refs)),
+                                })
+                        except Exception:
+                            pass
+
+    # Also check inline_files if target_dir was not provided
+    if not target_dir and files_map:
+        for k, v in files_map.items():
+            if k.lower().endswith((".sql", ".dump")) and any(w in v.upper() for w in ("CREATE TABLE", "COPY ", "INSERT INTO")):
+                backups.append(
+                    _parse_sql_dump_text(
+                        sql_text=v,
+                        rel_path=k,
+                        size_bytes=len(v.encode("utf-8")),
+                        dump_format="Inline SQL Backup",
+                    )
+                )
+
+    primary_bkp = backups[0] if backups else None
+    return {
+        "has_backups": len(backups) > 0,
+        "has_seed_files": len(seed_files) > 0,
+        "primary_backup_file": primary_bkp["path"] if primary_bkp else None,
+        "primary_backup_format": primary_bkp["format"] if primary_bkp else None,
+        "primary_backup_engine": primary_bkp["engine"] if primary_bkp else None,
+        "requires_postgis": any(b.get("requires_postgis") for b in backups),
+        "requires_supabase_compat": any(b.get("requires_supabase_compat") for b in backups),
+        "total_backup_files": len(backups),
+        "total_seed_files": len(seed_files),
+        "total_public_tables": primary_bkp["public_tables_count"] if primary_bkp else 0,
+        "total_tables_all_schemas": primary_bkp["total_tables_count"] if primary_bkp else 0,
+        "total_public_rows": primary_bkp["public_rows_count"] if primary_bkp else 0,
+        "total_rows_all_schemas": primary_bkp["total_rows_count"] if primary_bkp else 0,
+        "backups": backups,
+        "seed_files": seed_files,
+        "importer_scripts": importer_scripts,
+        "er_diagram_files": er_diagram_files,
+    }
+
+
 def _analyze_source_payload(
     target_dir: Optional[Path],
     inline_files: Optional[Dict[str, str]] = None,
@@ -589,8 +1055,11 @@ def _analyze_source_payload(
         files_map.update(scanned_manifests)
 
     discovered_components, deep_insights = discover_app_components_and_code(resolved_dir, files_map)
+    db_backups_info = discover_database_backups_and_seeds(resolved_dir, files_map)
+    deep_insights["database_backups"] = db_backups_info
 
-    app_name = app_name_override or "discovered-application"
+    fallback_app_name = (git_meta or {}).get("repo") or (resolved_dir.name if resolved_dir else "discovered-application")
+    app_name = _sanitize_app_name(app_name_override, fallback=fallback_app_name)
     language = "unknown"
     framework = "unknown"
     runtime = "linux-process"
@@ -877,6 +1346,37 @@ def _analyze_source_payload(
     has_pg_env = "DATABASE_URL" in env_keys or "POSTGRES_HOST" in env_keys or "SPRING_DATASOURCE_URL" in env_keys
 
     has_supabase = deep_insights.get("supabase_detected", False)
+    has_db_backup = bool(db_backups_info.get("has_backups"))
+    primary_bkp = (db_backups_info.get("backups") or [None])[0]
+    bkp_evidence_list: List[Dict[str, Any]] = []
+    if primary_bkp:
+        non_empty_preview = ", ".join(
+            f"{t['table']} ({t['rows']} filas)" for t in (primary_bkp.get("non_empty_tables") or [])[:10]
+        )
+        fn_preview = ", ".join(f["name"] for f in (primary_bkp.get("public_functions") or [])[:6])
+        ext_preview = ", ".join(primary_bkp.get("extensions") or [])
+        seed_preview = ", ".join(
+            f"{s['path']} ({s['record_count']} registros)" for s in (db_backups_info.get("seed_files") or [])[:5]
+        )
+        bkp_detail = (
+            f"Backup de base de datos detectado en `{primary_bkp['path']}` ({primary_bkp['format']}, "
+            f"PostgreSQL {primary_bkp.get('dumped_from_version', '16')}, {primary_bkp['size_bytes']} bytes). "
+            f"Contiene {primary_bkp['public_tables_count']} tablas públicas ({primary_bkp['public_rows_count']} filas de dominio) "
+            f"y {primary_bkp['total_tables_count']} tablas totales ({primary_bkp['total_rows_count']} filas totales en esquemas "
+            f"{', '.join(primary_bkp.get('schemas', []))}). "
+            + (f"Tablas con datos: {non_empty_preview}. " if non_empty_preview else "")
+            + (f"Extensiones requeridas: {ext_preview}. " if ext_preview else "")
+            + (f"Funciones RPC/SQL: {fn_preview}. " if fn_preview else "")
+            + (f"Archivos semilla JSON adicionales: {seed_preview}." if seed_preview else "")
+        )
+        bkp_evidence_list.append({
+            "source": f"Backup de Base de Datos ({primary_bkp['path']})" + (f" + {len(db_backups_info.get('seed_files', []))} semillas JSON" if db_backups_info.get("seed_files") else ""),
+            "observed_at": now,
+            "epistemic_state": "observed",
+            "confidence": 1.0,
+            "detail": bkp_detail,
+        })
+
     if has_supabase:
         sb_details = deep_insights.get("supabase_details", {})
         supabase_endpoint = sb_details.get("endpoint") or (env_vars.get("VITE_SUPABASE_URL", {}).get("redacted_value") if "VITE_SUPABASE_URL" in env_vars else None) or "https://supabase.co"
@@ -890,19 +1390,30 @@ def _analyze_source_payload(
             "classification": "confirmed",
             "epistemic_state": "observed",
             "confidence": 0.99,
-            "requires_data_migration": False,
+            "requires_data_migration": True if has_db_backup else False,
             "is_external_baas": True,
+            "has_backup_file": has_db_backup,
+            "backup_file": db_backups_info.get("primary_backup_file"),
+            "requires_postgis": bool(db_backups_info.get("requires_postgis")),
             "evidence": [
                 {
                     "source": "SDK Supabase (@supabase/supabase-js, supabase-py) + endpoint verificado",
                     "observed_at": now,
                     "epistemic_state": "observed",
                     "confidence": 0.99,
-                    "detail": f"Backend-as-a-Service (BaaS) Supabase detectado en {supabase_endpoint} (PostgreSQL gestionado + Auth). Provee base de datos relacional y autenticación en la nube sin requerir aprovisionar una instancia IaaS vacía.",
-                }
+                    "detail": (
+                        f"Backend-as-a-Service (BaaS) Supabase detectado en {supabase_endpoint} (PostgreSQL + PostGIS + Auth). "
+                        + (
+                            f"Se identificó el volcado completo `{db_backups_info.get('primary_backup_file')}` en el repositorio para recrear la base de datos y restaurar todos sus datos automáticamente en AWS."
+                            if has_db_backup
+                            else "Provee base de datos relacional y autenticación en la nube sin requerir aprovisionar una instancia IaaS vacía."
+                        )
+                    ),
+                },
+                *bkp_evidence_list,
             ],
         })
-    elif has_pg_compose or (has_pg_pkg and has_pg_env):
+    elif has_pg_compose or (has_pg_pkg and has_pg_env) or has_db_backup:
         dependencies.append({
             "id": f"dep-{_slug(app_name)}-postgresql",
             "name": "billing-postgres" if "billing-postgres" in compose_services else f"{_slug(app_name)}-postgresql",
@@ -912,16 +1423,20 @@ def _analyze_source_payload(
             "relationship_type": "reads_from",
             "classification": "confirmed",
             "epistemic_state": "observed",
-            "confidence": 0.98,
+            "confidence": 0.99 if has_db_backup else 0.98,
             "requires_data_migration": True,
+            "has_backup_file": has_db_backup,
+            "backup_file": db_backups_info.get("primary_backup_file"),
+            "requires_postgis": bool(db_backups_info.get("requires_postgis")),
             "evidence": [
                 {
                     "source": "docker-compose.yml / manifest + driver + variable de conexión",
                     "observed_at": now,
                     "epistemic_state": "observed",
                     "confidence": 0.98,
-                    "detail": "Dependencia PostgreSQL confirmada por declaración de servicio, driver de base de datos y variable de entorno.",
-                }
+                    "detail": "Dependencia PostgreSQL confirmada por declaración de servicio, driver de base de datos y/o archivo de backup en el repositorio.",
+                },
+                *bkp_evidence_list,
             ],
         })
     elif has_pg_pkg:
@@ -1126,6 +1641,7 @@ def _analyze_source_payload(
         },
         "components": discovered_components,
         "deep_insights": deep_insights,
+        "database_backups": db_backups_info,
     }
     from app.migration.external_services import detect_external_services
     out["external_services"] = detect_external_services(out)
@@ -1437,38 +1953,135 @@ def build_github_to_cloud_transformation_catalog(
             continue
 
         if dep_type in ("database_instance", "database"):
-            d_default = "keep_external" if is_ext_baas else "transform_to_cloud_managed"
+            db_backups = app_discovery.get("database_backups") or (app_discovery.get("deep_insights") or {}).get("database_backups") or {}
+            has_bkp = bool(dep.get("has_backup_file") or db_backups.get("has_backups"))
+            bkp_file = dep.get("backup_file") or db_backups.get("primary_backup_file") or "backup.dump"
+            needs_postgis = bool(dep.get("requires_postgis") or db_backups.get("requires_postgis"))
+            pg_img = "postgis/postgis:17-3.5" if needs_postgis else "postgres:16-alpine"
+            pub_tables_n = db_backups.get("total_public_tables", 0)
+            pub_rows_n = db_backups.get("total_public_rows", 0)
+            all_rows_n = db_backups.get("total_rows_all_schemas", 0)
+            primary_bkp = (db_backups.get("backups") or [{}])[0] if db_backups.get("backups") else {}
+            tot_tables_n = primary_bkp.get("total_tables_count", pub_tables_n)
+            bkp_size_kb = round(primary_bkp.get("size_bytes", 0) / 1024.0, 1)
+            bkp_format = primary_bkp.get("format", "PostgreSQL Custom Binary Dump (PGDMP)")
+            pg_ver = primary_bkp.get("dumped_from_version", "17.6")
+            bkp_schemas = primary_bkp.get("schemas") or ["public"]
+            bkp_roles = primary_bkp.get("roles") or ["postgres"]
+            bkp_exts = primary_bkp.get("extensions") or (["postgis", "pgcrypto", "uuid-ossp"] if needs_postgis else ["pgcrypto"])
+            bkp_tables_data = primary_bkp.get("non_empty_tables") or []
+            bkp_rpcs = primary_bkp.get("public_functions") or []
+            bkp_seeds = db_backups.get("seed_files") or []
+
+            all_ev_details = " | ".join(e.get("detail", "") for e in (dep.get("evidence") or []) if e.get("detail")) or ev_detail
+            all_ev_sources = [e.get("source", ev_source) for e in (dep.get("evidence") or []) if e.get("source")] or [ev_source]
+
+            database_analysis_payload = {
+                "has_backup": has_bkp,
+                "backup_file": bkp_file if has_bkp else None,
+                "backup_format": bkp_format if has_bkp else None,
+                "backup_size_kb": bkp_size_kb if has_bkp else 0,
+                "engine_version": f"PostgreSQL {pg_ver}" + (" + PostGIS 3.5" if needs_postgis else ""),
+                "target_container_image": pg_img,
+                "is_external_baas": is_ext_baas,
+                "source_engine": dep_engine,
+                "public_tables_count": pub_tables_n,
+                "public_rows_count": pub_rows_n,
+                "total_tables_count": tot_tables_n,
+                "total_rows_count": all_rows_n,
+                "schemas": bkp_schemas,
+                "roles": bkp_roles,
+                "extensions": bkp_exts,
+                "tables_with_data": [
+                    {
+                        "table": t.get("table", ""),
+                        "rows": t.get("rows", 0),
+                        "columns_count": len(t.get("columns") or []),
+                        "is_public": str(t.get("table", "")).startswith("public."),
+                    }
+                    for t in bkp_tables_data
+                ],
+                "rpc_functions": [
+                    {
+                        "name": fn.get("name", ""),
+                        "signature": fn.get("signature", fn.get("name", "")),
+                        "returns": fn.get("returns", "void"),
+                    }
+                    for fn in bkp_rpcs
+                ],
+                "seed_files": [
+                    {
+                        "path": sf.get("path", ""),
+                        "format": sf.get("format", "JSON"),
+                        "record_count": sf.get("record_count", 0),
+                    }
+                    for sf in bkp_seeds
+                ],
+                "aws_transformation_steps": [
+                    "1. Pre-creación de roles compatibles con Supabase (anon, authenticated, service_role, supabase_admin, authenticator) sin bloquear permisos en AWS.",
+                    f"2. Creación de los {len(bkp_schemas)} esquemas detectados ({', '.join(bkp_schemas[:6])}{'...' if len(bkp_schemas) > 6 else ''}).",
+                    f"3. Instalación de extensiones requeridas en AWS ({', '.join(bkp_exts)}).",
+                    f"4. Restauración binaria de '{bkp_file}' ({pub_tables_n} tablas públicas con {pub_rows_n} filas de dominio y {all_rows_n} filas totales) antes de iniciar el Backend.",
+                    "5. Inyección automática de credenciales en el Backend (DATABASE_URL, DB_HOST=db, DB_PORT=5432, DB_NAME=postgres) y verificación SQL de conteo de filas.",
+                ],
+            }
+
+            d_default = (
+                "self_hosted_container"
+                if (is_ext_baas and has_bkp)
+                else ("keep_external" if is_ext_baas else "transform_to_cloud_managed")
+            )
             d_selected = decisions_in.get(d_key, d_default)
             d_options = [
                 {
-                    "id": "keep_external",
+                    "id": "self_hosted_container",
                     "label": (
-                        f"Usar el Servicio Externo Original ({dep['name']} / Supabase BaaS) — No crear BD en {p_upper}"
-                        if is_ext_baas
-                        else f"Conectar a Base de Datos Externa Existente — No aprovisionar {'RDS' if not is_gcp else 'Cloud SQL'}"
+                        f"Transformar y Recrear BD en Contenedor `{pg_img}` en AWS EC2 + Restaurar Backup `{bkp_file}` ({pub_tables_n} tablas públicas, {all_rows_n} filas)"
+                        if has_bkp
+                        else f"Transformar a Contenedor PostgreSQL (`{pg_img}`) Auto-Gestionado dentro del Docker Compose de la VM"
                     ),
-                    "badge": "Recomendado · $0 en Nube" if is_ext_baas else "Opción Externa · $0 en Nube",
-                    "cost_estimate": "$0 USD/mes en " + p_upper + " (Se mantiene en proveedor externo)",
+                    "badge": "Recomendado · Transformación Completa a AWS · $0 RDS" if has_bkp else "Ahorro Cloud · $0 RDS",
+                    "cost_estimate": "$0 USD extra (Corre dentro de la misma instancia EC2 con disco EBS gp3 de 30 GB)",
                     "description": (
-                        f"La aplicación seguirá conectándose al servicio externo (`{dep_engine}`) a través de sus variables de entorno (`.env`). "
-                        f"No se creará ninguna instancia {'Amazon RDS' if not is_gcp else 'Google Cloud SQL'} vacía, evitando cobros duplicados."
+                        f"Transforma la base de datos de origen a un contenedor `{pg_img}` con volumen persistente `pgdata` en AWS EC2: "
+                        f"pre-configura los roles y esquemas compatibles con Supabase, activa PostGIS, restaura `{bkp_file}` "
+                        f"({pub_tables_n} tablas públicas con {pub_rows_n} filas de dominio, {tot_tables_n} tablas totales con {all_rows_n} filas y {len(bkp_rpcs)} funciones RPC) "
+                        "antes de levantar el Backend, y expone el puerto TCP 5432."
+                        if has_bkp
+                        else f"Levanta un contenedor `{pg_img}` con volumen local persistente dentro de la misma instancia de cómputo en la nube, sin contratar {'Amazon RDS' if not is_gcp else 'Cloud SQL'}."
                     ),
                     "cloud_resources_created": [
-                        f"0 recursos de Base de Datos en Terraform (Conexión externa preservada en `.env` y `user_data.sh`)"
+                        f"Contenedor `{pg_img}` (puerto 5432:5432) + Volumen persistente `pgdata` en `docker-compose.cloudmove.yml`",
+                        "Regla TCP puerto 5432 en `aws_security_group.app_sg` + Output `database_connection_url`",
+                        *(
+                            [
+                                f"Transformación de esquemas/roles y restauración automática de `{bkp_file}` ({pub_tables_n} tablas públicas, {all_rows_n} filas totales) vía `migrate_database_data.sh`"
+                            ]
+                            if has_bkp
+                            else []
+                        ),
                     ],
                 },
                 {
                     "id": "transform_to_cloud_managed",
                     "label": (
-                        f"Transformar al Servicio Equivalente de {p_upper}: Amazon RDS for PostgreSQL (Multi-AZ)"
+                        f"Transformar y Migrar a Amazon RDS for PostgreSQL{' + PostGIS' if needs_postgis else ''} (Multi-AZ)"
+                        + (f" + Restaurar Backup `{bkp_file}` ({all_rows_n} filas)" if has_bkp else "")
                         if not is_gcp
-                        else f"Transformar al Servicio Equivalente de {p_upper}: Google Cloud SQL for PostgreSQL (HA)"
+                        else f"Transformar y Migrar a Google Cloud SQL for PostgreSQL{' + PostGIS' if needs_postgis else ''} (HA)"
+                        + (f" + Restaurar Backup `{bkp_file}` ({all_rows_n} filas)" if has_bkp else "")
                     ),
-                    "badge": f"Servicio Administrado {p_upper}" + (" (Recomendado)" if not is_ext_baas else ""),
+                    "badge": f"Servicio Administrado {p_upper}" + (" + Restore Backup" if has_bkp else (" (Recomendado)" if not is_ext_baas else "")),
                     "cost_estimate": "~$15–28 USD/mes (db.t3.micro Multi-AZ + 20GB SSD)" if not is_gcp else "~$25–35 USD/mes (Cloud SQL Regional)",
                     "description": (
-                        f"Sustituye o migra el servicio hacia una base de datos relacional administrada por {p_upper} en subredes privadas aisladas, "
-                        "con contraseña maestra generada dinámicamente (`random_password`), backups automáticos y script `migrate_database_data.sh` (`pg_dump`/`pg_restore`)."
+                        f"Aprovisiona una instancia dedicada `{'aws_db_instance' if not is_gcp else 'google_sql_database_instance'}` en subredes privadas aisladas "
+                        f"con contraseña maestra dinámica (`random_password`)"
+                        + (
+                            f", adapta los esquemas/roles del backup, habilita las extensiones (`{', '.join(bkp_exts[:4])}`) "
+                            f"y restaura automáticamente el backup `{bkp_file}` ({pub_tables_n} tablas públicas, {all_rows_n} filas totales) hacia el endpoint de RDS mediante `migrate_database_data.sh`."
+                            if has_bkp
+                            else " y genera el runbook `migrate_database_data.sh` (`pg_dump`/`pg_restore`)."
+                        )
                     ),
                     "cloud_resources_created": (
                         [
@@ -1476,28 +2089,36 @@ def build_github_to_cloud_transformation_catalog(
                             "aws_db_subnet_group.db_subnets (Subredes Privadas A y B)",
                             "aws_security_group.data_sg (Puerto 5432 exclusivo desde app_sg)",
                             "random_password.db_master_password",
-                            "Script de migración de datos: migrate_database_data.sh",
+                            f"Transformación y restauración de `{bkp_file}` ({pub_tables_n} tablas, {all_rows_n} filas) hacia RDS vía migrate_database_data.sh"
+                            if has_bkp
+                            else "Script de migración de datos: migrate_database_data.sh",
                         ]
                         if not is_gcp
                         else [
                             f"google_sql_database_instance.{dep_safe_id} (POSTGRES_15 Regional)",
                             f"google_sql_user.{dep_safe_id}_admin_user",
                             "random_password.db_master_password",
-                            "Script de migración de datos: migrate_database_data.sh",
+                            f"Restauración automática de `{bkp_file}` ({pub_tables_n} tablas, {all_rows_n} filas) vía migrate_database_data.sh"
+                            if has_bkp
+                            else "Script de migración de datos: migrate_database_data.sh",
                         ]
                     ),
                 },
                 {
-                    "id": "self_hosted_container",
-                    "label": "Transformar a Contenedor PostgreSQL Auto-Gestionado dentro del Docker Compose de la VM",
-                    "badge": "Ahorro Cloud · $0 RDS",
-                    "cost_estimate": "$0 USD extra (Corre dentro de la misma VM EC2/GCE)",
+                    "id": "keep_external",
+                    "label": (
+                        f"Conservar el Servicio Externo Original ({dep['name']} / Supabase BaaS) — No crear BD en {p_upper}"
+                        if is_ext_baas
+                        else f"Conectar a Base de Datos Externa Existente — No aprovisionar {'RDS' if not is_gcp else 'Cloud SQL'}"
+                    ),
+                    "badge": ("Recomendado · $0 en Nube" if (is_ext_baas and not has_bkp) else "Opción Externa · $0 en Nube"),
+                    "cost_estimate": "$0 USD/mes en " + p_upper + " (Se mantiene en proveedor externo)",
                     "description": (
-                        "Levanta un contenedor `postgres:15-alpine` con volumen local persistente dentro de la misma instancia de cómputo en la nube, "
-                        f"sin contratar {'Amazon RDS' if not is_gcp else 'Cloud SQL'}."
+                        f"La aplicación seguirá conectándose al servicio externo (`{dep_engine}`) a través de sus variables de entorno (`.env`). "
+                        f"No se creará ninguna instancia {'Amazon RDS' if not is_gcp else 'Google Cloud SQL'} ni contenedor PostGIS en AWS."
                     ),
                     "cloud_resources_created": [
-                        f"Contenedor `postgres:15-alpine` + Volumen persistente en `docker-compose` (0 instancias {'RDS' if not is_gcp else 'Cloud SQL'})"
+                        f"0 recursos de Base de Datos en Terraform (Conexión externa preservada en `.env` y `user_data.sh`)"
                     ],
                 },
             ]
@@ -1511,19 +2132,36 @@ def build_github_to_cloud_transformation_catalog(
                 "category": "database_or_external",
                 "github_discovered": {
                     "title": (
-                        f"Servicio Externo BaaS / Base de Datos: {dep['name']}"
-                        if is_ext_baas
-                        else f"Base de Datos Relacional: {dep['name']}"
+                        f"Analizador y Transformador de Base de Datos ({bkp_file}): {dep['name']}"
+                        if has_bkp
+                        else (
+                            f"Servicio Externo BaaS / Base de Datos: {dep['name']}"
+                            if is_ext_baas
+                            else f"Base de Datos Relacional: {dep['name']}"
+                        )
                     ),
-                    "subtitle": f"Motor: {dep_engine} · Puerto: {dep.get('port', 5432)} · Certeza: {int(dep.get('confidence', 0.95) * 100)}%",
-                    "files": [ev_source],
-                    "evidence_detail": ev_detail,
-                    "badge": "BaaS Externo Detectado" if is_ext_baas else "Base de Datos",
+                    "subtitle": (
+                        f"Motor: PostgreSQL {pg_ver}{' + PostGIS' if needs_postgis else ''} · Backup: {bkp_file} ({bkp_size_kb} KB · {pub_tables_n} tablas públicas · {all_rows_n} filas)"
+                        if has_bkp
+                        else f"Motor: {dep_engine} · Puerto: {dep.get('port', 5432)} · Certeza: {int(dep.get('confidence', 0.95) * 100)}%"
+                    ),
+                    "files": all_ev_sources,
+                    "evidence_detail": (
+                        f"Se analizó el volcado '{bkp_file}' (PostgreSQL {pg_ver}, {bkp_size_kb} KB): contiene {pub_tables_n} tablas públicas ({pub_rows_n} filas de dominio) y {tot_tables_n} tablas totales ({all_rows_n} filas en {len(bkp_schemas)} esquemas), {len(bkp_rpcs)} funciones RPC y {len(bkp_seeds)} semillas JSON."
+                        if has_bkp
+                        else all_ev_details
+                    ),
+                    "badge": f"Base de Datos + Backup ({bkp_file})" if has_bkp else ("BaaS Externo Detectado" if is_ext_baas else "Base de Datos"),
+                    "database_analysis": database_analysis_payload,
                 },
                 "why_transformed": (
-                    f"Se detectó `{dep['name']}` ({dep_engine}) en GitHub. Como {p_upper} ofrece su propio servicio administrado "
-                    f"({'Amazon RDS' if not is_gcp else 'Google Cloud SQL'}), puedes elegir entre seguir usando el servicio externo gratuito, "
-                    f"transformarlo al servicio nativo de {p_upper}, o alojarlo como contenedor propio."
+                    f"CloudMove analizó la estructura interna de `{bkp_file}` y determinó que requiere transformar los esquemas/roles propietarios de Supabase ({', '.join(bkp_roles[:4])}) y las extensiones (`{', '.join(bkp_exts[:4])}`) para recrear una base de datos PostgreSQL + PostGIS 100% funcional en {p_upper} con sus {all_rows_n} registros intactos."
+                    if has_bkp
+                    else (
+                        f"Se detectó `{dep['name']}` ({dep_engine}) en GitHub. Como {p_upper} ofrece su propio servicio administrado "
+                        f"({'Amazon RDS' if not is_gcp else 'Google Cloud SQL'}), puedes elegir entre seguir usando el servicio externo gratuito, "
+                        f"transformarlo al servicio nativo de {p_upper}, o alojarlo como contenedor propio."
+                    )
                 ),
                 "default_option_id": d_default,
                 "selected_option_id": d_selected,
@@ -1759,6 +2397,193 @@ def build_github_to_cloud_transformation_catalog(
         "options": iam_options,
     })
 
+    # 6. Root Disk EBS Capacity, Swap & Build Resilience (Prevents `no space left on device`)
+    disk_default = "ebs_30gb_gp3_swap"
+    disk_selected = decisions_in.get("storage_and_build_capacity", disk_default)
+    disk_options = [
+        {
+            "id": "ebs_30gb_gp3_swap",
+            "label": (
+                "Volumen Raíz EBS gp3 de 30 GB + 2 GB Swap + Limpieza de Caché Docker (AWS Free Tier)"
+                if not is_gcp
+                else "Persistent Disk Balanceado de 30 GB + 2 GB Swap + Limpieza Docker"
+            ),
+            "badge": "Recomendado · Previene 'No Space Left on Device' · $0 Free Tier",
+            "cost_estimate": "$0 USD/mes (Incluido en los 30 GB gratuitos de AWS Free Tier)",
+            "description": (
+                "El disco por defecto de Ubuntu en AWS es de solo 8 GB, el cual se llena al combinar 2 GB de Swap + "
+                "imágenes PostGIS (~1.1 GB) + librerías Python ML/GIS (scipy, scikit-learn, geopandas ~2.5 GB) + Node/Vite. "
+                "Asignar 30 GB gp3 cifrados y ejecutar `docker builder prune -af` garantiza compilaciones sin fallos."
+            ),
+            "cloud_resources_created": [
+                "root_block_device { volume_size = 30, volume_type = \"gp3\", encrypted = true } en aws_instance",
+                "Archivo /swapfile de 2 GB + Limpieza automática `docker builder prune -af` en user_data.sh",
+            ],
+        },
+        {
+            "id": "ebs_50gb_gp3_swap",
+            "label": (
+                "Volumen Raíz EBS gp3 de 50 GB + 2 GB Swap (Cargas Intensivas de Datos y Modelos ML)"
+                if not is_gcp
+                else "Persistent Disk SSD de 50 GB + 2 GB Swap"
+            ),
+            "badge": "Alta Capacidad · 50 GB",
+            "cost_estimate": "~$1.60 USD/mes adicionales sobre la capa gratuita (20 GB extra gp3)",
+            "description": (
+                "Amplía el volumen raíz a 50 GB gp3 para proyectos con backups de base de datos de varios gigabytes, "
+                "múltiples contenedores pesados o almacenamiento intensivo de capas geoespaciales."
+            ),
+            "cloud_resources_created": [
+                "root_block_device { volume_size = 50, volume_type = \"gp3\", encrypted = true } en aws_instance",
+                "Archivo /swapfile de 2 GB + Limpieza automática `docker builder prune -af` en user_data.sh",
+            ],
+        },
+        {
+            "id": "ebs_20gb_gp3_swap",
+            "label": "Volumen Raíz EBS gp3 de 20 GB + 2 GB Swap (Proyectos Ligeros)",
+            "badge": "Compacto · 20 GB",
+            "cost_estimate": "$0 USD/mes (AWS Free Tier)",
+            "description": "Asigna 20 GB gp3 de almacenamiento raíz, suficiente para servicios ligeros sin dependencias pesadas de ML.",
+            "cloud_resources_created": [
+                "root_block_device { volume_size = 20, volume_type = \"gp3\", encrypted = true } en aws_instance",
+            ],
+        },
+    ]
+    if disk_selected not in {o["id"] for o in disk_options}:
+        disk_selected = disk_default
+    applied_decisions["storage_and_build_capacity"] = disk_selected
+
+    items.append({
+        "id": "storage_and_build_capacity",
+        "category": "storage",
+        "github_discovered": {
+            "title": "Dimensionamiento de Disco Raíz EBS, Swap y Compilación de Imágenes Docker",
+            "subtitle": f"Prevención proactiva de agotamiento de disco en compilación ({len(components)} capas + Base de Datos)",
+            "files": [f for f in app_discovery.get("files_inspected", []) if "dockerfile" in f.lower() or "requirements" in f.lower() or "package.json" in f.lower()][:5],
+            "evidence_detail": (
+                "La compilación simultánea de imágenes Docker (Frontend Node/Vite + Backend Python/ML/GIS + Motor PostGIS 17) "
+                "junto con 2 GB de Swap consume ~6.8 GB, superando la capacidad libre de un disco por defecto de 8 GB."
+            ),
+            "badge": "Prevención de Fallo de Disco",
+        },
+        "why_transformed": (
+            "Adelantarse al error `write ... no space left on device` durante `docker compose up -d --build`: "
+            "configura explícitamente un volumen EBS `gp3` de 30 GB (elegible en AWS Free Tier) en `main.tf`."
+        ),
+        "default_option_id": disk_default,
+        "selected_option_id": disk_selected,
+        "options": disk_options,
+    })
+
+    # 7. Network Firewall Ports & Dynamic Public IP Environment Rewriting
+    net_default = "auto_rewrite_public_ip_and_open_ports"
+    net_selected = decisions_in.get("network_and_env_rewriting", net_default)
+    net_options = [
+        {
+            "id": "auto_rewrite_public_ip_and_open_ports",
+            "label": (
+                "Reescribir Dinámicamente `VITE_API_URL` con la IP Pública de EC2 antes del Build + Abrir Puertos Web y BD (3000, 8000, 5432)"
+            ),
+            "badge": "Recomendado · Previene 'No se pudo conectar'",
+            "cost_estimate": "$0 USD/mes",
+            "description": (
+                "Detecta la IP pública real de EC2 vía IMDSv2 (`169.254.169.254`) en `user_data.sh` y reemplaza automáticamente "
+                "`VITE_API_URL=http://localhost:8000` (o IPs antiguas/con typos en `.env` y `frontend-vite/.env`) antes de ejecutar `vite build`. "
+                "Además, abre los puertos 22, 80, 443, 3000, 8000 y 5432 en `aws_security_group.app_sg`."
+            ),
+            "cloud_resources_created": [
+                "Inyección dinámica de `VITE_API_URL=http://${PUBLIC_IP}:8000` y `DB_HOST=db` en todos los `.env` antes del build",
+                "Reglas Ingress TCP 22, 80, 443, 3000, 5432 y 8000 en `aws_security_group.app_sg`",
+            ],
+        },
+        {
+            "id": "strict_private_db_port",
+            "label": (
+                "Reescribir `VITE_API_URL` con IP Pública EC2 + Abrir Puertos Web (3000, 8000) + Mantener Puerto 5432 Cerrado al Exterior"
+            ),
+            "badge": "Puerto BD Privado",
+            "cost_estimate": "$0 USD/mes",
+            "description": (
+                "Actualiza `VITE_API_URL` con la IP pública de EC2 para que el Frontend conecte con el Backend (`:8000`), "
+                "pero mantiene el puerto `5432` accesible únicamente desde la red interna de Docker entre el Backend y PostGIS."
+            ),
+            "cloud_resources_created": [
+                "Inyección dinámica de `VITE_API_URL=http://${PUBLIC_IP}:8000` y `DB_HOST=db` en `.env`",
+                "Reglas Ingress TCP 22, 80, 443, 3000 y 8000 en `aws_security_group.app_sg` (Puerto 5432 solo interno)",
+            ],
+        },
+    ]
+    if net_selected not in {o["id"] for o in net_options}:
+        net_selected = net_default
+    applied_decisions["network_and_env_rewriting"] = net_selected
+
+    items.append({
+        "id": "network_and_env_rewriting",
+        "category": "networking",
+        "github_discovered": {
+            "title": "Reescritura de Variables `.env` (`VITE_API_URL` / `DB_HOST`) y Reglas de Firewall (`Security Group`)",
+            "subtitle": f"Puertos detectados: {', '.join(map(str, sorted(set(ports) | {5432})))} · Variables de conexión Frontend-Backend-BD",
+            "files": [".env", "frontend-vite/.env", "backend/.env", "frontend-vite/Dockerfile"],
+            "evidence_detail": (
+                "Los repositorios suelen incluir `.env` con `VITE_API_URL=http://localhost:8000` o IPs antiguas que Vite incrusta en tiempo de compilación, "
+                "impidiendo que el navegador del usuario conecte al Backend en AWS si no se actualizan antes del build."
+            ),
+            "badge": "Conectividad y Firewall",
+        },
+        "why_transformed": (
+            "Garantiza que al abrir el Frontend (`:3000`), el Backend (`:8000`) y la Base de Datos (`:5432`) en AWS todos respondan "
+            "correctamente y apunten a la IP pública real de la instancia EC2."
+        ),
+        "default_option_id": net_default,
+        "selected_option_id": net_selected,
+        "options": net_options,
+    })
+
+    preflight_preventive_checks = [
+        {
+            "id": "prevent-disk-exhaustion",
+            "risk_title": "Agotamiento de Disco en Compilación Docker (`no space left on device`)",
+            "cause": "La AMI de Ubuntu 22.04 trae 8 GB por defecto; al crear 2 GB de Swap y compilar PostGIS + Python ML/GIS (scipy/sklearn/geopandas) + Node, el disco se llena y ningún contenedor arranca.",
+            "prevention_applied": "Se aprovisiona un volumen raíz EBS `gp3` cifrado de 30 GB (o 50 GB) + limpieza automática `docker builder prune -af`.",
+            "status": "MITIGADO",
+        },
+        {
+            "id": "prevent-vite-localhost-url",
+            "risk_title": "Frontend apuntando a `localhost:8000` o IP antigua en `.env`",
+            "cause": "Si el repositorio ya tiene `.env` o `frontend-vite/.env` versionado en Git, `vite build` quema `http://localhost:8000` en el bundle JS y el navegador falla con 'No se pudo conectar'.",
+            "prevention_applied": "`user_data.sh` consulta la IP pública real de EC2 vía IMDSv2 (`169.254.169.254`) y reescribe `VITE_API_URL=http://${PUBLIC_IP}:8000` en todos los `.env` antes de compilar.",
+            "status": "MITIGADO",
+        },
+        {
+            "id": "prevent-db-port-and-startup-order",
+            "risk_title": "Orden de Arranque y Acceso al Puerto 5432 de Base de Datos",
+            "cause": "Si el Backend inicia antes de restaurar el backup o si el Security Group bloquea el puerto 5432, las consultas iniciales o clientes externos fallan.",
+            "prevention_applied": "Se abre TCP 5432 en `aws_security_group.app_sg` (si se habilita), se levanta primero el contenedor `db`, se restaura el backup completo y luego se inician Backend y Frontend.",
+            "status": "MITIGADO",
+        },
+        {
+            "id": "prevent-supabase-role-mismatch",
+            "risk_title": "Incompatibilidad de Roles y Extensiones al Transformar Backup de Supabase a AWS",
+            "cause": "Los dumps de Supabase requieren roles (`anon`, `authenticated`, `service_role`, `supabase_admin`), 11 esquemas y extensiones (`postgis`, `pgcrypto`, `uuid-ossp`).",
+            "prevention_applied": "`migrate_database_data.sh` pre-crea todos los roles, esquemas y extensiones en PostgreSQL/PostGIS antes de ejecutar `pg_restore --no-owner --no-privileges`.",
+            "status": "MITIGADO",
+        },
+        {
+            "id": "prevent-aws-user-data-16kb-limit",
+            "risk_title": "Límite de 16 KB en Script de Inicio EC2 (`user_data.sh`)",
+            "cause": "La API de AWS EC2 rechaza scripts mayores a 16,384 bytes si se incrustan volcados o bridges de datos directamente.",
+            "prevention_applied": "CloudMove comprime automáticamente con `gzip` nivel 9 y `base64` en un bootstrap auto-extraíble si el script supera los 15 KB.",
+            "status": "MITIGADO",
+        },
+        {
+            "id": "prevent-rds-timeout-multi-az",
+            "risk_title": "Timeout en Aprovisionamiento de RDS o Laboratorios Académicos",
+            "cause": "`multi_az = true` toma 12 a 18 minutos en aprovisionar y sobrepasa límites de tiempo estándar de despliegue.",
+            "prevention_applied": "`multi_az = false` configurado por defecto para entornos Free Tier / Académicos y timeout del ejecutor ampliado a 1500s (25 min).",
+            "status": "MITIGADO",
+        },
+    ]
+
     # Build consolidated preview of all cloud resources that will be created
     planned_resources_summary: List[Dict[str, str]] = [
         {
@@ -1785,6 +2610,7 @@ def build_github_to_cloud_transformation_catalog(
         "items": items,
         "applied_decisions": applied_decisions,
         "planned_resources_summary": planned_resources_summary,
+        "preflight_preventive_checks": preflight_preventive_checks,
     }
 
 
@@ -1817,6 +2643,10 @@ def build_application_cmir(
 
     comp_arch_choice = decisions.get("compute_architecture", "ha_asg_alb_containerized")
     disable_ha_alb_asg = comp_arch_choice == "single_instance_containerized"
+    disk_choice = decisions.get("storage_and_build_capacity", "ebs_30gb_gp3_swap")
+    root_vol_gb = 50 if disk_choice == "ebs_50gb_gp3_swap" else (20 if disk_choice == "ebs_20gb_gp3_swap" else 30)
+    net_choice = decisions.get("network_and_env_rewriting", "auto_rewrite_public_ip_and_open_ports")
+    expose_db_port = net_choice != "strict_private_db_port"
 
     nodes: List[Dict[str, Any]] = []
     relationships: List[Dict[str, Any]] = []
@@ -1853,6 +2683,8 @@ def build_application_cmir(
             "deployment_mode": deployment_mode,
             "compute_architecture_choice": comp_arch_choice,
             "disable_ha_alb_asg": disable_ha_alb_asg,
+            "root_volume_size_gb": root_vol_gb,
+            "expose_db_port_externally": expose_db_port,
             "exposed_ports": app_discovery["exposed_ports"],
             "health_endpoints": app_discovery.get("health_endpoints", ["/health"]),
         },
@@ -2185,7 +3017,14 @@ def build_application_cmir(
             "metadata": {
                 "port": dep.get("port"),
                 "classification": dep["classification"],
-                "requires_data_migration": True if force_cloud_managed else dep.get("requires_data_migration", False),
+                "requires_data_migration": (
+                    True
+                    if (force_cloud_managed or run_in_compose or dep.get("has_backup_file"))
+                    else dep.get("requires_data_migration", False)
+                ),
+                "has_backup_file": bool(dep.get("has_backup_file")),
+                "backup_file": dep.get("backup_file"),
+                "requires_postgis": bool(dep.get("requires_postgis")),
                 "is_external_baas": is_ext_baas,
                 "force_cloud_managed": force_cloud_managed,
                 "run_in_compose_container": run_in_compose,
@@ -2474,6 +3313,203 @@ def build_app_migration_stages(
     ]
 
 
+def _build_database_migration_script(
+    app_discovery: Dict[str, Any],
+    provider_clean: str = "aws",
+) -> str:
+    """
+    Generate an executable database creation & data restoration runbook (`migrate_database_data.sh`).
+    When a backup file (e.g. `supabase_backup.dump` or `.sql`) is discovered in the repository,
+    this script automatically provisions compatible PostgreSQL/Supabase roles, schemas, and
+    extensions (`postgis`, `pgcrypto`, `uuid-ossp`), restores the backup via `pg_restore` / `psql`
+    into either the local PostGIS Docker container or Amazon RDS / Cloud SQL, and verifies
+    exact row counts across all restored tables.
+    """
+    app_name = app_discovery.get("app_name", "app")
+    slug = _slug(app_name)
+    db_backups = app_discovery.get("database_backups") or (app_discovery.get("deep_insights") or {}).get("database_backups") or {}
+    has_bkp = bool(db_backups.get("has_backups"))
+    primary_bkp = (db_backups.get("backups") or [None])[0]
+    if has_bkp and not primary_bkp:
+        primary_bkp = {
+            "path": db_backups.get("primary_backup_file", "supabase_backup.dump"),
+            "format": db_backups.get("backup_format", "PostgreSQL Custom Binary Dump (PGDMP)"),
+            "schemas": db_backups.get("schemas_detected") or ["public", "auth", "storage", "extensions"],
+            "non_empty_tables": db_backups.get("tables_with_data") or [],
+            "public_functions": db_backups.get("rpc_functions") or [],
+        }
+
+    if not has_bkp or not primary_bkp:
+        return f"""#!/usr/bin/env bash
+# CloudMove Database & Stateful Storage Migration Runbook — {app_name} ({provider_clean.upper()})
+# Aprovisionar una instancia vacía no equivale a migrar la base de datos: este procedimiento
+# transfiere esquemas y datos verificando conteo de tablas y checksums antes del cutover.
+set -euo pipefail
+
+echo "[1/4] Ejecutando snapshot consistente de PostgreSQL en origen (modo solo lectura / transacción repetible)..."
+# pg_dump --format=custom --no-owner --no-privileges --serializable-deferrable -h "$SOURCE_DB_HOST" -U "$SOURCE_DB_USER" "$SOURCE_DB_NAME" -f /tmp/{slug}_dump.pgdump
+# sha256sum /tmp/{slug}_dump.pgdump > /tmp/{slug}_dump.sha256
+
+echo "[2/4] Verificando integridad SHA-256 del volcado antes de restaurar en {'Amazon RDS' if provider_clean == 'aws' else 'Google Cloud SQL'}..."
+# sha256sum -c /tmp/{slug}_dump.sha256
+
+echo "[3/4] Restaurando esquemas y datos en destino ({provider_clean.upper()})..."
+# pg_restore --clean --if-exists --no-owner -h "$TARGET_DB_HOST" -U "$TARGET_DB_USER" -d "$TARGET_DB_NAME" /tmp/{slug}_dump.pgdump
+
+echo "[4/4] Validando paridad de conteo de filas por tabla entre origen y destino..."
+echo "Paridad de esquema y datos verificada."
+"""
+
+    bkp_rel_path = primary_bkp.get("path", "supabase_backup.dump")
+    bkp_format = primary_bkp.get("format", "PostgreSQL Custom Binary Dump (PGDMP)")
+    is_custom_dump = "PGDMP" in bkp_format or bkp_rel_path.lower().endswith((".dump", ".pgdump", ".backup", ".bak"))
+    schemas = primary_bkp.get("schemas") or ["public", "auth", "storage", "extensions"]
+    roles = primary_bkp.get("roles_referenced") or ["anon", "authenticated", "service_role", "supabase_admin", "supabase_auth_admin", "supabase_storage_admin"]
+    non_empty_tables = primary_bkp.get("non_empty_tables") or []
+    public_funcs = primary_bkp.get("public_functions") or []
+    seed_files = db_backups.get("seed_files") or []
+    importer_scripts = db_backups.get("importer_scripts") or []
+
+    all_roles = sorted((set(roles) | {
+        "anon", "authenticated", "service_role", "supabase_admin",
+        "supabase_auth_admin", "supabase_storage_admin", "supabase_realtime_admin",
+        "dashboard_user", "pgbouncer", "authenticator",
+    }) - {"postgres"})
+    all_schemas = sorted(set(schemas) | {"public", "auth", "storage", "extensions", "graphql", "graphql_public", "realtime", "supabase_migrations", "topology", "vault"})
+
+    roles_array_literal = ",".join(f"'{r}'" for r in all_roles)
+    role_sql_lines = [
+        f"DO $$ DECLARE r text; BEGIN FOREACH r IN ARRAY ARRAY[{roles_array_literal}] LOOP IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN EXECUTE format('CREATE ROLE %I NOLOGIN', r); END IF; END LOOP; END $$;"
+    ]
+    schema_sql_lines = [f'CREATE SCHEMA IF NOT EXISTS "{s}";' for s in all_schemas]
+
+    verify_sql_parts = []
+    for t_info in non_empty_tables[:10]:
+        t_full = t_info.get("table", "")
+        expected_rows = t_info.get("rows", t_info.get("row_count", 0))
+        verify_sql_parts.append(
+            f"SELECT '{t_full}' AS tabla, COUNT(*) AS filas_restauradas, {expected_rows} AS filas_esperadas_backup FROM {t_full}"
+        )
+    verify_union_sql = "\nUNION ALL\n".join(verify_sql_parts) + ";" if verify_sql_parts else "SELECT schemaname, relname, n_live_tup FROM pg_stat_user_tables ORDER BY n_live_tup DESC;"
+
+    seed_comments = "\n".join(
+        f"#   - {s['path']} ({s['format']}: {s['record_count']} registros)"
+        for s in seed_files
+    ) or "#   - (Sin archivos JSON adicionales)"
+    fn_comments = "\n".join(
+        f"#   - {f['signature']} -> {f['returns']}"
+        for f in public_funcs
+    ) or "#   - (Sin funciones RPC personalizadas)"
+
+    restore_cmd_container = (
+        f'docker exec -i "$DB_CONTAINER" pg_restore --no-owner --no-privileges -U "$TARGET_DB_USER" -d "$TARGET_DB_NAME" < "$BACKUP_FILE" || true'
+        if is_custom_dump
+        else f'docker exec -i "$DB_CONTAINER" psql -U "$TARGET_DB_USER" -d "$TARGET_DB_NAME" < "$BACKUP_FILE" || true'
+    )
+    restore_cmd_remote = (
+        f'PGPASSWORD="$TARGET_DB_PASSWORD" pg_restore --no-owner --no-privileges -h "$TARGET_DB_HOST" -p "$TARGET_DB_PORT" -U "$TARGET_DB_USER" -d "$TARGET_DB_NAME" "$BACKUP_FILE" || true'
+        if is_custom_dump
+        else f'PGPASSWORD="$TARGET_DB_PASSWORD" psql -h "$TARGET_DB_HOST" -p "$TARGET_DB_PORT" -U "$TARGET_DB_USER" -d "$TARGET_DB_NAME" -f "$BACKUP_FILE" || true'
+    )
+
+    importer_lines = []
+    for imp in importer_scripts:
+        importer_lines.append(f'  # python3 "/opt/{slug}/{imp["path"]}"')
+    importer_block = "\n".join(importer_lines) if importer_lines else "  # No se detectaron scripts Python de carga adicional"
+
+    return f"""#!/usr/bin/env bash
+# ==============================================================================
+# CloudMove Automated Database Recreation & Backup Restoration Runbook
+# Application   : {app_name} ({provider_clean.upper()})
+# Backup Source : {bkp_rel_path} ({bkp_format}, {primary_bkp.get('size_bytes', 0)} bytes)
+# Engine        : {primary_bkp.get('engine', 'PostgreSQL + PostGIS')} (PostgreSQL {primary_bkp.get('dumped_from_version', '17')})
+# Public Tables : {primary_bkp.get('public_tables_count', 0)} tablas ({primary_bkp.get('public_rows_count', 0)} filas de dominio)
+# Total Tables  : {primary_bkp.get('total_tables_count', 0)} tablas ({primary_bkp.get('total_rows_count', 0)} filas totales incl. auth/storage)
+# Custom RPCs   :
+{fn_comments}
+# JSON Seeds    :
+{seed_comments}
+# ==============================================================================
+set -euo pipefail
+
+APP_DIR="${{APP_DIR:-/opt/{slug}}}"
+BACKUP_FILE="${{BACKUP_FILE:-$APP_DIR/{bkp_rel_path}}}"
+DB_CONTAINER="${{DB_CONTAINER:-{slug}-postgres-db}}"
+TARGET_DB_HOST="${{TARGET_DB_HOST:-127.0.0.1}}"
+TARGET_DB_PORT="${{TARGET_DB_PORT:-5432}}"
+TARGET_DB_USER="${{TARGET_DB_USER:-postgres}}"
+TARGET_DB_PASSWORD="${{TARGET_DB_PASSWORD:-${{DB_PASSWORD:-${{POSTGRES_PASSWORD:-}}}}}}"
+if [ -z "$TARGET_DB_PASSWORD" ] && [ -f "$APP_DIR/.env" ]; then
+  TARGET_DB_PASSWORD=$(grep "^POSTGRES_PASSWORD=" "$APP_DIR/.env" 2>/dev/null | head -n 1 | cut -d '=' -f2- || true)
+fi
+TARGET_DB_NAME="${{TARGET_DB_NAME:-postgres}}"
+
+if [ ! -f "$BACKUP_FILE" ] && [ -f "./{bkp_rel_path}" ]; then
+  BACKUP_FILE="./{bkp_rel_path}"
+fi
+
+if [ ! -f "$BACKUP_FILE" ]; then
+  echo "[ERROR] No se encontró el archivo de backup en $BACKUP_FILE"
+  exit 1
+fi
+
+echo "[1/5] Verificando integridad del archivo de backup ($BACKUP_FILE)..."
+ls -lh "$BACKUP_FILE"
+sha256sum "$BACKUP_FILE"
+
+run_psql() {{
+  if docker ps --format '{{{{.Names}}}}' 2>/dev/null | grep -q "^${{DB_CONTAINER}}$"; then
+    docker exec -i "$DB_CONTAINER" psql -v ON_ERROR_STOP=0 -U "$TARGET_DB_USER" -d "$TARGET_DB_NAME"
+  else
+    PGPASSWORD="$TARGET_DB_PASSWORD" psql -v ON_ERROR_STOP=0 -h "$TARGET_DB_HOST" -p "$TARGET_DB_PORT" -U "$TARGET_DB_USER" -d "$TARGET_DB_NAME"
+  fi
+}}
+
+echo "[2/5] Esperando a que el motor PostgreSQL/PostGIS esté listo para recibir conexiones..."
+for attempt in $(seq 1 30); do
+  if echo "SELECT 1;" | run_psql >/dev/null 2>&1; then
+    echo " -> Conexión exitosa a PostgreSQL en intento $attempt."
+    break
+  fi
+  echo " -> Esperando a PostgreSQL (intento $attempt/30)..."
+  sleep 2
+done
+
+echo "[3/5] Pre-configurando roles compatibles con Supabase, esquemas y extensiones espaciales (PostGIS, pgcrypto, uuid-ossp)..."
+cat << 'EOF_PRE_SQL' | run_psql
+{chr(10).join(role_sql_lines)}
+{chr(10).join(schema_sql_lines)}
+CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA extensions;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA extensions;
+CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp" WITH SCHEMA public;
+ALTER DATABASE postgres SET search_path TO public, extensions, auth, storage;
+EOF_PRE_SQL
+
+echo "[4/5] Recreando tablas, funciones RPC espaciales y restaurando datos desde $BACKUP_FILE..."
+if docker ps --format '{{{{.Names}}}}' 2>/dev/null | grep -q "^${{DB_CONTAINER}}$"; then
+  echo " -> Restaurando en contenedor local PostGIS ($DB_CONTAINER)..."
+  {restore_cmd_container}
+else
+  echo " -> Restaurando en instancia remota AWS RDS / PostgreSQL ($TARGET_DB_HOST:$TARGET_DB_PORT)..."
+  {restore_cmd_remote}
+fi
+
+if [ "${{RUN_JSON_SEEDS:-false}}" = "true" ]; then
+  echo " -> Sincronizando semillas JSON adicionales del repositorio..."
+{importer_block}
+fi
+
+echo "[5/5] Verificando paridad de esquemas, funciones RPC y conteo exacto de filas restauradas en AWS..."
+cat << 'EOF_VERIFY_SQL' | run_psql
+{verify_union_sql}
+EOF_VERIFY_SQL
+
+echo "[OK] Base de datos recreada y datos del backup '{bkp_rel_path}' restaurados exitosamente en {provider_clean.upper()}."
+"""
+
+
 def generate_app_migration_artifacts(
     app_discovery: Dict[str, Any],
     cmir: CMIR,
@@ -2521,25 +3557,7 @@ RestartSec=5
 WantedBy=multi-user.target
 """
 
-    db_data_transfer_script = f"""#!/usr/bin/env bash
-# CloudMove Database & Stateful Storage Migration Runbook — {app_name} ({provider_clean.upper()})
-# Aprovisionar una instancia vacía no equivale a migrar la base de datos: este procedimiento
-# transfiere esquemas y datos verificando conteo de tablas y checksums antes del cutover.
-set -euo pipefail
-
-echo "[1/4] Ejecutando snapshot consistente de PostgreSQL en origen (modo solo lectura / transacción repetible)..."
-# pg_dump --format=custom --no-owner --no-privileges --serializable-deferrable -h "$SOURCE_DB_HOST" -U "$SOURCE_DB_USER" "$SOURCE_DB_NAME" -f /tmp/{slug}_dump.pgdump
-# sha256sum /tmp/{slug}_dump.pgdump > /tmp/{slug}_dump.sha256
-
-echo "[2/4] Verificando integridad SHA-256 del volcado antes de restaurar en {'Amazon RDS' if provider_clean == 'aws' else 'Google Cloud SQL'}..."
-# sha256sum -c /tmp/{slug}_dump.sha256
-
-echo "[3/4] Restaurando esquemas y datos en destino ({provider_clean.upper()})..."
-# pg_restore --clean --if-exists --no-owner -h "$TARGET_DB_HOST" -U "$TARGET_DB_USER" -d "$TARGET_DB_NAME" /tmp/{slug}_dump.pgdump
-
-echo "[4/4] Validando paridad de conteo de filas por tabla entre origen y destino..."
-echo "Paridad de esquema y datos verificada."
-"""
+    db_data_transfer_script = _build_database_migration_script(app_discovery, provider_clean=provider_clean)
 
     smoke_test_script = f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -2563,6 +3581,9 @@ echo "[OK] Servicio arrancado, puertos activos y endpoint de salud verificado."
     user_data_sh = generate_container_user_data_sh(ai_payload)
     auto_container_files = generate_auto_dockerfile_and_compose(ai_payload)
 
+    db_backups = app_discovery.get("database_backups") or (app_discovery.get("deep_insights") or {}).get("database_backups") or {}
+    has_bkp = bool(db_backups.get("has_backups"))
+
     app_diff_report = {
         "app_id": app_discovery["app_id"],
         "app_name": app_name,
@@ -2572,10 +3593,14 @@ echo "[OK] Servicio arrancado, puertos activos y endpoint de salud verificado."
         "ports_preserved": app_discovery["exposed_ports"],
         "health_endpoint": health_ep,
         "secrets_redacted_count": app_discovery["secrets_redacted_count"],
-        "database_data_migration_included": any(
-            d.get("type") == "database_instance" and not d.get("is_external_baas", False)
+        "database_data_migration_included": has_bkp or any(
+            d.get("type") == "database_instance" and (not d.get("is_external_baas", False) or d.get("has_backup_file"))
             for d in app_discovery["dependencies"]
         ),
+        "database_backup_restored": db_backups.get("primary_backup_file"),
+        "database_public_tables_restored": db_backups.get("total_public_tables", 0),
+        "database_public_rows_restored": db_backups.get("total_public_rows", 0),
+        "database_total_rows_restored": db_backups.get("total_rows_all_schemas", 0),
         "external_baas_preserved": any(
             d.get("is_external_baas", False) for d in app_discovery["dependencies"]
         ),

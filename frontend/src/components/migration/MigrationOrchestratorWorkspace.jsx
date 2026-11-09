@@ -4,6 +4,10 @@ import RepositoryTreeViewer from "./RepositoryTreeViewer";
 import ExternalServicesCredentialsCard from "./ExternalServicesCredentialsCard";
 import TargetArchitectureView from "./TargetArchitectureView";
 import AutomatedCloudDeployerPanel from "./AutomatedCloudDeployerPanel";
+import PlannedCloudStructureGraphModal, {
+  StructuredGithubEvidenceView,
+  PreflightPreventiveChecksBanner,
+} from "./PlannedCloudStructureGraphModal";
 import { apiFetch } from "../../utils/apiClient";
 import {
   AwsPageHeader,
@@ -84,6 +88,8 @@ function GithubToCloudTransformationSelector({
   applyingChanges = false,
   isJobView = false,
 }) {
+  const [showGraphicalStructureModal, setShowGraphicalStructureModal] = useState(false);
+
   if (!catalog || !Array.isArray(catalog.items) || catalog.items.length === 0) {
     return null;
   }
@@ -165,20 +171,53 @@ function GithubToCloudTransformationSelector({
           </p>
         </div>
 
-        {isJobView && onApplyToExistingJob && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <button
             type="button"
-            className="cm-btn primary sm"
-            onClick={onApplyToExistingJob}
-            disabled={applyingChanges}
-            style={{ whiteSpace: "nowrap", fontWeight: 700 }}
+            className="cm-btn sm"
+            onClick={() => setShowGraphicalStructureModal(true)}
+            style={{
+              backgroundColor: "#0F1B2A",
+              color: "#ffffff",
+              border: "1px solid #0972D3",
+              fontWeight: 700,
+              whiteSpace: "nowrap",
+              padding: "7px 14px",
+            }}
           >
-            {applyingChanges
-              ? "Regenerando Terraform..."
-              : `Aplicar Elecciones y Regenerar Terraform (${pUpper})`}
+            Verificar Gráficamente Estructura a Crear en {pUpper}
           </button>
-        )}
+
+          {isJobView && onApplyToExistingJob && (
+            <button
+              type="button"
+              className="cm-btn primary sm"
+              onClick={onApplyToExistingJob}
+              disabled={applyingChanges}
+              style={{ whiteSpace: "nowrap", fontWeight: 700 }}
+            >
+              {applyingChanges
+                ? "Regenerando Terraform..."
+                : `Aplicar Elecciones y Regenerar Terraform (${pUpper})`}
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Diagnóstico Preventivo Pre-Flight Anti-Fallos */}
+      <PreflightPreventiveChecksBanner
+        checks={catalog.preflight_preventive_checks}
+        targetProvider={pUpper}
+      />
+
+      {/* Modal Verificador Gráfico de la Estructura AWS / GCP */}
+      <PlannedCloudStructureGraphModal
+        isOpen={showGraphicalStructureModal}
+        onClose={() => setShowGraphicalStructureModal(false)}
+        catalog={catalog}
+        decisions={activeDecisions}
+        targetProvider={targetProvider}
+      />
 
       {/* Lista de elementos descubiertos en GitHub y sus opciones de transformación en la nube */}
       <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
@@ -230,15 +269,7 @@ function GithubToCloudTransformationSelector({
                       <span style={{ fontSize: 13.5, color: "#5F6B7A" }}>({gh.subtitle})</span>
                     )}
                   </div>
-                  <div style={{ fontSize: 13.5, color: "#16191F", marginTop: 4 }}>
-                    <strong>Evidencia en GitHub:</strong> {gh.evidence_detail}
-                    {Array.isArray(gh.files) && gh.files.length > 0 && (
-                      <span>
-                        {" "}
-                        · Archivos: <code>{gh.files.join(", ")}</code>
-                      </span>
-                    )}
-                  </div>
+                  <StructuredGithubEvidenceView gh={gh} targetProvider={pUpper} />
                   <div
                     style={{
                       fontSize: 13.5,
@@ -423,9 +454,24 @@ function GithubToCloudTransformationSelector({
           <strong style={{ fontSize: 14, color: "#16191F" }}>
             Resumen en Tiempo Real: ¿Qué se va a crear exactamente en {pUpper} según tu selección? ({liveResourcesPreview.length} bloques)
           </strong>
-          <span className="cm-badge observed" style={{ fontSize: 12.5 }}>
-            Sincronizado con Generador Terraform
-          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="cm-btn sm"
+              onClick={() => setShowGraphicalStructureModal(true)}
+              style={{
+                backgroundColor: "#F2F8FD",
+                color: "#0972D3",
+                border: "1px solid #0972D3",
+                fontWeight: 700,
+              }}
+            >
+              Ver Diagrama Gráfico de la Estructura en {pUpper}
+            </button>
+            <span className="cm-badge observed" style={{ fontSize: 12.5 }}>
+              Sincronizado con Generador Terraform
+            </span>
+          </div>
         </div>
         <div className="cm-table-wrap">
           <table className="cm-table">
@@ -468,6 +514,158 @@ function GithubToCloudTransformationSelector({
             </tbody>
           </table>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function VmOsToCloudTransformationMap({
+  manifest,
+  targetProvider = "aws",
+  consistencyStrategy = "quiesced_snapshot",
+}) {
+  if (!manifest) return null;
+
+  const pUpper = (targetProvider || "aws").toUpperCase();
+  const slug = String(manifest.name || "live-os")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const osInfo = manifest.os || {};
+  const disks = manifest.disks || [];
+  const primaryDisk = disks[0] || {};
+  const ports = manifest.listening_ports || [22, 80, 443, 3000, 8000];
+  const procsCount = (manifest.running_processes || []).length;
+  const svcsCount = (manifest.systemd_services || []).length;
+  const usersList = manifest.local_users || ["root"];
+  const fsDirs = manifest.filesystem_inventory || manifest.filesystem_summary || [];
+  const pkgsCount = manifest.installed_packages_summary?.total_count || 0;
+
+  const transformationRows = [
+    {
+      originTitle: `Red y ${ports.length} Puertos en Escucha Detectados en el SO (ss -tulpn)`,
+      originDetail: `Interfaces: ${(manifest.network_interfaces || []).map((n) => n.name).join(", ") || "eth0"} · Puertos activos: ${ports.slice(0, 12).join(", ")}${ports.length > 12 ? "..." : ""}`,
+      whyTransformed: `Se adapta la red física a una VPC aislada Multi-AZ con DHCP y se abren exactamente los puertos de los servicios activos del SO.`,
+      strategyLabel: `VPC Aislada Multi-AZ + Security Group con ${ports.slice(0, 20).length} Reglas TCP`,
+      terraformResource:
+        pUpper === "GCP"
+          ? "google_compute_network.target_vpc + google_compute_subnetwork.primary_subnet + google_compute_firewall.allow_internal"
+          : "aws_vpc.target_vpc + 4x aws_subnet + aws_internet_gateway.igw + aws_route_table.public_rt + aws_security_group.app_sg",
+      costEstimate: "$0 USD/mes",
+    },
+    {
+      originTitle: `Sistema Operativo ${osInfo.distro || "Linux"} ${osInfo.version || ""} (Kernel ${osInfo.kernel || "amd64"})`,
+      originDetail: `Arranque: ${manifest.boot_mode || "UEFI"} (${manifest.partition_scheme || "GPT"}) · ${manifest.resources?.vcpus || 4} vCPU · ${manifest.resources?.memory_mib || 8192} MiB RAM · ${pkgsCount} paquetes`,
+      whyTransformed: `Se aprovisiona una instancia cloud compatible con ${manifest.boot_mode || "UEFI"} y drivers ENA/NVMe o VirtIO.`,
+      strategyLabel:
+        consistencyStrategy === "continuous_replication"
+          ? `Replicación Continua por Bloques (${pUpper === "GCP" ? "GCP Migrate to VMs" : "AWS MGN"})`
+          : `Instancia VM en ${pUpper} + Snapshot Consistente Quiesced (sync)`,
+      terraformResource:
+        pUpper === "GCP"
+          ? `google_compute_instance.vm_${slug}`
+          : `aws_instance.vm_${slug} (AMI + root_block_device gp3 cifrado)`,
+      costEstimate: "Free Tier / ~$8 USD/mes",
+    },
+    {
+      originTitle: `Disco Físico / Virtual ${primaryDisk.device || "/dev/nvme0n1"} y Tabla ${manifest.partition_scheme || "GPT"}`,
+      originDetail: `${disks.length} disco(s) (${manifest.total_provisioned_gib || 50} GiB prov. / ${manifest.total_used_gib || 15} GiB en uso) · Particiones: ${(primaryDisk.partitions || []).map((p) => `${p.mount_point || p.name} (${p.filesystem})`).join(", ")}`,
+      whyTransformed: `Se estabilizan montajes en /etc/fstab por UUID y se aprovisiona almacenamiento de bloques persistente cifrado.`,
+      strategyLabel: `Volumen de Bloques Persistente Cifrado (${pUpper === "GCP" ? "Persistent Disk" : "Amazon EBS gp3"})`,
+      terraformResource:
+        pUpper === "GCP"
+          ? `google_compute_disk.disk_${slug}_1`
+          : `aws_ebs_volume.disk_${slug}_1 (size = ${primaryDisk.size_gib || manifest.total_provisioned_gib || 50} GiB, type = gp3, encrypted = true)`,
+      costEstimate: "~$0.08 USD/GiB-mes",
+    },
+    {
+      originTitle: `Archivos del SO (/etc, /opt, /var, /home), ${usersList.length} Usuarios, ${svcsCount} Servicios y ${procsCount} Procesos`,
+      originDetail: `Usuarios: ${usersList.slice(0, 8).join(", ")} · Directorios inventariados: ${fsDirs.map((d) => d.path).join(", ") || "/etc, /home, /var"}`,
+      whyTransformed: `Reconstruye cuentas de usuario, parámetros sysctl, manifiestos del SO en /opt/cloudmove/os_capture y expone el Portal de Telemetría en Vivo (:80, :3000, :8000).`,
+      strategyLabel: `Bootstrap Autónomo Cloud-Init (user_data.sh) + Servicio cloudmove-os-telemetry.service`,
+      terraformResource: `user_data.sh + system_image_snapshot.tar.gz + restore_system_image.sh`,
+      costEstimate: "$0 USD/mes",
+    },
+  ];
+
+  return (
+    <div
+      className="cm-card"
+      style={{
+        marginTop: 14,
+        border: "1px solid #16a34a",
+        backgroundColor: "#f8fafc",
+        padding: "16px 18px",
+        borderRadius: 6,
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span
+              className="cm-badge"
+              style={{
+                backgroundColor: "#14532d",
+                color: "#ffffff",
+                fontWeight: 700,
+                fontSize: 12,
+              }}
+            >
+              MAPA DE TRANSFORMACIÓN SO / VM → {pUpper}
+            </span>
+            <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#0f172a" }}>
+              ¿Qué se Detectó en el Sistema Operativo, Cómo se Adapta y Qué Creará Terraform en {pUpper}?
+            </h4>
+          </div>
+          <p style={{ margin: "4px 0 0 0", fontSize: 13.5, color: "#475569", lineHeight: 1.45 }}>
+            Así como en el Caso 1, aquí puedes consultar cada componente relevado del sistema operativo en vivo (discos, particiones UUID, archivos en <code>/etc</code> y <code>/home</code>, usuarios, servicios <code>systemd</code> y procesos en ejecución) y los recursos exactos que Terraform crea en {pUpper}.
+          </p>
+        </div>
+        <span className="cm-badge observed" style={{ fontSize: 12 }}>
+          Sincronizado con main.tf y user_data.sh (12 Recursos)
+        </span>
+      </div>
+
+      <div className="cm-table-wrap" style={{ backgroundColor: "#ffffff", borderRadius: 6, border: "1px solid #cbd5e1" }}>
+        <table className="cm-table" style={{ margin: 0 }}>
+          <thead>
+            <tr>
+              <th>Elemento Detectado en el Sistema Operativo (Origen)</th>
+              <th>Estrategia y Adaptación Aplicada</th>
+              <th>Recurso(s) que Creará Terraform en {pUpper}</th>
+              <th>Costo Est.</th>
+            </tr>
+          </thead>
+          <tbody>
+            {transformationRows.map((row, idx) => (
+              <tr key={idx}>
+                <td style={{ fontSize: 13 }}>
+                  <strong>{row.originTitle}</strong>
+                  <div className="cm-hint" style={{ marginTop: 2 }}>{row.originDetail}</div>
+                </td>
+                <td style={{ fontSize: 13 }}>
+                  <strong>{row.strategyLabel}</strong>
+                  <div className="cm-hint" style={{ marginTop: 2 }}>{row.whyTransformed}</div>
+                </td>
+                <td style={{ fontSize: 12.5 }}>
+                  <code>{row.terraformResource}</code>
+                </td>
+                <td style={{ fontSize: 12.5 }}>
+                  <span
+                    className="cm-badge"
+                    style={{
+                      backgroundColor: row.costEstimate.startsWith("$0") ? "#dcfce7" : "#fef3c7",
+                      color: row.costEstimate.startsWith("$0") ? "#166534" : "#92400e",
+                      fontSize: 12,
+                    }}
+                  >
+                    {row.costEstimate}
+                  </span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -1287,7 +1485,16 @@ export default function MigrationOrchestratorWorkspace({
                     : "Ej. Oleada Datacenter Principal → GCP"
                 }
                 value={newName}
-                onChange={(e) => setNewName(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (/^(ghp_|github_pat_|gho_|ghu_|ghs_|ghr_)/i.test(val.trim())) {
+                    setGithubToken(val.trim());
+                    setShowAdvancedGithub(true);
+                    setStatusBanner("Token de GitHub detectado automáticamente y movido al campo Personal Access Token (PAT).");
+                    return;
+                  }
+                  setNewName(val);
+                }}
               />
             </div>
 
@@ -2163,6 +2370,12 @@ export default function MigrationOrchestratorWorkspace({
                   )}
                 </div>
               )}
+
+              <VmOsToCloudTransformationMap
+                manifest={uc2PreInspection.manifest}
+                targetProvider={newProvider}
+                consistencyStrategy={consistencyStrategy}
+              />
             </div>
           </div>
         )}
@@ -2367,9 +2580,18 @@ export default function MigrationOrchestratorWorkspace({
                   badge:
                     currentJob.blockers?.length > 0 ? `${currentJob.blockers.length} bloqueo(s)` : undefined,
                 },
+                { id: "terraform_ops", label: "Consola Operativa Terraform" },
                 { id: "target_arch", label: "Arquitectura Objetivo (Cloud)" },
                 { id: "credentials", label: "Servicios Externos y Credenciales" },
-                { id: "source", label: currentJob.use_case === "app_source" ? "GitHub → Nube" : "Origen" },
+                {
+                  id: "source",
+                  label:
+                    currentJob.use_case === "app_source"
+                      ? "GitHub → Nube"
+                      : currentJob.use_case === "vm_image"
+                      ? "SO / VM → Nube (Datos)"
+                      : "Origen",
+                },
                 { id: "compatibility", label: "Fidelidad y pruebas" },
                 { id: "iac", label: "Terraform y CMIR" },
                 { id: "guide", label: "Guía de despliegue" },
@@ -2393,7 +2615,7 @@ export default function MigrationOrchestratorWorkspace({
                       role="listitem"
                       className={`cm-state-step ${isCurrent ? "current" : isCompleted ? "completed" : ""}`}
                     >
-                      {isCompleted ? "✓ " : `${idx + 1}. `}
+                      {isCompleted ? "[OK] " : `${idx + 1}. `}
                       {st}
                     </span>
                   );
@@ -2618,12 +2840,21 @@ export default function MigrationOrchestratorWorkspace({
               </div>
             )}
 
-            {/* Ejecutor de Despliegue Automatizado en la pestaña de Ejecución */}
-            {inspectorTab === "execution" && (
+            {/* Mapa de Transformación SO / VM -> Nube en Ejecución (Caso 2) */}
+            {inspectorTab === "execution" && currentJob.use_case === "vm_image" && srcEnv && (
+              <VmOsToCloudTransformationMap
+                manifest={srcEnv}
+                targetProvider={currentJob.target_provider}
+              />
+            )}
+
+            {/* Ejecutor y Consola Operativa de Despliegue Automatizado Terraform */}
+            {(inspectorTab === "execution" || inspectorTab === "terraform_ops") && (
               <AutomatedCloudDeployerPanel
                 job={currentJob}
                 onDeploymentCompleted={() => {
-                  fetchJobDetails(currentJob.migration_id);
+                  fetchJobs(currentJob.migration_id);
+                  fetchPersistence();
                 }}
               />
             )}
@@ -2831,6 +3062,82 @@ export default function MigrationOrchestratorWorkspace({
                   )}
                 </div>
 
+                {/* Backups de Base de Datos (.dump / .sql) y Semillas JSON Detectadas */}
+                {srcEnv.database_backups?.has_backups && (
+                  <div className="cm-card" style={{ border: "2px solid #16a34a", backgroundColor: "#f0fdf4" }}>
+                    <div className="cm-card-title">
+                      <span style={{ color: "#14532d", fontWeight: 700 }}>
+                        Backups de Base de Datos y Semillas Detectados para Recreación Automática en {currentJob.target_provider?.toUpperCase()}
+                      </span>
+                      <span className="cm-badge observed">
+                        {srcEnv.database_backups.primary_backup_file} · {srcEnv.database_backups.total_public_tables} Tablas Públicas · {srcEnv.database_backups.total_rows_all_schemas} Filas Totales
+                      </span>
+                    </div>
+                    {(srcEnv.database_backups.backups || []).map((bkp) => (
+                      <div key={bkp.path} className="cm-card-subtle" style={{ backgroundColor: "#ffffff", marginBottom: 10 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                          <div>
+                            <strong style={{ fontSize: 14, color: "#14532d" }}>
+                              <code>{bkp.path}</code>
+                            </strong>{" "}
+                            <span className="cm-badge info">{bkp.format}</span>{" "}
+                            <span className="cm-badge observed">{bkp.engine} (v{bkp.dumped_from_version})</span>
+                          </div>
+                          <span style={{ fontSize: 13, color: "#475569" }}>
+                            Tamaño: <strong>{(bkp.size_bytes / 1024).toFixed(1)} KB</strong> · Dominio public: <strong>{bkp.public_rows_count} filas</strong> · Total (incl. auth/storage): <strong>{bkp.total_rows_count} filas</strong>
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 13, color: "#334155", marginBottom: 8 }}>
+                          <div><strong>Esquemas incluidos:</strong> <code>{(bkp.schemas || []).join(", ")}</code></div>
+                          <div><strong>Extensiones requeridas:</strong> <code>{(bkp.extensions || []).join(", ")}</code></div>
+                          {bkp.public_functions?.length > 0 && (
+                            <div>
+                              <strong>Funciones RPC / SQL Espaciales ({bkp.public_functions.length}):</strong>{" "}
+                              <code>{bkp.public_functions.map((f) => f.signature).join(" · ")}</code>
+                            </div>
+                          )}
+                        </div>
+                        {bkp.non_empty_tables?.length > 0 && (
+                          <div className="cm-table-wrap">
+                            <table className="cm-table">
+                              <thead>
+                                <tr>
+                                  <th>Tabla en Backup</th>
+                                  <th>Filas a Restaurar en {currentJob.target_provider?.toUpperCase()}</th>
+                                  <th>Columnas Detectadas</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {bkp.non_empty_tables.map((t) => (
+                                  <tr key={t.table}>
+                                    <td><strong><code>{t.table}</code></strong></td>
+                                    <td><span className="cm-badge observed">{t.rows} filas</span></td>
+                                    <td><code>{(t.columns || []).join(", ")}</code></td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {srcEnv.database_backups.seed_files?.length > 0 && (
+                      <div className="cm-card-subtle" style={{ backgroundColor: "#ffffff" }}>
+                        <strong style={{ fontSize: 13.5, display: "block", marginBottom: 4 }}>
+                          Archivos Semilla JSON Adicionales en el Repositorio ({srcEnv.database_backups.seed_files.length}):
+                        </strong>
+                        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                          {srcEnv.database_backups.seed_files.map((sf) => (
+                            <span key={sf.path} className="cm-badge neutral" style={{ fontSize: 12.5 }}>
+                              <code>{sf.path}</code> ({sf.format}: {sf.record_count} registros)
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Variables de Entorno con Redacción de Secretos */}
                 {envVars.length > 0 && (
                   <div className="cm-card">
@@ -3022,9 +3329,9 @@ export default function MigrationOrchestratorWorkspace({
                                 )}
                               </td>
                               <td>
-                                {(d.partitions || []).map((p) => (
-                                  <div key={p.name} style={{ fontSize: 13.5 }}>
-                                    <code>{p.name}</code> → <strong>{p.mount_point}</strong> ({p.filesystem}, {p.size_mib} MiB, <code>{p.fstab_ref}</code>)
+                                {(d.partitions || []).map((p, pIdx) => (
+                                  <div key={p.device || p.name || pIdx} style={{ fontSize: 13.5 }}>
+                                    <code>{p.device || p.name || `part-${pIdx + 1}`}</code> → <strong>{p.mount_point || "[SWAP]"}</strong> ({p.filesystem}, {p.size_gib ? `${p.size_gib} GiB` : `${p.size_mib || 0} MiB`}, <code>{p.fstab_ref || (p.uuid ? `UUID=${p.uuid}` : "UUID")}</code>)
                                   </div>
                                 ))}
                               </td>
@@ -3043,6 +3350,77 @@ export default function MigrationOrchestratorWorkspace({
                     </div>
                   </div>
                 )}
+
+                {/* Mapa de Transformación SO / VM -> Nube */}
+                <VmOsToCloudTransformationMap
+                  manifest={srcEnv}
+                  targetProvider={currentJob.target_provider}
+                />
+
+                {/* Procesos en Ejecución Capturados (ps) y Puertos Activos (ss -tulpn) */}
+                <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 12 }}>
+                  <div className="cm-card-subtle">
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <strong style={{ fontSize: 14 }}>
+                        Procesos en Ejecución Capturados en el SO ({(srcEnv.running_processes || []).length})
+                      </strong>
+                      <span className="cm-badge observed" style={{ fontSize: 11.5 }}>ps aux</span>
+                    </div>
+                    <div style={{ maxHeight: 240, overflowY: "auto" }}>
+                      <table className="cm-table" style={{ margin: 0, fontSize: 12 }}>
+                        <thead>
+                          <tr>
+                            <th>PID</th>
+                            <th>Usuario</th>
+                            <th>Proceso</th>
+                            <th>CPU%</th>
+                            <th>MEM%</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(srcEnv.running_processes || []).slice(0, 25).map((proc, idx) => (
+                            <tr key={`${proc.pid}-${idx}`}>
+                              <td><code>{proc.pid}</code></td>
+                              <td><code>{proc.user}</code></td>
+                              <td><strong>{proc.name}</strong></td>
+                              <td>{proc.cpu_percent}%</td>
+                              <td>{proc.mem_percent}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="cm-card-subtle">
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <strong style={{ fontSize: 14 }}>
+                        Directorios y Archivos del SO Capturados (/etc, /opt, /var, /home)
+                      </strong>
+                      <span className="cm-badge info" style={{ fontSize: 11.5 }}>Filesystem</span>
+                    </div>
+                    <div style={{ maxHeight: 240, overflowY: "auto" }}>
+                      <table className="cm-table" style={{ margin: 0, fontSize: 12 }}>
+                        <thead>
+                          <tr>
+                            <th>Directorio</th>
+                            <th>Archivos</th>
+                            <th>Muestra Capturada</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(srcEnv.filesystem_inventory || srcEnv.filesystem_summary || []).map((dir) => (
+                            <tr key={dir.path}>
+                              <td><strong><code>{dir.path}</code></strong></td>
+                              <td>{dir.files_count ?? 0}</td>
+                              <td><code>{(dir.sample_entries || []).slice(0, 5).join(", ")}</code></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
 

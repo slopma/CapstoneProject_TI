@@ -1920,7 +1920,7 @@ export function AwsSuggestedDiagramSection({ data, apiUrl }) {
             <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
               {copyFeedback && (
                 <span style={{ fontSize: "12px", color: "#059669", fontWeight: 600 }}>
-                  ✓ {copyFeedback}
+                  [OK] {copyFeedback}
                 </span>
               )}
               <button

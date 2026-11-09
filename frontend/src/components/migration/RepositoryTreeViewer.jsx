@@ -52,7 +52,7 @@ function TreeNode({ node, depth = 0, filter = "" }) {
           title={node.path || "Directorio raíz"}
         >
           <span style={{ fontSize: 12.5, color: "#475569", width: 12 }} aria-hidden="true">
-            {hasChildren ? (expanded ? "▼" : "▶") : "•"}
+            {hasChildren ? (expanded ? "▼" : "") : "•"}
           </span>
           <span style={{ fontSize: 13, fontWeight: 700, color: "#475569", fontFamily: "monospace" }} aria-hidden="true">
             {expanded ? "[-]" : "[+]"}
@@ -184,7 +184,7 @@ export default function RepositoryTreeViewer({ treeData, title = "Explorador del
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 14, color: "#475569" }} aria-hidden="true">{isOpen ? "▼" : "▶"}</span>
+          <span style={{ fontSize: 14, color: "#475569" }} aria-hidden="true">{isOpen ? "▼" : ""}</span>
           <span style={{ fontSize: 14, fontWeight: 700, color: "#1e293b" }}>
             {title}
           </span>
@@ -209,7 +209,7 @@ export default function RepositoryTreeViewer({ treeData, title = "Explorador del
         <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
           {keyManifests.length > 0 && (
             <span style={{ color: "#15803d", fontWeight: 600 }}>
-              ✓ {keyManifests.length} manifiesto(s) detectado(s)
+              [OK] {keyManifests.length} manifiesto(s) detectado(s)
             </span>
           )}
           <span style={{ color: "#2563eb", fontWeight: 600 }}>

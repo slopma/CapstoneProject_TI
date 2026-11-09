@@ -40,3 +40,7 @@ K8S_OUTPUT_PATH = _path_from_env(
 )
 CORS_ORIGINS = _origins_from_env()
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+API_HOST = os.getenv("HOST", os.getenv("API_HOST", "0.0.0.0"))
+API_PORT = int(os.getenv("PORT", os.getenv("API_PORT", "8000")))
+FRONTEND_PORT = int(os.getenv("FRONTEND_PORT", "3000"))
+DEFAULT_DB_PORT = int(os.getenv("DB_PORT", "5432"))
