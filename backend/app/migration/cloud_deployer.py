@@ -1245,16 +1245,142 @@ class CloudDeploymentRunner:
             if ip_sync_events:
                 workspaces = self.list_all_workspaces()
 
-            # Map workspace ownership to instances & VPCs
+            # Map workspace & migration job metadata to every AWS resource
+            jobs_by_id: Dict[str, Dict[str, Any]] = {}
+            try:
+                from app.migration.orchestrator import migration_orchestrator
+                for j in migration_orchestrator.list_migrations():
+                    jid = j.get("migration_id")
+                    if jid:
+                        jobs_by_id[jid] = j
+            except Exception:
+                pass
+
+            def _build_project_meta(mig_id: Optional[str], inst_hint: Optional[Dict[str, Any]] = None, is_cp: bool = False, is_default_net: bool = False) -> Dict[str, Any]:
+                if is_cp:
+                    return {
+                        "project_id": "cloudmove-control-plane",
+                        "project_name": "Servidor Principal CloudMove (digitalcafeluna.store)",
+                        "use_case": "control_plane",
+                        "use_case_label": "Infraestructura Base CloudMove",
+                        "source_detail": "deploy/aws (Producción EC2 + Caddy SSL)",
+                        "migration_id": "deploy/aws",
+                        "is_control_plane": True,
+                    }
+                job_obj = jobs_by_id.get(mig_id or "") if mig_id else None
+                if job_obj:
+                    uc = job_obj.get("use_case", "app_source")
+                    uc_label = (
+                        "Caso 1 · Aplicación (GitHub / Código)"
+                        if uc == "app_source"
+                        else "Caso 2 · Imagen de SO / Máquina Virtual"
+                        if uc == "vm_image"
+                        else "Caso 3 · Campaña Datacenter"
+                    )
+                    src_cfg = job_obj.get("source_config") or {}
+                    src_env = job_obj.get("source_environment") or {}
+                    src_detail = (
+                        src_cfg.get("repo_url")
+                        or src_env.get("repository_url")
+                        or src_env.get("hostname")
+                        or src_cfg.get("image_path")
+                        or "Origen CloudMove"
+                    )
+                    return {
+                        "project_id": mig_id,
+                        "project_name": job_obj.get("name") or mig_id,
+                        "use_case": uc,
+                        "use_case_label": uc_label,
+                        "source_detail": str(src_detail),
+                        "migration_id": mig_id,
+                        "is_control_plane": False,
+                    }
+                if inst_hint:
+                    iname = inst_hint.get("name", "")
+                    ctype = inst_hint.get("cmir_type", "")
+                    if "cocoa" in iname.lower() or ctype == "container":
+                        return {
+                            "project_id": mig_id or "mig-app-aws-ba105d",
+                            "project_name": f"Despliegue Aplicación: {iname}",
+                            "use_case": "app_source",
+                            "use_case_label": "Caso 1 · Aplicación (GitHub / Contenedores)",
+                            "source_detail": "https://github.com/slopma/CocoaApp",
+                            "migration_id": mig_id or "mig-app-aws-ba105d",
+                            "is_control_plane": False,
+                        }
+                    if "live-os" in iname.lower() or ctype == "virtual_machine":
+                        return {
+                            "project_id": mig_id or "mig-vm_-aws-6cb907",
+                            "project_name": f"Migración de SO / Máquina Virtual ({iname})",
+                            "use_case": "vm_image",
+                            "use_case_label": "Caso 2 · Imagen de SO / VM",
+                            "source_detail": iname,
+                            "migration_id": mig_id or "mig-vm_-aws-6cb907",
+                            "is_control_plane": False,
+                        }
+                if mig_id:
+                    uc_guess = "app_source" if "app" in mig_id else ("vm_image" if "vm" in mig_id else "other")
+                    return {
+                        "project_id": mig_id,
+                        "project_name": f"Despliegue Terraform ({mig_id})",
+                        "use_case": uc_guess,
+                        "use_case_label": "Caso 1 · Aplicación" if uc_guess == "app_source" else "Caso 2 · Imagen VM",
+                        "source_detail": f"generated/deployments/{mig_id}",
+                        "migration_id": mig_id,
+                        "is_control_plane": False,
+                    }
+                if is_default_net:
+                    return {
+                        "project_id": "aws-default-network",
+                        "project_name": "Red por Defecto de la Cuenta AWS (Default VPC)",
+                        "use_case": "control_plane",
+                        "use_case_label": "Red Base AWS / Servidor CloudMove",
+                        "source_detail": "AWS Default VPC (172.31.0.0/16)",
+                        "migration_id": "deploy/aws",
+                        "is_control_plane": True,
+                    }
+                return {
+                    "project_id": "unassigned-aws-resource",
+                    "project_name": "Recurso en Cuenta AWS (Despliegue Previo / Sin Workspace)",
+                    "use_case": "external",
+                    "use_case_label": "Recurso Huérfano / Externo",
+                    "source_detail": "Cuenta AWS EC2",
+                    "migration_id": None,
+                    "is_control_plane": False,
+                }
+
+            ws_by_resource_id: Dict[str, str] = {}
             ws_by_instance: Dict[str, str] = {}
             ws_by_vpc: Dict[str, str] = {}
             for ws in workspaces:
+                mid = ws["migration_id"]
                 if ws.get("primary_instance_id"):
-                    ws_by_instance[ws["primary_instance_id"]] = ws["migration_id"]
+                    ws_by_instance[ws["primary_instance_id"]] = mid
+                    ws_by_resource_id[ws["primary_instance_id"]] = mid
                 if ws.get("vpc_id"):
-                    ws_by_vpc[ws["vpc_id"]] = ws["migration_id"]
+                    ws_by_vpc[ws["vpc_id"]] = mid
+                    ws_by_resource_id[ws["vpc_id"]] = mid
+                for mr in ws.get("managed_resources") or []:
+                    if mr.get("id"):
+                        ws_by_resource_id[mr["id"]] = mid
+
+            instance_by_id: Dict[str, Dict[str, Any]] = {}
+            vpc_to_project_meta: Dict[str, Dict[str, Any]] = {}
             for inst in instances:
-                inst["migration_id"] = ws_by_instance.get(inst["instance_id"])
+                iid = inst["instance_id"]
+                mid = ws_by_instance.get(iid) or ws_by_vpc.get(inst.get("vpc_id") or "")
+                pmeta = _build_project_meta(mid, inst_hint=inst, is_cp=inst["is_control_plane"])
+                inst["migration_id"] = pmeta.get("migration_id")
+                inst["project_info"] = pmeta
+                instance_by_id[iid] = inst
+                if inst.get("vpc_id") and not inst["is_control_plane"]:
+                    vpc_to_project_meta[inst["vpc_id"]] = pmeta
+                    if pmeta.get("migration_id") and inst["vpc_id"] not in ws_by_vpc:
+                        ws_by_vpc[inst["vpc_id"]] = pmeta["migration_id"]
+
+            # Enrich workspaces with project_info
+            for ws in workspaces:
+                ws["project_info"] = _build_project_meta(ws["migration_id"])
 
             # 3. EBS Volumes
             vol_resp = ec2.describe_volumes()
@@ -1268,6 +1394,12 @@ class CloudDeploymentRunner:
                 att_iid = atts[0].get("InstanceId", "") if atts else ""
                 att_dev = atts[0].get("Device", "") if atts else ""
                 is_cp = att_iid in control_plane_instance_ids
+                att_inst = instance_by_id.get(att_iid)
+                vol_pmeta = (
+                    att_inst["project_info"]
+                    if att_inst and att_inst.get("project_info")
+                    else _build_project_meta(ws_by_resource_id.get(vid), is_cp=is_cp)
+                )
                 ctime = v.get("CreateTime")
                 volumes.append({
                     "volume_id": vid,
@@ -1280,10 +1412,34 @@ class CloudDeploymentRunner:
                     "device": att_dev,
                     "create_time": ctime.isoformat() if hasattr(ctime, "isoformat") else str(ctime or ""),
                     "is_control_plane": is_cp,
+                    "migration_id": vol_pmeta.get("migration_id"),
+                    "project_info": vol_pmeta,
                 })
 
-            # 4. VPCs
+            # 4. VPCs, Subnets & Internet Gateways
             vpc_resp = ec2.describe_vpcs()
+            sub_resp = ec2.describe_subnets()
+            igw_resp = ec2.describe_internet_gateways()
+
+            subnets_by_vpc: Dict[str, List[Dict[str, Any]]] = {}
+            for sb in sub_resp.get("Subnets", []):
+                svpc = sb.get("VpcId", "")
+                stags = {t["Key"]: t["Value"] for t in (sb.get("Tags") or []) if "Key" in t and "Value" in t}
+                subnets_by_vpc.setdefault(svpc, []).append({
+                    "subnet_id": sb.get("SubnetId", ""),
+                    "name": stags.get("Name") or sb.get("SubnetId", ""),
+                    "cidr_block": sb.get("CidrBlock", ""),
+                    "availability_zone": sb.get("AvailabilityZone", ""),
+                    "vpc_id": svpc,
+                })
+
+            igws_by_vpc: Dict[str, List[str]] = {}
+            for igw in igw_resp.get("InternetGateways", []):
+                igw_id = igw.get("InternetGatewayId", "")
+                for att in igw.get("Attachments") or []:
+                    if att.get("VpcId"):
+                        igws_by_vpc.setdefault(att["VpcId"], []).append(igw_id)
+
             vpcs: List[Dict[str, Any]] = []
             for vp in vpc_resp.get("Vpcs", []):
                 vid = vp.get("VpcId", "")
@@ -1291,6 +1447,12 @@ class CloudDeploymentRunner:
                 vname = vtags.get("Name") or ("default-vpc" if vp.get("IsDefault") else vid)
                 active_insts = [i for i in instances if i["vpc_id"] == vid and i["state"] not in ("terminated", "shutting-down")]
                 is_cp = bool(vp.get("IsDefault") or vid in control_plane_vpc_ids)
+                mid = ws_by_vpc.get(vid) or ws_by_resource_id.get(vid)
+                vp_pmeta = (
+                    vpc_to_project_meta.get(vid)
+                    or _build_project_meta(mid, is_cp=is_cp, is_default_net=bool(vp.get("IsDefault")))
+                )
+                vpc_to_project_meta[vid] = vp_pmeta
                 vpcs.append({
                     "vpc_id": vid,
                     "name": vname,
@@ -1300,7 +1462,10 @@ class CloudDeploymentRunner:
                     "managed_by_cloudmove": vname.startswith("cloudmove") or vtags.get("ManagedBy") == "CloudMove",
                     "active_instance_count": len(active_insts),
                     "active_instance_ids": [i["instance_id"] for i in active_insts],
-                    "migration_id": ws_by_vpc.get(vid),
+                    "subnets": subnets_by_vpc.get(vid, []),
+                    "internet_gateways": igws_by_vpc.get(vid, []),
+                    "migration_id": vp_pmeta.get("migration_id"),
+                    "project_info": vp_pmeta,
                     "is_control_plane": is_cp,
                 })
 
@@ -1317,7 +1482,13 @@ class CloudDeploymentRunner:
                     tp = perm.get("ToPort")
                     if fp is not None:
                         ports.append(str(fp) if fp == tp else f"{fp}-{tp}")
-                is_cp = bool(gname == "default" or "cloudmove-sg" in gname or vpc_id in control_plane_vpc_ids and gname != "cloudmove-app-sg")
+                is_cp = bool(gname == "default" or "cloudmove-sg" in gname or (vpc_id in control_plane_vpc_ids and gname != "cloudmove-app-sg"))
+                sg_pmeta = (
+                    _build_project_meta(None, is_cp=True)
+                    if "cloudmove-sg" in gname
+                    else vpc_to_project_meta.get(vpc_id)
+                    or _build_project_meta(ws_by_resource_id.get(gid), is_cp=is_cp)
+                )
                 security_groups.append({
                     "group_id": gid,
                     "group_name": gname,
@@ -1326,6 +1497,8 @@ class CloudDeploymentRunner:
                     "is_default": gname == "default",
                     "ingress_ports": ports,
                     "is_control_plane": is_cp,
+                    "migration_id": sg_pmeta.get("migration_id"),
+                    "project_info": sg_pmeta,
                 })
 
             # 6. Elastic IPs
@@ -1334,13 +1507,71 @@ class CloudDeploymentRunner:
             for addr in eip_resp.get("Addresses", []):
                 pub = addr.get("PublicIp", "")
                 iid = addr.get("InstanceId", "")
+                is_cp = pub == "44.216.47.253" or iid in control_plane_instance_ids
+                att_inst = instance_by_id.get(iid)
+                eip_pmeta = (
+                    att_inst["project_info"]
+                    if att_inst and att_inst.get("project_info")
+                    else _build_project_meta(None, is_cp=is_cp)
+                )
                 elastic_ips.append({
                     "public_ip": pub,
                     "allocation_id": addr.get("AllocationId", ""),
                     "instance_id": iid,
                     "instance_name": instance_name_by_id.get(iid, iid),
-                    "is_control_plane": pub == "44.216.47.253" or iid in control_plane_instance_ids,
+                    "is_control_plane": is_cp,
+                    "project_info": eip_pmeta,
                 })
+
+            # 7. Build Grouped Projects / Deployments Inventory (`projects_deployed`)
+            projects_map: Dict[str, Dict[str, Any]] = {}
+            def _ensure_proj_bucket(pmeta: Dict[str, Any]) -> Dict[str, Any]:
+                pid = pmeta.get("project_id") or "unassigned"
+                if pid not in projects_map:
+                    projects_map[pid] = {
+                        **pmeta,
+                        "instances": [],
+                        "volumes": [],
+                        "vpcs": [],
+                        "security_groups": [],
+                        "elastic_ips": [],
+                        "total_ebs_gb": 0,
+                        "total_resources_count": 0,
+                    }
+                return projects_map[pid]
+
+            for inst in instances:
+                if inst["state"] == "terminated":
+                    continue
+                b = _ensure_proj_bucket(inst["project_info"])
+                b["instances"].append(inst)
+                b["total_resources_count"] += 1
+
+            for v in volumes:
+                b = _ensure_proj_bucket(v["project_info"])
+                b["volumes"].append(v)
+                b["total_ebs_gb"] += v["size_gb"]
+                b["total_resources_count"] += 1
+
+            for vp in vpcs:
+                b = _ensure_proj_bucket(vp["project_info"])
+                b["vpcs"].append(vp)
+                b["total_resources_count"] += 1 + len(vp.get("subnets") or []) + len(vp.get("internet_gateways") or [])
+
+            for sg in security_groups:
+                if sg["is_default"]:
+                    continue
+                b = _ensure_proj_bucket(sg["project_info"])
+                b["security_groups"].append(sg)
+                b["total_resources_count"] += 1
+
+            for eip in elastic_ips:
+                b = _ensure_proj_bucket(eip["project_info"])
+                b["elastic_ips"].append(eip)
+                b["total_resources_count"] += 1
+
+            projects_deployed = list(projects_map.values())
+            projects_deployed.sort(key=lambda p: (p.get("is_control_plane", False), len(p.get("instances", [])) == 0, p.get("project_name", "")))
 
             running_instances = [i for i in instances if i["state"] == "running"]
             return {
@@ -1358,8 +1589,10 @@ class CloudDeploymentRunner:
                     "total_vpcs_count": len(vpcs),
                     "custom_vpcs_count": sum(1 for v in vpcs if not v["is_default"]),
                     "active_workspaces_count": sum(1 for w in workspaces if w["resource_count"] > 0),
+                    "projects_count": len(projects_deployed),
                 },
                 "ip_sync_events": ip_sync_events,
+                "projects_deployed": projects_deployed,
                 "instances": instances,
                 "volumes": volumes,
                 "vpcs": vpcs,
@@ -1546,6 +1779,15 @@ class CloudDeploymentRunner:
                     "resource_type": clean_type,
                     "resource_id": clean_id,
                     "details": [f"Instancia EC2 {clean_id} iniciándose en AWS."],
+                }
+
+            elif clean_type == "stop_instance":
+                ec2.stop_instances(InstanceIds=[clean_id])
+                return {
+                    "success": True,
+                    "resource_type": clean_type,
+                    "resource_id": clean_id,
+                    "details": [f"Instancia EC2 {clean_id} deteniéndose en AWS."],
                 }
 
             elif clean_type == "ebs_volume":
