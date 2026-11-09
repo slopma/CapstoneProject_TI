@@ -1,0 +1,24 @@
+# ==============================================================================
+# Credenciales de AWS Academy (Learner Lab)
+# Obtén estos valores desde la consola de AWS Academy haciendo clic en "AWS Details"
+# ==============================================================================
+
+# Copia este archivo como 'terraform.tfvars' (el archivo .tfvars ya está ignorado en .gitignore)
+# cp terraform.tfvars.example terraform.tfvars
+
+aws_region        = "us-east-1"
+aws_access_key    = "ASIA..."
+aws_secret_key    = "..."
+aws_session_token = "IQoJb3JpZ2luX2VjE..."
+
+# Tipo de instancia (t3.small: 2 vCPU, 2GB RAM - muy económica para los 100 USD de Academy)
+instance_type     = "t3.small"
+
+# Almacenamiento (35 GB gp3 - ideal para datos pesados y dentro del límite de 50GB de Academy)
+disk_size_gb      = 35
+
+# Dominio configurado en Namecheap
+domain_name       = "digitalcafeluna.store"
+
+# Pega aquí el contenido de tu clave pública SSH local (ej: cat ~/.ssh/id_rsa.pub)
+# ssh_public_key  = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5..."

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import IaCViewer from "../migration/IaCViewer";
+import AwsCloudAuditPanel from "./AwsCloudAuditPanel";
 import { apiFetch } from "../../utils/apiClient";
 import {
   AwsPageHeader,
@@ -156,6 +157,10 @@ export default function ExecutionsAndAuditWorkspace({
           </div>
         }
       />
+
+      <div style={{ marginBottom: 16 }}>
+        <AwsCloudAuditPanel onAuditCompleted={() => loadAuditData()} />
+      </div>
 
       {generationResult && (
         <AwsContainer

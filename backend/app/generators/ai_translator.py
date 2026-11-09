@@ -737,7 +737,27 @@ echo "[6.5/7] Construyendo e iniciando contenedores de aplicación (Backend + Fr
 run_compose -f "$COMPOSE_FILE" up -d --build
 docker builder prune -af || true
 
-echo "[7/7] Registrando servicio systemd para persistencia ante reinicios..."
+echo "[7/7] Registrando servicio systemd y sincronizador dinámico de IP pública ante reinicios..."
+cat << 'EOF_SYNC_IP' > /opt/{app_slug}/sync_public_ip.sh
+#!/usr/bin/env bash
+TOKEN=$(curl -sS -m 3 -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" || true)
+CUR_IP=""
+if [ -n "$TOKEN" ]; then
+  CUR_IP=$(curl -sS -m 3 -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4 || true)
+fi
+if [ -z "$CUR_IP" ]; then
+  CUR_IP=$(curl -sS -m 3 http://169.254.169.254/latest/meta-data/public-ipv4 || curl -sS -m 5 https://checkip.amazonaws.com | tr -d '[:space:]' || true)
+fi
+if [ -n "$CUR_IP" ]; then
+  FE_CID=$(docker ps --filter publish=3000 -q | head -n 1)
+  if [ -n "$FE_CID" ]; then
+    docker exec "$FE_CID" sh -c "sed -i -E 's|http://[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+:8000|http://${{CUR_IP}}:8000|g' /usr/share/nginx/html/assets/*.js 2>/dev/null || true"
+  fi
+fi
+EOF_SYNC_IP
+chmod +x /opt/{app_slug}/sync_public_ip.sh
+/opt/{app_slug}/sync_public_ip.sh || true
+
 cat << EOF_SYSTEMD > /etc/systemd/system/{app_slug}-containers.service
 [Unit]
 Description=CloudMove Containerized Stack - {app_name}
@@ -749,6 +769,7 @@ Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/{app_slug}
 ExecStart=/usr/bin/docker compose -f $COMPOSE_FILE up -d
+ExecStartPost=/bin/bash /opt/{app_slug}/sync_public_ip.sh
 ExecStop=/usr/bin/docker compose -f $COMPOSE_FILE down
 TimeoutStartSec=0
 

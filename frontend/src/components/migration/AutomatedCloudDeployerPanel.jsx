@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { apiFetch } from "../../utils/apiClient";
+import AwsCloudAuditPanel from "../audit/AwsCloudAuditPanel";
 
 const STATUS_BADGE_STYLE = {
   IDLE: { bg: "#e2e8f0", fg: "#334155", label: "EN ESPERA (IDLE)" },
@@ -64,6 +65,8 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
   const [consultTab, setConsultTab] = useState("resources"); // "resources" | "endpoints" | "disks_users" | "processes_ports" | "files_services"
   const [liveHostProbe, setLiveHostProbe] = useState(null);
   const [probingLiveOs, setProbingLiveOs] = useState(false);
+  const [instanceHealth, setInstanceHealth] = useState(null);
+  const [probingHealth, setProbingHealth] = useState(false);
 
   const logContainerRef = useRef(null);
   const prevRunningRef = useRef(false);
@@ -285,6 +288,41 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
     primaryInst?.public_ip ||
     outputsMap.instance_public_ip?.value ||
     null;
+
+  const handleProbeInstanceHealth = useCallback(async (targetIp) => {
+    const ipToCheck = targetIp || publicIp;
+    if (!ipToCheck) return;
+    setProbingHealth(true);
+    try {
+      const res = await apiFetch(`/api/v1/migration/probe-instance-status?ip=${encodeURIComponent(ipToCheck)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setInstanceHealth(data);
+      }
+    } catch (err) {
+      console.warn("Probe health error:", err);
+    } finally {
+      setProbingHealth(false);
+    }
+  }, [publicIp]);
+
+  // Auto-probe when publicIp is detected
+  useEffect(() => {
+    if (publicIp && (!instanceHealth || instanceHealth.ip !== publicIp)) {
+      handleProbeInstanceHealth(publicIp);
+    }
+  }, [publicIp, handleProbeInstanceHealth, instanceHealth]);
+
+  // Auto-recheck while booting every 6 seconds
+  useEffect(() => {
+    if (publicIp && instanceHealth?.phase === "booting" && !probingHealth) {
+      const timer = setTimeout(() => {
+        handleProbeInstanceHealth(publicIp);
+      }, 6000);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [publicIp, instanceHealth?.phase, probingHealth, handleProbeInstanceHealth]);
 
   const isVmCase = job?.use_case === "vm_image";
   const srcEnv = job?.source_environment || {};
@@ -956,6 +994,13 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                   </button>
                 </>
               )}
+              <button
+                type="button"
+                className={`cm-btn sm ${consultTab === "aws_audit" ? "primary" : "secondary"}`}
+                onClick={() => setConsultTab("aws_audit")}
+              >
+                🛡️ Auditoría de Cuenta AWS (Consultar y Eliminar Recursos)
+              </button>
             </div>
 
             {/* PESTAÑA 1: TABLA DE RECURSOS EN CREACIÓN / PLANIFICADOS Y OUTPUTS */}
@@ -1072,6 +1117,157 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
             {/* PESTAÑA 2: CÓMO CONSULTAR LOS DATOS CREADOS (ENDPOINTS CLOUD Y CONSULTA LOCAL) */}
             {consultTab === "endpoints" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {/* Monitor de Salud en Tiempo Real de la Instancia AWS */}
+                {publicIp && (
+                  <div
+                    style={{
+                      backgroundColor: instanceHealth?.all_ready
+                        ? "#f0fdf4"
+                        : instanceHealth?.phase === "booting"
+                        ? "#fffbeb"
+                        : "#f8fafc",
+                      border: `1px solid ${
+                        instanceHealth?.all_ready
+                          ? "#86efac"
+                          : instanceHealth?.phase === "booting"
+                          ? "#fde047"
+                          : "#cbd5e1"
+                      }`,
+                      borderRadius: 8,
+                      padding: 14,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 10,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 18 }}>
+                          {instanceHealth?.all_ready ? "🟢" : instanceHealth?.phase === "booting" ? "⏳" : "🔍"}
+                        </span>
+                        <strong style={{ fontSize: 13, color: "#0f172a" }}>
+                          Sonda de Estado en Vivo en AWS (IP Pública: {publicIp})
+                        </strong>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <button
+                          type="button"
+                          className="cm-btn sm secondary"
+                          onClick={() => handleProbeInstanceHealth(publicIp)}
+                          disabled={probingHealth}
+                          style={{ fontSize: 11, padding: "3px 10px" }}
+                        >
+                          {probingHealth ? "Verificando..." : "↻ Probar Conectividad Ahora"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        fontSize: 12.5,
+                        fontWeight: 500,
+                        color: instanceHealth?.all_ready
+                          ? "#166534"
+                          : instanceHealth?.phase === "booting"
+                          ? "#854d0e"
+                          : "#475569",
+                      }}
+                    >
+                      {instanceHealth?.summary ||
+                        (probingHealth
+                          ? "Comprobando apertura de puertos y salud de contenedores en AWS..."
+                          : "Haz clic en 'Probar Conectividad Ahora' para validar que los puertos 3000 y 8000 hayan terminado de iniciar.")}
+                    </div>
+
+                    {instanceHealth && (
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <div
+                          style={{
+                            backgroundColor: instanceHealth.frontend?.online ? "#dcfce7" : "#f1f5f9",
+                            border: `1px solid ${instanceHealth.frontend?.online ? "#86efac" : "#cbd5e1"}`,
+                            borderRadius: 6,
+                            padding: "4px 10px",
+                            fontSize: 12,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                          }}
+                        >
+                          <span>{instanceHealth.frontend?.online ? "✅" : "⏳"}</span>
+                          <strong>Frontend (Puerto 3000):</strong>
+                          <span>
+                            {instanceHealth.frontend?.online
+                              ? `En línea (HTTP ${instanceHealth.frontend?.status || 200})`
+                              : "Instalando / Esperando"}
+                          </span>
+                        </div>
+
+                        <div
+                          style={{
+                            backgroundColor: instanceHealth.backend?.online ? "#dcfce7" : "#f1f5f9",
+                            border: `1px solid ${instanceHealth.backend?.online ? "#86efac" : "#cbd5e1"}`,
+                            borderRadius: 6,
+                            padding: "4px 10px",
+                            fontSize: 12,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                          }}
+                        >
+                          <span>{instanceHealth.backend?.online ? "✅" : "⏳"}</span>
+                          <strong>Backend API (Puerto 8000):</strong>
+                          <span>
+                            {instanceHealth.backend?.online
+                              ? `En línea (HTTP ${instanceHealth.backend?.status || 200})`
+                              : "Instalando / Esperando"}
+                          </span>
+                        </div>
+
+                        <div
+                          style={{
+                            backgroundColor: instanceHealth.ssh?.open ? "#dcfce7" : "#f1f5f9",
+                            border: `1px solid ${instanceHealth.ssh?.open ? "#86efac" : "#cbd5e1"}`,
+                            borderRadius: 6,
+                            padding: "4px 10px",
+                            fontSize: 12,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 6,
+                          }}
+                        >
+                          <span>{instanceHealth.ssh?.open ? "✅" : "⏳"}</span>
+                          <strong>SSH (Puerto 22):</strong>
+                          <span>{instanceHealth.ssh?.open ? "Abierto" : "Cerrado"}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    <div
+                      style={{
+                        backgroundColor: "#eff6ff",
+                        border: "1px solid #bfdbfe",
+                        borderRadius: 6,
+                        padding: "8px 12px",
+                        fontSize: 12,
+                        color: "#1e40af",
+                        lineHeight: 1.45,
+                      }}
+                    >
+                      <strong>💡 Advertencia de Navegación (Firefox / Chrome):</strong>
+                      <br />
+                      Si tu navegador muestra el mensaje <em>"Firefox no puede conectarse al servidor"</em>:
+                      <ol style={{ margin: "4px 0 0 18px", padding: 0 }}>
+                        <li>
+                          <strong>Tiempo de arranque inicial:</strong> Al lanzar una instancia en AWS, Cloud-Init tarda <strong>2 a 3 minutos</strong> en instalar Docker, clonar el repositorio y levantar los contenedores.
+                        </li>
+                        <li>
+                          <strong>Modo Solo HTTPS de Firefox:</strong> El navegador a menudo intenta forzar <code>https://{publicIp}:3000</code>. Asegúrate de ingresar explícitamente con <strong>http://</strong> (sin la 's'), o desactiva temporalmente el Modo Solo HTTPS para esta IP.
+                        </li>
+                      </ol>
+                    </div>
+                  </div>
+                )}
+
                 <div
                   style={{
                     display: "grid",
@@ -1181,6 +1377,26 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                         Copiar
                       </button>
                     </div>
+                  </div>
+                </div>
+
+                {/* Nota de arranque Cloud-Init */}
+                <div
+                  style={{
+                    backgroundColor: "#fefce8",
+                    border: "1px solid #fef08a",
+                    borderRadius: 6,
+                    padding: "8px 12px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    fontSize: 12.5,
+                    color: "#854d0e",
+                  }}
+                >
+                  <span style={{ fontSize: 16 }}>⏳</span>
+                  <div>
+                    <strong>Tiempo de arranque de la instancia:</strong> Tras completar Terraform, la máquina en AWS tarda <strong>2 a 3 minutos</strong> en instalar Docker y arrancar los contenedores en segundo plano. Asegúrate de ingresar con <code>http://</code> (sin HTTPS) o desactivar temporalmente el modo Solo HTTPS de Firefox.
                   </div>
                 </div>
 
@@ -1439,6 +1655,14 @@ curl -Iv http://${publicIp || "<IP_PUBLICA_EC2>"}:8000/docs`}
                   </div>
                 </div>
               </div>
+            )}
+
+            {/* PESTAÑA AUDITORÍA DE CUENTA AWS EN VIVO */}
+            {consultTab === "aws_audit" && (
+              <AwsCloudAuditPanel
+                initialCredentials={getActiveCredentials()}
+                onAuditCompleted={() => fetchTerraformStatus()}
+              />
             )}
           </>
         )}

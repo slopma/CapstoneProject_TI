@@ -1,0 +1,13 @@
+.git
+.venv
+__pycache__
+node_modules
+*.zip
+*.tar.gz
+*.qcow2
+*.raw
+.codex
+.cursor
+.gemini
+.grok
+.impeccable

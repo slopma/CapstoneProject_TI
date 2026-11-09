@@ -235,7 +235,7 @@ variable "github_token" {{
         '',
     ]
 
-    if has_managed_db:
+    if has_managed_db or (5432 in app_ingress_ports):
         main_lines.extend([
             '# Dynamic secure credentials generation (zero hardcoded secrets)',
             'resource "random_password" "db_master_password" {',

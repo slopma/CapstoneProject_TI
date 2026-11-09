@@ -1,7 +1,10 @@
 import io
 import json
 from pathlib import Path
+import socket
 from typing import Any, Dict, List, Optional
+import urllib.error
+import urllib.request
 import zipfile
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -1474,5 +1477,146 @@ def deploy_live_migration_job_endpoint(migration_id: str, request: Optional[Depl
         _sync_job_after_terraform(migration_id, deploy_res)
 
     return deploy_res
+
+
+def _probe_tcp_port(host: str, port: int, timeout: float = 2.0) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except (socket.timeout, ConnectionRefusedError, OSError):
+        return False
+
+
+def _probe_http_endpoint(url: str, timeout: float = 2.5) -> Dict[str, Any]:
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "CloudMove-HealthCheck/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return {"online": True, "status": resp.status, "message": "OK"}
+    except urllib.error.HTTPError as exc:
+        return {"online": True, "status": exc.code, "message": f"HTTP {exc.code}"}
+    except (urllib.error.URLError, socket.timeout, ConnectionRefusedError, OSError) as exc:
+        return {"online": False, "status": None, "message": str(exc)}
+
+
+@router.get("/probe-instance-status")
+def probe_instance_status(
+    ip: str = Query(..., description="Public IP address or hostname of the deployed instance"),
+):
+    """
+    Safely probes an external deployed instance endpoint from the CloudMove server.
+    Detects if Cloud-Init is still provisioning Docker Compose or if services are ready.
+    Avoids browser Mixed Content blocks and CORS issues.
+    """
+    clean_ip = ip.strip().replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
+    if not clean_ip:
+        raise HTTPException(status_code=400, detail="Invalid IP address")
+
+    ssh_ok = _probe_tcp_port(clean_ip, 22, timeout=2.0)
+    fe_probe = _probe_http_endpoint(f"http://{clean_ip}:3000", timeout=2.5)
+    be_probe = _probe_http_endpoint(f"http://{clean_ip}:8000/health", timeout=2.5)
+
+    all_ready = fe_probe["online"] and be_probe["online"]
+
+    if all_ready:
+        phase = "ready"
+        summary = "Servicios en línea y respondiendo exitosamente (HTTP 200). ¡Listo para acceder!"
+    elif ssh_ok:
+        phase = "booting"
+        summary = "Instancia EC2 activa. Cloud-Init está instalando Docker y levantando los contenedores (~1-2 min)..."
+    else:
+        phase = "offline"
+        summary = "Instancia no accesible aún. Verifique que la instancia haya terminado de iniciar en AWS y que la sesión del Learner Lab esté activa."
+
+    return {
+        "ip": clean_ip,
+        "ssh": {"port": 22, "open": ssh_ok},
+        "frontend": {
+            "port": 3000,
+            "url": f"http://{clean_ip}:3000",
+            "online": fe_probe["online"],
+            "status": fe_probe["status"],
+            "message": fe_probe["message"],
+        },
+        "backend": {
+            "port": 8000,
+            "url": f"http://{clean_ip}:8000/health",
+            "online": be_probe["online"],
+            "status": be_probe["status"],
+            "message": be_probe["message"],
+        },
+        "all_ready": all_ready,
+        "phase": phase,
+        "summary": summary,
+    }
+
+
+class AwsAccountAuditRequest(BaseModel):
+    credentials: Optional[Dict[str, str]] = None
+
+
+class AwsAuditDeleteResourceRequest(BaseModel):
+    resource_type: str = Field(..., description="ec2_instance | ebs_volume | vpc | security_group | terraform_workspace")
+    resource_id: str = Field(..., description="Resource ID (e.g. i-..., vol-..., vpc-..., sg-..., mig-...)")
+    cleanup_vpc: bool = True
+    credentials: Optional[Dict[str, str]] = None
+
+
+@router.get("/cloud-audit/aws")
+def get_aws_account_audit():
+    """
+    Query active AWS account resources and local Terraform workspaces using cached/env credentials.
+    """
+    from app.migration.cloud_deployer import cloud_deployer
+    res = cloud_deployer.audit_aws_account(credentials=None)
+    for ev in res.get("ip_sync_events") or []:
+        mig_id = ev.get("migration_id")
+        if mig_id:
+            try:
+                job_dir = cloud_deployer.resolve_job_dir(mig_id)
+                st = cloud_deployer.get_terraform_status(mig_id, job_dir)
+                _sync_job_after_terraform(mig_id, st)
+            except Exception:
+                pass
+    return res
+
+
+@router.post("/cloud-audit/aws")
+def post_aws_account_audit(request: Optional[AwsAccountAuditRequest] = None):
+    """
+    Query active AWS account resources (EC2, EBS, VPC, SGs, EIPs) and local Terraform workspaces
+    using explicitly provided or cached AWS credentials.
+    """
+    from app.migration.cloud_deployer import cloud_deployer
+    req = request or AwsAccountAuditRequest()
+    res = cloud_deployer.audit_aws_account(credentials=req.credentials)
+    for ev in res.get("ip_sync_events") or []:
+        mig_id = ev.get("migration_id")
+        if mig_id:
+            try:
+                job_dir = cloud_deployer.resolve_job_dir(mig_id)
+                st = cloud_deployer.get_terraform_status(mig_id, job_dir)
+                _sync_job_after_terraform(mig_id, st)
+            except Exception:
+                pass
+    return res
+
+
+@router.post("/cloud-audit/aws/delete-resource")
+def delete_aws_audit_resource_endpoint(request: AwsAuditDeleteResourceRequest):
+    """
+    Terminate or delete a specific AWS resource or Terraform workspace discovered in the audit.
+    """
+    from app.migration.cloud_deployer import cloud_deployer
+    return cloud_deployer.delete_aws_audit_resource(
+        resource_type=request.resource_type,
+        resource_id=request.resource_id,
+        credentials=request.credentials,
+        cleanup_vpc=request.cleanup_vpc,
+    )
+
+
 
 

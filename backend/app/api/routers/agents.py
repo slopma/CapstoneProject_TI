@@ -14,8 +14,11 @@ Addresses Section 3 (CloudMove Agent: Instalable y Funcional) and Section 8 (API
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import io
 import json
 import os
+from pathlib import Path
+import tarfile
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -30,6 +33,15 @@ from app.dependencies.resolver import resolve_dependencies
 router = APIRouter(prefix="/api/v1/agents", tags=["CloudMove Agent Management"])
 
 DEFAULT_OPERATOR = os.getenv("CLOUDMOVE_OPERATOR_USER", "operator")
+
+
+def _get_server_url(request: Request) -> str:
+    env_url = os.getenv("CLOUDMOVE_API_URL")
+    if env_url:
+        return env_url.rstrip("/")
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    return f"{proto}://{host}".rstrip("/")
 
 
 # ==============================================================================
@@ -123,7 +135,7 @@ def create_enrollment_token(req: CreateEnrollmentTokenRequest, request: Request)
         max_uses=req.max_uses,
         org_id=req.org_id,
     )
-    server_url = os.getenv("CLOUDMOVE_API_URL") or str(request.base_url).rstrip("/")
+    server_url = _get_server_url(request)
     return {
         "status": "created",
         "token_id": token_record["token_id"],
@@ -194,10 +206,42 @@ def enroll_agent(req: EnrollAgentRequest):
 # (Defined before /{agent_id} to ensure correct path precedence)
 # ==============================================================================
 
+@router.get("/bundle.tar.gz")
+def download_agent_bundle():
+    """Deliver the cloudmove_agent Python package as a tar.gz bundle for agents."""
+    candidates = [
+        Path("/app/cloudmove_agent"),
+        Path(__file__).resolve().parents[4] / "cloudmove_agent",
+        Path(__file__).resolve().parents[3] / "cloudmove_agent",
+        Path(__file__).resolve().parents[2] / "cloudmove_agent",
+        Path("/opt/cloudmove/cloudmove_agent"),
+    ]
+    agent_dir = None
+    for cand in candidates:
+        if cand.is_dir():
+            agent_dir = cand
+            break
+
+    if not agent_dir:
+        raise HTTPException(status_code=404, detail="Paquete cloudmove_agent no encontrado en el servidor.")
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for f in agent_dir.glob("*.py"):
+            tar.add(f, arcname=f.name)
+        for f in agent_dir.glob("*.service"):
+            tar.add(f, arcname=f.name)
+        for f in agent_dir.glob("*.sh"):
+            tar.add(f, arcname=f.name)
+
+    buf.seek(0)
+    return Response(content=buf.getvalue(), media_type="application/gzip")
+
+
 @router.get("/install.sh")
 def download_linux_installer(request: Request):
     """Deliver a self-contained, reproducible bash installer script for systemd-managed Linux."""
-    host_url = f"{request.url.scheme}://{request.url.netloc}"
+    host_url = _get_server_url(request)
     script = f"""#!/usr/bin/env bash
 # ==============================================================================
 # CloudMove Agent — Script de Instalación Oficial para Linux (systemd)
@@ -238,14 +282,19 @@ if [[ $EUID -ne 0 ]]; then
   exit 1
 fi
 
-echo "==> Comprobando dependencias (Python 3.8+ y curl)..."
+echo "==> Comprobando dependencias (Python 3.8+, curl y tar)..."
 command -v python3 >/dev/null 2>&1 || {{ echo "ERROR: python3 no está instalado."; exit 1; }}
 command -v curl >/dev/null 2>&1 || {{ echo "ERROR: curl no está instalado."; exit 1; }}
+command -v tar >/dev/null 2>&1 || {{ echo "ERROR: tar no está instalado."; exit 1; }}
 
 echo "==> Creando directorio de instalación en $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 mkdir -p /etc/cloudmove
 mkdir -p /var/log/cloudmove
+
+echo "==> Descargando archivos del paquete cloudmove_agent..."
+mkdir -p "$INSTALL_DIR/cloudmove_agent"
+curl -sSL "$SERVER_URL/api/v1/agents/bundle.tar.gz" | tar -xz -C "$INSTALL_DIR/cloudmove_agent"
 
 echo "==> Registrando e inscribiendo el agente en $SERVER_URL..."
 HOSTNAME=$(hostname -f 2>/dev/null || hostname)
@@ -272,12 +321,25 @@ data = {{
 print(json.dumps(data))
 ")
 
-ENROLL_RESP=$(curl -sS -X POST "$SERVER_URL/api/v1/agents/enroll" \\
+ENROLL_RESP=$(curl -sSL -X POST "$SERVER_URL/api/v1/agents/enroll" \\
   -H "Content-Type: application/json" \\
   -d "$ENROLL_PAYLOAD")
 
-AGENT_ID=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('agent_id',''))" "$ENROLL_RESP")
-API_KEY=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('agent_api_key',''))" "$ENROLL_RESP")
+AGENT_ID=$(python3 -c "import json, sys
+try:
+    d = json.loads(sys.argv[1])
+    print(d.get('agent_id',''))
+except Exception:
+    pass
+" "$ENROLL_RESP" 2>/dev/null || true)
+
+API_KEY=$(python3 -c "import json, sys
+try:
+    d = json.loads(sys.argv[1])
+    print(d.get('agent_api_key',''))
+except Exception:
+    pass
+" "$ENROLL_RESP" 2>/dev/null || true)
 
 if [[ -z "$AGENT_ID" || -z "$API_KEY" ]]; then
   echo "ERROR al inscribir el agente. Respuesta del servidor:"
@@ -304,6 +366,7 @@ After=network.target
 [Service]
 Type=simple
 User=root
+Environment=PYTHONPATH=$INSTALL_DIR
 ExecStart=/usr/bin/python3 -m cloudmove_agent.agent_daemon
 WorkingDirectory=$INSTALL_DIR
 Restart=always
@@ -330,7 +393,7 @@ systemctl status $SERVICE_NAME --no-pager || true
 @router.get("/install.ps1")
 def download_windows_installer(request: Request):
     """Deliver a PowerShell installer script for Windows systems."""
-    host_url = f"{request.url.scheme}://{request.url.netloc}"
+    host_url = _get_server_url(request)
     script = f"""# ==============================================================================
 # CloudMove Agent — Script de Instalación Oficial para Windows (PowerShell)
 # ==============================================================================

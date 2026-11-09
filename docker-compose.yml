@@ -1,0 +1,31 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cloudmove-backend
+    restart: always
+    environment:
+      - CORS_ORIGINS=*
+      - LOG_LEVEL=INFO
+      - INVENTORY_PATH=/app/inventory/onprem-example.json
+      - AWS_OUTPUT_PATH=/app/generated/aws/main.tf
+      - CLOUDMOVE_API_URL=https://digitalcafeluna.store
+    volumes:
+      - ./backend/data:/app/data
+      - ./generated:/app/generated
+      - ./inventory:/app/inventory
+      - ./cloudmove_agent:/app/cloudmove_agent:ro
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cloudmove-frontend
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
