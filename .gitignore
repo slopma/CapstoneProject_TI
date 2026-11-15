@@ -8,6 +8,9 @@
 **/*.tfstate*
 **/*.tfvars
 **/tfplan
+deploy/aws/*id_*
+deploy/aws/*.pem
+deploy/aws/*.pub
 generated/aws/plan-evidence.txt
 
 

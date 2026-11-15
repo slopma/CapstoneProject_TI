@@ -18,7 +18,7 @@ fi
 
 echo "==> 2. Actualizando paquetes del sistema..."
 apt-get update -y
-apt-get install -y ca-certificates curl gnupg lsb-release git unzip htop rsync
+apt-get install -y ca-certificates curl gnupg lsb-release git unzip htop rsync debian-keyring debian-archive-keyring apt-transport-https
 
 echo "==> 3. Instalando Docker oficial y Docker Compose..."
 install -m 0755 -d /etc/apt/keyrings
@@ -38,7 +38,25 @@ usermod -aG docker ubuntu
 systemctl enable docker
 systemctl start docker
 
-echo "==> 4. Preparando directorio de la aplicación..."
+echo "==> 4. Instalando Caddy para proxy inverso y SSL automático..."
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg --yes
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-stable.list
+apt-get update -y
+apt-get install -y caddy
+
+cat << 'CADDY' > /etc/caddy/Caddyfile
+digitalcafeluna.store {
+    reverse_proxy 127.0.0.1:3000
+}
+:80 {
+    reverse_proxy 127.0.0.1:3000
+}
+CADDY
+
+systemctl enable caddy
+systemctl restart caddy
+
+echo "==> 5. Preparando directorio de la aplicación..."
 mkdir -p /opt/cloudmove
 chown -R ubuntu:ubuntu /opt/cloudmove
 
