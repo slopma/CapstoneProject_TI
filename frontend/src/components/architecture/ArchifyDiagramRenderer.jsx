@@ -56,8 +56,9 @@ export default function ArchifyDiagramRenderer({
   onSelectComponent = null,
   showStandaloneLink = true,
   standaloneUrl = "/archify-aws-cmir.html",
+  defaultTheme = "dark",
 }) {
-  const [theme, setTheme] = useState("dark"); // "dark" | "light"
+  const [theme, setTheme] = useState(defaultTheme); // "dark" | "light"
   const [liveMotion, setLiveMotion] = useState(true);
   const [zoom, setZoom] = useState(1);
   const [hoveredId, setHoveredId] = useState(null);

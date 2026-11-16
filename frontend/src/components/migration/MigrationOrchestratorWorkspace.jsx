@@ -11,6 +11,8 @@ import UserFileSelectionPanel, {
 import PlannedCloudStructureGraphModal, {
   StructuredGithubEvidenceView,
   PreflightPreventiveChecksBanner,
+  ContextualTechnicalModal,
+  HelpTooltipButton,
 } from "./PlannedCloudStructureGraphModal";
 import { apiFetch } from "../../utils/apiClient";
 import {
@@ -82,32 +84,59 @@ const FIDELITY_STATUS_META = {
   not_preserved: { label: "NO TRANSFERIBLE (Limitación Física)", badgeClass: "danger" },
 };
 
+const PRIMARY_TRANSFORMATION_IDS = new Set([
+  "compute_architecture",
+  "ebs_storage_sizing",
+  "instance_sizing_profile",
+  "compute_provisioning_mode",
+  "storage_and_build_capacity",
+]);
+
+function summarizeOptionTagline(text) {
+  const clean = String(text || "").trim();
+  if (!clean) return "";
+  const firstSentence = clean.split(/(?<=[.!])\s+/)[0] || clean;
+  return firstSentence.length > 108 ? `${firstSentence.slice(0, 105)}...` : firstSentence;
+}
+
 function GithubToCloudTransformationSelector({
   catalog,
   decisions,
   onSelectDecision,
-  targetProvider,
   onApplyToExistingJob = null,
   applyingChanges = false,
   isJobView = false,
 }) {
   const [showGraphicalStructureModal, setShowGraphicalStructureModal] = useState(false);
+  const [showAdvancedBlocks, setShowAdvancedBlocks] = useState(false);
+  const [showHclResources, setShowHclResources] = useState(false);
+  const [showSummaryTable, setShowSummaryTable] = useState(false);
+  const [showSectionHelp, setShowSectionHelp] = useState(false);
 
   if (!catalog || !Array.isArray(catalog.items) || catalog.items.length === 0) {
     return null;
   }
 
-  const pUpper = "AWS";
   const activeDecisions = decisions || catalog.applied_decisions || {};
 
-  // Compute live preview of planned cloud resources based on activeDecisions
+  const primaryItems = [];
+  const secondaryItems = [];
+  catalog.items.forEach((item, idx) => {
+    const isPrimary =
+      PRIMARY_TRANSFORMATION_IDS.has(item.id) ||
+      item.id?.startsWith("dep:") ||
+      item.category === "database_or_external" ||
+      idx < 3;
+    if (isPrimary) primaryItems.push(item);
+    else secondaryItems.push(item);
+  });
+
+  // Live preview of planned Terraform resources (revealed in accordion)
   const liveResourcesPreview = [
     {
-      githubOrigin: "Red Base y Puertos Expuestos del Repositorio",
-      decisionLabel: "Red Virtual Aislada Multi-AZ en AWS (Automático)",
-      terraformResource:
-        "aws_vpc.target_vpc + 4x aws_subnet (Públicas/Privadas Multi-AZ) + aws_internet_gateway.igw",
-      reason: "Aísla los contenedores y bases de datos en una red privada segura en la nube.",
+      githubOrigin: "Red Base y Puertos Expuestos",
+      decisionLabel: "VPC Multi-AZ aislada + Internet Gateway",
+      terraformResource: "aws_vpc.target_vpc + 4x aws_subnet + aws_internet_gateway.igw",
       costEstimate: "$0 USD/mes",
     },
   ];
@@ -122,323 +151,24 @@ function GithubToCloudTransformationSelector({
           githubOrigin: item.github_discovered?.title || item.id,
           decisionLabel: chosenOpt.label,
           terraformResource: resName,
-          reason: item.why_transformed,
           costEstimate: chosenOpt.cost_estimate || "$0 USD/mes",
         });
       });
     }
   });
 
-  return (
-    <div
-      className="cm-card"
-      style={{
-        marginTop: 14,
-        border: "1px solid #0972D3",
-        backgroundColor: "#FAFAFA",
-        padding: "16px 18px",
-        borderRadius: 4,
-      }}
-    >
+  const renderTransformationCard = (item, idx) => {
+    const selectedId =
+      activeDecisions[item.id] || item.selected_option_id || item.default_option_id;
+    const gh = item.github_discovered || {};
+
+    return (
       <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "flex-start",
-          flexWrap: "wrap",
-          gap: 10,
-          marginBottom: 12,
-        }}
-      >
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span
-              className="cm-badge"
-              style={{
-                backgroundColor: "#0972D3",
-                color: "#ffffff",
-                fontWeight: 700,
-                fontSize: 12.5,
-              }}
-            >
-              ARQUITECTURA INTERACTIVA
-            </span>
-            <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#16191F" }}>
-              Mapa de Transformación GitHub → {pUpper}: Qué se Detectó, Por Qué se Transforma y Qué Deseas Crear
-            </h4>
-          </div>
-          <p style={{ margin: "4px 0 0 0", fontSize: 13.5, color: "#5F6B7A", lineHeight: 1.45 }}>
-            Revisa cada componente, servicio externo (ej. Supabase, bases de datos, cachés), secretos y topología descubiertos en el repositorio GitHub. Puedes escoger si deseas <strong>conservar servicios externos gratuitos</strong> o <strong>transformarlos a servicios administrados nativos de {pUpper}</strong> antes de generar o actualizar el código Terraform.
-          </p>
-        </div>
-
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <button
-            type="button"
-            className="cm-btn sm"
-            onClick={() => setShowGraphicalStructureModal(true)}
-            style={{
-              backgroundColor: "#0F1B2A",
-              color: "#ffffff",
-              border: "1px solid #0972D3",
-              fontWeight: 700,
-              whiteSpace: "nowrap",
-              padding: "7px 14px",
-            }}
-          >
-            Verificar Gráficamente Estructura a Crear en {pUpper}
-          </button>
-
-          {isJobView && onApplyToExistingJob && (
-            <button
-              type="button"
-              className="cm-btn primary sm"
-              onClick={onApplyToExistingJob}
-              disabled={applyingChanges}
-              style={{ whiteSpace: "nowrap", fontWeight: 700 }}
-            >
-              {applyingChanges
-                ? "Regenerando Terraform..."
-                : `Aplicar Elecciones y Regenerar Terraform (${pUpper})`}
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Diagnóstico Preventivo Pre-Flight Anti-Fallos */}
-      <PreflightPreventiveChecksBanner
-        checks={catalog.preflight_preventive_checks}
-        targetProvider={pUpper}
-      />
-
-      {/* Modal Verificador Gráfico de la Estructura AWS */}
-      <PlannedCloudStructureGraphModal
-        isOpen={showGraphicalStructureModal}
-        onClose={() => setShowGraphicalStructureModal(false)}
-        catalog={catalog}
-        decisions={activeDecisions}
-        targetProvider="aws"
-      />
-
-      {/* Lista de elementos descubiertos en GitHub y sus opciones de transformación en la nube */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
-        {catalog.items.map((item, idx) => {
-          const selectedId =
-            activeDecisions[item.id] || item.selected_option_id || item.default_option_id;
-          const gh = item.github_discovered || {};
-
-          return (
-            <div
-              key={item.id}
-              style={{
-                backgroundColor: "#ffffff",
-                border: "1px solid #D5DBDB",
-                borderRadius: 4,
-                padding: "14px 16px",
-                boxShadow: "0 1px 1px 0 rgba(0, 28, 36, 0.05)",
-              }}
-            >
-              {/* Encabezado: Qué se descubrió en GitHub y Por qué se transforma */}
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "flex-start",
-                  flexWrap: "wrap",
-                  gap: 8,
-                  marginBottom: 8,
-                  paddingBottom: 8,
-                  borderBottom: "1px solid #E9EBED",
-                }}
-              >
-                <div style={{ flex: "1 1 320px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <span
-                      className="cm-badge"
-                      style={{
-                        backgroundColor: "#F2F8FD",
-                        color: "#0972D3",
-                        border: "1px solid #A4C9F5",
-                        fontSize: 12.5,
-                        fontWeight: 700,
-                      }}
-                    >
-                      #{idx + 1} · {gh.badge || "Elemento GitHub"}
-                    </span>
-                    <strong style={{ fontSize: 13.5, color: "#16191F" }}>{gh.title}</strong>
-                    {gh.subtitle && (
-                      <span style={{ fontSize: 13.5, color: "#5F6B7A" }}>({gh.subtitle})</span>
-                    )}
-                  </div>
-                  <StructuredGithubEvidenceView gh={gh} targetProvider={pUpper} />
-                  <div
-                    style={{
-                      fontSize: 13.5,
-                      color: "#033160",
-                      backgroundColor: "#F2F8FD",
-                      padding: "6px 10px",
-                      borderRadius: 4,
-                      marginTop: 6,
-                      borderLeft: "4px solid #0972D3",
-                    }}
-                  >
-                    <strong>¿Por qué se transforma a la nube?:</strong> {item.why_transformed}
-                  </div>
-                </div>
-              </div>
-
-              {/* Opciones seleccionables para el usuario */}
-              <div style={{ fontSize: 13.5, fontWeight: 700, color: "#16191F", marginBottom: 8 }}>
-                Escoge cómo deseas manejar este elemento en {pUpper}:
-              </div>
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(275px, 1fr))",
-                  gap: 10,
-                }}
-              >
-                {(item.options || []).map((opt) => {
-                  const isChosen = selectedId === opt.id;
-                  return (
-                    <label
-                      key={opt.id}
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        justifyContent: "space-between",
-                        padding: "10px 12px",
-                        borderRadius: 4,
-                        cursor: "pointer",
-                        border: isChosen ? "2px solid #0972D3" : "1px solid #D5DBDB",
-                        backgroundColor: isChosen ? "#F2F8FD" : "#ffffff",
-                        transition: "all 0.15s ease",
-                      }}
-                    >
-                      <div>
-                        <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "flex-start",
-                            gap: 6,
-                            marginBottom: 4,
-                          }}
-                        >
-                          <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
-                            <input
-                              type="radio"
-                              name={`decision-${isJobView ? "job" : "pre"}-${item.id}`}
-                              value={opt.id}
-                              checked={isChosen}
-                              onChange={() => onSelectDecision(item.id, opt.id)}
-                              style={{ marginTop: 3, cursor: "pointer" }}
-                            />
-                            <strong
-                              style={{
-                                fontSize: 14,
-                                color: isChosen ? "#0972D3" : "#16191F",
-                                lineHeight: 1.35,
-                              }}
-                            >
-                              {opt.label}
-                            </strong>
-                          </div>
-                        </div>
-
-                        <div
-                          style={{
-                            display: "flex",
-                            gap: 6,
-                            flexWrap: "wrap",
-                            marginLeft: 20,
-                            marginBottom: 6,
-                          }}
-                        >
-                          {opt.badge && (
-                            <span
-                              className="cm-badge"
-                              style={{
-                                backgroundColor: isChosen ? "#D5E8FA" : "#F2F3F3",
-                                color: isChosen ? "#033160" : "#5F6B7A",
-                                fontSize: 12.5,
-                              }}
-                            >
-                              {opt.badge}
-                            </span>
-                          )}
-                          {opt.cost_estimate && (
-                            <span
-                              className="cm-badge"
-                              style={{
-                                backgroundColor: opt.cost_estimate.startsWith("$0")
-                                  ? "#F2FAF3"
-                                  : "#FFFAF0",
-                                color: opt.cost_estimate.startsWith("$0")
-                                  ? "#037F0C"
-                                  : "#8D5600",
-                                border: opt.cost_estimate.startsWith("$0")
-                                  ? "1px solid #8CD990"
-                                  : "1px solid #F8C26B",
-                                fontSize: 12.5,
-                                fontWeight: 700,
-                              }}
-                            >
-                              {opt.cost_estimate}
-                            </span>
-                          )}
-                        </div>
-
-                        <p
-                          style={{
-                            margin: "0 0 8px 20px",
-                            fontSize: 13.5,
-                            color: "#5F6B7A",
-                            lineHeight: 1.4,
-                          }}
-                        >
-                          {opt.description}
-                        </p>
-                      </div>
-
-                      {Array.isArray(opt.cloud_resources_created) &&
-                        opt.cloud_resources_created.length > 0 && (
-                          <div
-                            style={{
-                              marginLeft: 20,
-                              padding: "6px 8px",
-                              backgroundColor: isChosen ? "#ffffff" : "#FAFAFA",
-                              borderRadius: 4,
-                              border: "1px dashed #D5DBDB",
-                              fontSize: 13,
-                              color: "#16191F",
-                            }}
-                          >
-                            <div style={{ fontWeight: 700, marginBottom: 2, color: "#16191F" }}>
-                              Se creará en {pUpper} (Terraform):
-                            </div>
-                            {opt.cloud_resources_created.map((cr, crIdx) => (
-                              <div key={crIdx} style={{ lineHeight: 1.35 }}>
-                                • <code>{cr}</code>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Tabla Resumen en Vivo de lo que se va a crear en AWS */}
-      <div
+        key={item.id}
         style={{
           backgroundColor: "#ffffff",
-          border: "1px solid #D5DBDB",
-          borderRadius: 4,
+          border: "1px solid #d5dbdb",
+          borderRadius: 6,
           padding: "12px 14px",
         }}
       >
@@ -449,72 +179,305 @@ function GithubToCloudTransformationSelector({
             alignItems: "center",
             flexWrap: "wrap",
             gap: 8,
-            marginBottom: 8,
+            marginBottom: 10,
+            paddingBottom: 8,
+            borderBottom: "1px solid #eaeded",
           }}
         >
-          <strong style={{ fontSize: 14, color: "#16191F" }}>
-            Resumen en Tiempo Real: ¿Qué se va a crear exactamente en {pUpper} según tu selección? ({liveResourcesPreview.length} bloques)
-          </strong>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <button
-              type="button"
-              className="cm-btn sm"
-              onClick={() => setShowGraphicalStructureModal(true)}
-              style={{
-                backgroundColor: "#F2F8FD",
-                color: "#0972D3",
-                border: "1px solid #0972D3",
-                fontWeight: 700,
-              }}
-            >
-              Ver Diagrama Gráfico de la Estructura en {pUpper}
-            </button>
-            <span className="cm-badge observed" style={{ fontSize: 12.5 }}>
-              Sincronizado con Generador Terraform
+            <span className="cm-badge info" style={{ fontSize: 11.5 }}>
+              {gh.badge || `Componente #${idx + 1}`}
             </span>
+            <strong style={{ fontSize: 14, color: "#000716" }}>
+              {gh.title || item.id}
+            </strong>
+            {gh.subtitle && (
+              <span className="cm-hint" style={{ fontSize: 12.5 }}>
+                {gh.subtitle}
+              </span>
+            )}
           </div>
+
+          <StructuredGithubEvidenceView
+            gh={gh}
+            whyTransformed={item.why_transformed}
+            options={item.options}
+            selectedOptionId={selectedId}
+            itemTitle={gh.title || item.id}
+          />
         </div>
-        <div className="cm-table-wrap">
-          <table className="cm-table">
-            <thead>
-              <tr>
-                <th>Origen Detectado en GitHub</th>
-                <th>Opción Escogida por el Usuario</th>
-                <th>Recurso(s) que Creará Terraform en {pUpper}</th>
-                <th>Impacto de Costo Est.</th>
-              </tr>
-            </thead>
-            <tbody>
-              {liveResourcesPreview.map((row, rIdx) => (
-                <tr key={rIdx}>
-                  <td style={{ fontSize: 13.5 }}>
-                    <strong>{row.githubOrigin}</strong>
-                  </td>
-                  <td style={{ fontSize: 13.5 }}>{row.decisionLabel}</td>
-                  <td style={{ fontSize: 13.5 }}>
-                    <code>{row.terraformResource}</code>
-                  </td>
-                  <td style={{ fontSize: 13.5 }}>
-                    <span
-                      className="cm-badge"
+
+        <div className="cm-choice-cards-grid">
+          {(item.options || []).map((opt) => {
+            const isChosen = selectedId === opt.id;
+            const tagline = summarizeOptionTagline(opt.summary || opt.description);
+            return (
+              <label
+                key={opt.id}
+                className={`cm-choice-card ${isChosen ? "is-selected" : ""}`}
+              >
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 6, marginBottom: 6 }}>
+                    <div style={{ display: "flex", alignItems: "flex-start", gap: 7 }}>
+                      <input
+                        type="radio"
+                        name={`decision-${isJobView ? "job" : "pre"}-${item.id}`}
+                        value={opt.id}
+                        checked={isChosen}
+                        onChange={() => onSelectDecision(item.id, opt.id)}
+                        style={{ marginTop: 3, cursor: "pointer" }}
+                      />
+                      <strong
+                        style={{
+                          fontSize: 13.5,
+                          color: isChosen ? "#0972d3" : "#000716",
+                          lineHeight: 1.35,
+                        }}
+                      >
+                        {opt.label}
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginLeft: 20, marginBottom: 6 }}>
+                    {opt.badge && (
+                      <span className={`cm-badge ${isChosen ? "info" : "neutral"}`} style={{ fontSize: 11 }}>
+                        {opt.badge}
+                      </span>
+                    )}
+                    {opt.cost_estimate && (
+                      <span
+                        className={`cm-badge ${opt.cost_estimate.startsWith("$0") ? "observed" : "warning"}`}
+                        style={{ fontSize: 11 }}
+                      >
+                        {opt.cost_estimate}
+                      </span>
+                    )}
+                  </div>
+
+                  {tagline && (
+                    <p
                       style={{
-                        backgroundColor: String(row.costEstimate).startsWith("$0")
-                          ? "#dcfce7"
-                          : "#fef3c7",
-                        color: String(row.costEstimate).startsWith("$0")
-                          ? "#166534"
-                          : "#92400e",
+                        margin: "0 0 0 20px",
                         fontSize: 12.5,
+                        color: "#545b64",
+                        lineHeight: 1.4,
                       }}
                     >
-                      {row.costEstimate}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                      {tagline}
+                    </p>
+                  )}
+                </div>
+
+                {showHclResources &&
+                  Array.isArray(opt.cloud_resources_created) &&
+                  opt.cloud_resources_created.length > 0 && (
+                    <div
+                      style={{
+                        marginLeft: 20,
+                        padding: "6px 8px",
+                        backgroundColor: isChosen ? "#ffffff" : "#fafafa",
+                        borderRadius: 4,
+                        border: "1px dashed #cbd5e1",
+                        fontSize: 11.5,
+                        color: "#0f172a",
+                      }}
+                    >
+                      {opt.cloud_resources_created.slice(0, 3).map((cr, crIdx) => (
+                        <div key={crIdx} style={{ lineHeight: 1.35 }}>
+                          <code>{cr}</code>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+              </label>
+            );
+          })}
         </div>
+      </div>
+    );
+  };
+
+  return (
+    <div
+      className="cm-card"
+      style={{
+        marginTop: 14,
+        border: "1px solid #d5dbdb",
+        backgroundColor: "#fafafa",
+        padding: "14px 16px",
+        borderRadius: 6,
+      }}
+    >
+      {/* Compact Executive Toolbar */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: 10,
+          marginBottom: 12,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span className="cm-badge aws">ARQUITECTURA AWS</span>
+          <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#000716" }}>
+            Decisiones de Despliegue ({catalog.items.length})
+          </h4>
+          <HelpTooltipButton
+            label="¿Cómo funciona?"
+            onClick={() => setShowSectionHelp(true)}
+          />
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            className="cm-btn sm secondary"
+            onClick={() => setShowHclResources((v) => !v)}
+          >
+            {showHclResources ? "Ocultar bloques HCL" : "Vista HCL avanzada"}
+          </button>
+
+          <button
+            type="button"
+            className="cm-btn sm"
+            onClick={() => setShowGraphicalStructureModal(true)}
+            style={{
+              backgroundColor: "#232f3e",
+              color: "#ffffff",
+              borderColor: "#232f3e",
+            }}
+          >
+            Ver Diagrama Archify AWS
+          </button>
+
+          {isJobView && onApplyToExistingJob && (
+            <button
+              type="button"
+              className="cm-btn primary sm"
+              onClick={onApplyToExistingJob}
+              disabled={applyingChanges}
+            >
+              {applyingChanges ? "Regenerando..." : "Aplicar y Regenerar Terraform"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Collapsible Pre-Flight Banner ("N verificaciones aplicadas: Todo OK") */}
+      <PreflightPreventiveChecksBanner checks={catalog.preflight_preventive_checks} />
+
+      <ContextualTechnicalModal
+        isOpen={showSectionHelp}
+        onClose={() => setShowSectionHelp(false)}
+        title="Selección de Arquitectura y Recursos AWS"
+        badge="Guía CloudMove"
+        whyTransformed="Cada tarjeta representa una capa detectada en el repositorio o sistema operativo origen. Al seleccionar tu arquitectura destino (por ejemplo Docker Compose en EC2, Amazon RDS o Instancias Separadas), CloudMove sincroniza automáticamente las variables de entorno, reglas de Security Group y módulos Terraform."
+        customSections={[
+          {
+            heading: "Uso de Vista HCL Avanzada",
+            body: "Por defecto las tarjetas muestran costo estimado y propósito operativo sin saturar la pantalla con nombres internos de Terraform (`aws_vpc`, `aws_db_instance`). Activa 'Vista HCL avanzada' arriba o el botón '?' de cada componente si deseas auditar el código exacto.",
+          },
+        ]}
+      />
+
+      {/* Modal Verificador Gráfico Archify AWS */}
+      <PlannedCloudStructureGraphModal
+        isOpen={showGraphicalStructureModal}
+        onClose={() => setShowGraphicalStructureModal(false)}
+        catalog={catalog}
+        decisions={activeDecisions}
+      />
+
+      {/* Primary Architecture Decisions */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
+        {primaryItems.map((item, idx) => renderTransformationCard(item, idx))}
+      </div>
+
+      {/* Progressive Disclosure Accordion for Secondary / Advanced Config Blocks */}
+      {secondaryItems.length > 0 && (
+        <div className="cm-accordion-shell" style={{ marginBottom: 12 }}>
+          <button
+            type="button"
+            className="cm-accordion-trigger"
+            onClick={() => setShowAdvancedBlocks((v) => !v)}
+            aria-expanded={showAdvancedBlocks}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <strong style={{ fontSize: 13.5, color: "#000716" }}>
+                Configuración avanzada de red, seguridad e identidad ({secondaryItems.length} bloques)
+              </strong>
+              <span className="cm-badge observed" style={{ fontSize: 11 }}>
+                Valores recomendados preseleccionados
+              </span>
+            </div>
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: "#0972d3" }}>
+              {showAdvancedBlocks ? "Ocultar ajustes ▲" : "Personalizar ajustes ▾"}
+            </span>
+          </button>
+          {showAdvancedBlocks && (
+            <div className="cm-accordion-body" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {secondaryItems.map((item, idx) =>
+                renderTransformationCard(item, primaryItems.length + idx)
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Collapsible Advanced Terraform HCL Summary Table */}
+      <div className="cm-accordion-shell">
+        <button
+          type="button"
+          className="cm-accordion-trigger"
+          onClick={() => setShowSummaryTable((v) => !v)}
+          aria-expanded={showSummaryTable}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <strong style={{ fontSize: 13.5, color: "#000716" }}>
+              Detalle avanzado de recursos Terraform (main.tf)
+            </strong>
+            <span className="cm-badge info" style={{ fontSize: 11 }}>
+              {liveResourcesPreview.length} recursos sincronizados
+            </span>
+          </div>
+          <span style={{ fontSize: 12.5, fontWeight: 700, color: "#0972d3" }}>
+            {showSummaryTable ? "Ocultar tabla HCL ▲" : "Ver recursos HCL generados ▾"}
+          </span>
+        </button>
+
+        {showSummaryTable && (
+          <div className="cm-accordion-body" style={{ padding: 0 }}>
+            <div className="cm-table-wrap" style={{ border: "none", borderRadius: 0 }}>
+              <table className="cm-table" style={{ margin: 0 }}>
+                <thead>
+                  <tr>
+                    <th>Origen Detectado</th>
+                    <th>Estrategia Activa</th>
+                    <th>Bloque Terraform AWS</th>
+                    <th>Costo Est.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {liveResourcesPreview.map((row, rIdx) => (
+                    <tr key={rIdx}>
+                      <td style={{ fontSize: 13 }}><strong>{row.githubOrigin}</strong></td>
+                      <td style={{ fontSize: 13 }}>{row.decisionLabel}</td>
+                      <td style={{ fontSize: 12.5 }}><code>{row.terraformResource}</code></td>
+                      <td style={{ fontSize: 12.5 }}>
+                        <span className={`cm-badge ${String(row.costEstimate).startsWith("$0") ? "observed" : "warning"}`}>
+                          {row.costEstimate}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -522,12 +485,13 @@ function GithubToCloudTransformationSelector({
 
 function VmOsToCloudTransformationMap({
   manifest,
-  targetProvider = "aws",
   consistencyStrategy = "quiesced_snapshot",
 }) {
+  const [showTable, setShowTable] = useState(false);
+  const [showHelpModal, setShowHelpModal] = useState(false);
+
   if (!manifest) return null;
 
-  const pUpper = "AWS";
   const slug = String(manifest.name || "live-os")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
@@ -539,48 +503,37 @@ function VmOsToCloudTransformationMap({
   const procsCount = (manifest.running_processes || []).length;
   const svcsCount = (manifest.systemd_services || []).length;
   const usersList = manifest.local_users || ["root"];
-  const fsDirs = manifest.filesystem_inventory || manifest.filesystem_summary || [];
-  const pkgsCount = manifest.installed_packages_summary?.total_count || 0;
 
-  const transformationRows = [
+  const summaryCards = [
     {
-      originTitle: `Red y ${ports.length} Puertos en Escucha Detectados en el SO (ss -tulpn)`,
-      originDetail: `Interfaces: ${(manifest.network_interfaces || []).map((n) => n.name).join(", ") || "eth0"} · Puertos activos: ${ports.slice(0, 12).join(", ")}${ports.length > 12 ? "..." : ""}`,
-      whyTransformed: `Se adapta la red física a una VPC aislada Multi-AZ con DHCP y se abren exactamente los puertos de los servicios activos del SO.`,
-      strategyLabel: `VPC Aislada Multi-AZ + Security Group con ${ports.slice(0, 20).length} Reglas TCP`,
-      terraformResource:
-        "aws_vpc.target_vpc + 4x aws_subnet + aws_internet_gateway.igw + aws_route_table.public_rt + aws_security_group.app_sg",
-      costEstimate: "$0 USD/mes",
+      layer: "Red y Puertos",
+      targetTitle: `VPC Multi-AZ + ${ports.slice(0, 12).length} Reglas SG`,
+      summary: `Puertos: ${ports.slice(0, 6).join(", ")}${ports.length > 6 ? "..." : ""}`,
+      cost: "$0 USD/mes",
     },
     {
-      originTitle: `Sistema Operativo ${osInfo.distro || "Linux"} ${osInfo.version || ""} (Kernel ${osInfo.kernel || "amd64"})`,
-      originDetail: `Arranque: ${manifest.boot_mode || "UEFI"} (${manifest.partition_scheme || "GPT"}) · ${manifest.resources?.vcpus || 4} vCPU · ${manifest.resources?.memory_mib || 8192} MiB RAM · ${pkgsCount} paquetes`,
-      whyTransformed: `Se aprovisiona una instancia cloud compatible con ${manifest.boot_mode || "UEFI"} y drivers ENA/NVMe.`,
-      strategyLabel:
+      layer: "Cómputo EC2",
+      targetTitle: `${osInfo.distro || "Linux"} · ${manifest.boot_mode || "UEFI"}`,
+      summary:
         consistencyStrategy === "continuous_replication"
-          ? "Replicación Continua por Bloques (AWS MGN)"
-          : "Instancia VM en AWS + Snapshot Consistente Quiesced (sync)",
-      terraformResource: `aws_instance.vm_${slug} (AMI + root_block_device gp3 cifrado)`,
-      costEstimate: "Free Tier / ~$8 USD/mes",
+          ? "Replicación AWS MGN"
+          : "Instancia EC2 Nitro + Snapshot Quiesced",
+      cost: "Free Tier / ~$8",
     },
     {
-      originTitle: `Disco Físico / Virtual ${primaryDisk.device || "/dev/nvme0n1"} y Tabla ${manifest.partition_scheme || "GPT"}`,
-      originDetail: `${disks.length} disco(s) (${manifest.total_provisioned_gib || 50} GiB prov. / ${manifest.total_used_gib || 15} GiB en uso) · Particiones: ${(primaryDisk.partitions || []).map((p) => `${p.mount_point || p.name} (${p.filesystem})`).join(", ")}`,
-      whyTransformed: `Se estabilizan montajes en /etc/fstab por UUID y se aprovisiona almacenamiento de bloques persistente cifrado.`,
-      strategyLabel: "Volumen de Bloques Persistente Cifrado (Amazon EBS gp3)",
-      terraformResource: `aws_ebs_volume.disk_${slug}_1 (size = ${primaryDisk.size_gib || manifest.total_provisioned_gib || 50} GiB, type = gp3, encrypted = true)`,
-      costEstimate: "~$0.08 USD/GiB-mes",
+      layer: "Almacenamiento EBS",
+      targetTitle: `${primaryDisk.size_gib || manifest.total_provisioned_gib || 30} GiB gp3 Cifrado`,
+      summary: `Origen ${primaryDisk.device || "/dev/nvme0n1"} (${manifest.partition_scheme || "GPT"})`,
+      cost: "~$0.08/GiB-mes",
     },
     {
-      originTitle: `Archivos del SO (/etc, /opt, /var, /home), ${usersList.length} Usuarios, ${svcsCount} Servicios y ${procsCount} Procesos`,
-      originDetail:
+      layer: "Archivos y Servicios",
+      targetTitle:
         Array.isArray(manifest.selected_user_paths) && manifest.selected_user_paths.length > 0
-          ? `Rutas seleccionadas por el usuario (${manifest.selected_user_paths.length}): ${manifest.selected_user_paths.slice(0, 6).join(", ")}${manifest.selected_user_paths.length > 6 ? "..." : ""}`
-          : `Usuarios: ${usersList.slice(0, 8).join(", ")} · Directorios inventariados: ${fsDirs.map((d) => d.path).join(", ") || "/etc, /home, /var"}`,
-      whyTransformed: `Reconstruye las carpetas y archivos seleccionados por el usuario, cuentas locales, parámetros sysctl, manifiestos en /opt/cloudmove/os_capture y expone el Portal de Telemetría en Vivo (:80, :3000, :8000).`,
-      strategyLabel: `Bootstrap Autónomo Cloud-Init (user_data.sh) + Servicio cloudmove-os-telemetry.service`,
-      terraformResource: `user_data.sh + system_image_snapshot.tar.gz + restore_system_image.sh`,
-      costEstimate: "$0 USD/mes",
+          ? `${manifest.selected_user_paths.length} ruta(s) seleccionadas`
+          : `${usersList.length} usuarios · ${svcsCount} servicios`,
+      summary: `Rehidratación Cloud-Init + ${procsCount} procesos`,
+      cost: "$0 USD/mes",
     },
   ];
 
@@ -589,80 +542,96 @@ function VmOsToCloudTransformationMap({
       className="cm-card"
       style={{
         marginTop: 14,
-        border: "1px solid #16a34a",
-        backgroundColor: "#f8fafc",
-        padding: "16px 18px",
+        border: "1px solid #d5dbdb",
+        backgroundColor: "#fafafa",
+        padding: "14px 16px",
         borderRadius: 6,
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <span
-              className="cm-badge"
-              style={{
-                backgroundColor: "#14532d",
-                color: "#ffffff",
-                fontWeight: 700,
-                fontSize: 12,
-              }}
-            >
-              MAPA DE TRANSFORMACIÓN SO / VM → {pUpper}
-            </span>
-            <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#0f172a" }}>
-              ¿Qué se Detectó en el Sistema Operativo, Cómo se Adapta y Qué Creará Terraform en {pUpper}?
-            </h4>
-          </div>
-          <p style={{ margin: "4px 0 0 0", fontSize: 13.5, color: "#475569", lineHeight: 1.45 }}>
-            Así como en el Caso 1, aquí puedes consultar cada componente relevado del sistema operativo en vivo (discos, particiones UUID, archivos en <code>/etc</code> y <code>/home</code>, usuarios, servicios <code>systemd</code> y procesos en ejecución) y los recursos exactos que Terraform crea en {pUpper}.
-          </p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span className="cm-badge observed">MAPA SO / VM → AWS</span>
+          <strong style={{ fontSize: 14.5, color: "#000716" }}>
+            Equivalencia de Sistema Operativo en AWS
+          </strong>
+          <HelpTooltipButton
+            label="¿Qué se preserva y adapta?"
+            onClick={() => setShowHelpModal(true)}
+          />
         </div>
-        <span className="cm-badge observed" style={{ fontSize: 12 }}>
-          Sincronizado con main.tf y user_data.sh (12 Recursos)
-        </span>
+        <button
+          type="button"
+          className="cm-btn sm secondary"
+          onClick={() => setShowTable((v) => !v)}
+        >
+          {showTable ? "Ocultar detalle HCL ▲" : "Ver detalle HCL por capa ▾"}
+        </button>
       </div>
 
-      <div className="cm-table-wrap" style={{ backgroundColor: "#ffffff", borderRadius: 6, border: "1px solid #cbd5e1" }}>
-        <table className="cm-table" style={{ margin: 0 }}>
-          <thead>
-            <tr>
-              <th>Elemento Detectado en el Sistema Operativo (Origen)</th>
-              <th>Estrategia y Adaptación Aplicada</th>
-              <th>Recurso(s) que Creará Terraform en {pUpper}</th>
-              <th>Costo Est.</th>
-            </tr>
-          </thead>
-          <tbody>
-            {transformationRows.map((row, idx) => (
-              <tr key={idx}>
-                <td style={{ fontSize: 13 }}>
-                  <strong>{row.originTitle}</strong>
-                  <div className="cm-hint" style={{ marginTop: 2 }}>{row.originDetail}</div>
-                </td>
-                <td style={{ fontSize: 13 }}>
-                  <strong>{row.strategyLabel}</strong>
-                  <div className="cm-hint" style={{ marginTop: 2 }}>{row.whyTransformed}</div>
-                </td>
-                <td style={{ fontSize: 12.5 }}>
-                  <code>{row.terraformResource}</code>
-                </td>
-                <td style={{ fontSize: 12.5 }}>
-                  <span
-                    className="cm-badge"
-                    style={{
-                      backgroundColor: row.costEstimate.startsWith("$0") ? "#dcfce7" : "#fef3c7",
-                      color: row.costEstimate.startsWith("$0") ? "#166534" : "#92400e",
-                      fontSize: 12,
-                    }}
-                  >
-                    {row.costEstimate}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <ContextualTechnicalModal
+        isOpen={showHelpModal}
+        onClose={() => setShowHelpModal(false)}
+        title="Transformación de Sistema Operativo / VM hacia Amazon EC2"
+        badge="Caso 2 · AWS Nitro"
+        whyTransformed="El sistema operativo en vivo se adapta al hipervisor AWS Nitro preservando las carpetas seleccionadas del usuario, montajes por UUID en /etc/fstab, servicios systemd y usuarios locales mediante Cloud-Init, mientras descarta la memoria RAM volátil para garantizar un arranque limpio."
+        customSections={[
+          {
+            heading: "Recursos Terraform sintetizados",
+            body: `aws_vpc.target_vpc, aws_security_group.app_sg, aws_instance.vm_${slug}, aws_ebs_volume.disk_${slug}_1 y bootstrap user_data.sh.`,
+          },
+        ]}
+      />
+
+      <div className="cm-choice-cards-grid" style={{ marginBottom: showTable ? 12 : 0 }}>
+        {summaryCards.map((c, idx) => (
+          <div key={idx} className="cm-card-subtle" style={{ backgroundColor: "#ffffff", padding: "10px 12px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, marginBottom: 4 }}>
+              <span className="cm-badge info" style={{ fontSize: 11 }}>{c.layer}</span>
+              <span className="cm-hint" style={{ fontSize: 11.5 }}>{c.cost}</span>
+            </div>
+            <strong style={{ fontSize: 13.5, color: "#000716", display: "block", marginBottom: 2 }}>
+              {c.targetTitle}
+            </strong>
+            <div className="cm-hint" style={{ fontSize: 12 }}>{c.summary}</div>
+          </div>
+        ))}
       </div>
+
+      {showTable && (
+        <div className="cm-table-wrap" style={{ backgroundColor: "#ffffff", borderRadius: 4 }}>
+          <table className="cm-table" style={{ margin: 0 }}>
+            <thead>
+              <tr>
+                <th>Capa Origen</th>
+                <th>Mapeo en AWS</th>
+                <th>Recurso HCL (main.tf)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Red y Puertos ({ports.length})</strong></td>
+                <td>VPC Multi-AZ + Security Group</td>
+                <td><code>aws_vpc.target_vpc + aws_security_group.app_sg</code></td>
+              </tr>
+              <tr>
+                <td><strong>SO {osInfo.distro || "Linux"} ({manifest.boot_mode || "UEFI"})</strong></td>
+                <td>Instancia EC2 Nitro + Snapshot Quiesced</td>
+                <td><code>aws_instance.vm_{slug}</code></td>
+              </tr>
+              <tr>
+                <td><strong>Disco {primaryDisk.device || "/dev/nvme0n1"}</strong></td>
+                <td>Volumen EBS gp3 cifrado (UUID fstab)</td>
+                <td><code>aws_ebs_volume.disk_{slug}_1</code></td>
+              </tr>
+              <tr>
+                <td><strong>Carpetas y Servicios systemd</strong></td>
+                <td>Bootstrap Cloud-Init + Restore Tarball</td>
+                <td><code>user_data.sh + restore_system_image.sh</code></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -721,6 +690,7 @@ export default function MigrationOrchestratorWorkspace({
   const [selectedUserPaths, setSelectedUserPaths] = useState(
     () => loadSavedSelectedUserPaths() || []
   );
+  const [showCase2HelpModal, setShowCase2HelpModal] = useState(false);
   const requireLiveRam = consistencyStrategy === "demo_live_ram";
   const preferContinuousReplication = consistencyStrategy === "continuous_replication";
   const [uc2PreInspection, setUc2PreInspection] = useState(null);
@@ -954,9 +924,9 @@ export default function MigrationOrchestratorWorkspace({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          description: "Token de Agente Remoto — Caso 2 (Orquestador AWS)",
-          ttl_hours: 24,
+          ttl_seconds: 86400,
           max_uses: 10,
+          org_id: "default",
         }),
       });
       const data = await res.json();
@@ -1643,36 +1613,26 @@ export default function MigrationOrchestratorWorkspace({
                 <div
                   className="cm-card"
                   style={{
-                    backgroundColor: "#f8faff",
-                    border: "2px solid #3b82f6",
-                    borderRadius: 8,
+                    backgroundColor: "#ffffff",
+                    border: "1px solid #d5dbdb",
+                    borderRadius: 6,
                     padding: "16px 20px",
-                    boxShadow: "0 1px 3px rgba(0, 0, 0, 0.05)",
                     marginBottom: 16,
                   }}
                 >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
                     <div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span className="cm-badge" style={{ backgroundColor: "#1e3a8a", color: "#ffffff", fontWeight: 700, fontSize: 12.5 }}>GIT</span>
-                        <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#1e3a8a" }}>
-                          Adjuntar Repositorio GitHub por Enlace Público
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span className="cm-badge" style={{ backgroundColor: "#232f3e", color: "#ffffff", fontWeight: 700, fontSize: 12 }}>GIT</span>
+                        <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#16191f" }}>
+                          Repositorio GitHub Público
                         </h4>
-                        <span
-                          className="cm-badge"
-                          style={{
-                            backgroundColor: "#dcfce7",
-                            color: "#166534",
-                            border: "1px solid #86efac",
-                            fontSize: 13,
-                            fontWeight: 700,
-                          }}
-                        >
-                          Enlace Público (Sin Credenciales)
+                        <span className="cm-badge observed" style={{ fontSize: 12 }}>
+                          Sin credenciales · Commit SHA fijado
                         </span>
                       </div>
-                      <p style={{ margin: "4px 0 0 0", fontSize: 13.5, color: "#475569", lineHeight: 1.45 }}>
-                        Ingresa el enlace público de cualquier repositorio GitHub. CloudMove validará el acceso al repositorio, resolverá y fijará el commit SHA inmutable, analizará runtimes, puertos y dependencias en un sandbox efímero aislado, redactará secretos y generará la plantilla IaC de Terraform para {newProvider.toUpperCase()}.
+                      <p style={{ margin: "4px 0 0 0", fontSize: 13, color: "#545b64" }}>
+                        Análisis estático en sandbox efímero para detectar runtimes, puertos y dependencias hacia {newProvider.toUpperCase()}.
                       </p>
                     </div>
                   </div>
@@ -1765,8 +1725,8 @@ export default function MigrationOrchestratorWorkspace({
                       {githubTreeData && (
                         <RepositoryTreeViewer
                           treeData={githubTreeData}
-                          title={`Estructura de Carpetas y Archivos en '${githubRepoData.full_name}'`}
-                          defaultOpen={true}
+                          title={`Inventario de Archivos y Lenguajes: '${githubRepoData.full_name}'`}
+                          defaultOpen={false}
                         />
                       )}
                     </div>
@@ -1913,44 +1873,42 @@ export default function MigrationOrchestratorWorkspace({
             <div
               className="cm-card"
               style={{
-                backgroundColor: "#f0fdf4",
-                border: "2px solid #16a34a",
-                borderRadius: 8,
-                padding: "16px 20px",
-                boxShadow: "0 1px 3px rgba(0, 0, 0, 0.05)",
+                backgroundColor: "#fafafa",
+                border: "1px solid #d5dbdb",
+                borderRadius: 6,
+                padding: "14px 16px",
                 marginTop: 14,
-                marginBottom: 16,
+                marginBottom: 14,
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
-                <div style={{ flex: "1 1 320px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <span className="cm-badge" style={{ backgroundColor: "#14532d", color: "#ffffff", fontWeight: 700, fontSize: 12.5 }}>IMG / OS</span>
-                    <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#14532d" }}>
-                      Caso 2 · Migración de Imagen de Sistema Operativo / Máquina Virtual
-                    </h4>
-                    <span
-                      className="cm-badge"
-                      style={{
-                        backgroundColor: uc2SourceMode === "live_capture" ? "#dcfce7" : "#e0f2fe",
-                        color: uc2SourceMode === "live_capture" ? "#166534" : "#0369a1",
-                        border: `1px solid ${uc2SourceMode === "live_capture" ? "#86efac" : "#7dd3fc"}`,
-                        fontSize: 13,
-                        fontWeight: 700,
-                      }}
-                    >
-                      {uc2SourceMode === "live_capture" ? "Captura en Vivo Activa" : "Modo Archivo de Disco"}
-                    </span>
-                  </div>
-                  <p style={{ margin: "4px 0 0 0", fontSize: 13.5, color: "#475569", lineHeight: 1.45 }}>
-                    {uc2SourceMode === "live_capture"
-                      ? `CloudMove captura el sistema operativo en vivo donde se ejecuta: archivos guardados, configuración /etc, fstab, servicios systemd, paquetes y kernel, generando una imagen de disco (QCOW2/RAW) lista para aprovisionar y montar como VM en ${newProvider.toUpperCase()}.`
-                      : `Ingresa la ruta de cualquier archivo de imagen de disco en el sistema (.vmdk, .qcow2, .raw, .vhdx). El analizador ejecutará qemu-img info en modo seguro de solo lectura para inspeccionar las cabeceras binarias reales, verificar particionado GPT/MBR, calcular SHA-256 y evaluar compatibilidad hacia ${newProvider.toUpperCase()}.`}
-                  </p>
+              <ContextualTechnicalModal
+                isOpen={showCase2HelpModal}
+                onClose={() => setShowCase2HelpModal(false)}
+                title="Caso 2 · Migración de Sistema Operativo / Imagen VM hacia AWS"
+                badge="AWS Nitro & VM Import"
+                whyTransformed="CloudMove ejecuta el agente en modo solo lectura o valida la imagen binaria (qemu-img info + SHA-256), adaptando el disco hacia Amazon EBS gp3 respetando el límite por volumen de AWS Academy (100 GiB) y preservando exclusivamente los archivos seleccionados por el usuario."
+                customSections={[
+                  {
+                    heading: "Consistencia de Snapshot vs RAM Volátil",
+                    body: "Los hipervisores en la nube requieren discos consistentes (vía sync / quiesce o replicación de bloques AWS MGN). La memoria RAM volátil en ejecución y sockets TCP activos no se transfieren directamente; los servicios systemd se reinician de manera limpia en Amazon EC2 mediante Cloud-Init.",
+                  },
+                ]}
+              />
+
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span className="cm-badge aws">CASO 2 · VM / SO</span>
+                  <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#000716" }}>
+                    Origen del Sistema Operativo hacia Amazon EC2
+                  </h4>
+                  <HelpTooltipButton
+                    label="¿Cómo funciona?"
+                    onClick={() => setShowCase2HelpModal(true)}
+                  />
                 </div>
 
                 {/* Selector de Modalidad */}
-                <div style={{ display: "flex", gap: 6, backgroundColor: "#e2e8f0", padding: 3, borderRadius: 6, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", gap: 4, backgroundColor: "#e2e8f0", padding: 3, borderRadius: 6, flexWrap: "wrap" }}>
                   <button
                     type="button"
                     onClick={() => {
@@ -1960,16 +1918,15 @@ export default function MigrationOrchestratorWorkspace({
                     style={{
                       border: "none",
                       backgroundColor: uc2SourceMode === "live_capture" ? "#ffffff" : "transparent",
-                      color: uc2SourceMode === "live_capture" ? "#166534" : "#64748b",
+                      color: uc2SourceMode === "live_capture" ? "#0972d3" : "#414d5c",
                       fontWeight: uc2SourceMode === "live_capture" ? 700 : 500,
                       padding: "6px 12px",
                       borderRadius: 4,
                       cursor: "pointer",
-                      fontSize: 13.5,
-                      boxShadow: uc2SourceMode === "live_capture" ? "0 1px 2px rgba(0,0,0,0.1)" : "none",
+                      fontSize: 13,
                     }}
                   >
-                    Capturar SO del Host en Vivo
+                    Agente en Vivo
                   </button>
                   <button
                     type="button"
@@ -1980,16 +1937,15 @@ export default function MigrationOrchestratorWorkspace({
                     style={{
                       border: "none",
                       backgroundColor: uc2SourceMode === "file_path" ? "#ffffff" : "transparent",
-                      color: uc2SourceMode === "file_path" ? "#166534" : "#64748b",
+                      color: uc2SourceMode === "file_path" ? "#0972d3" : "#414d5c",
                       fontWeight: uc2SourceMode === "file_path" ? 700 : 500,
                       padding: "6px 12px",
                       borderRadius: 4,
                       cursor: "pointer",
-                      fontSize: 13.5,
-                      boxShadow: uc2SourceMode === "file_path" ? "0 1px 2px rgba(0,0,0,0.1)" : "none",
+                      fontSize: 13,
                     }}
                   >
-                    Inspeccionar Archivo de Disco (.vmdk, .qcow2, .raw)
+                    Imagen de Disco (.vmdk / .qcow2)
                   </button>
                 </div>
               </div>
@@ -2194,105 +2150,75 @@ export default function MigrationOrchestratorWorkspace({
                       </div>
                     )}
 
-                    {/* Lista de Dispositivos de Bloque Reales */}
+                    {/* Lista Limpia de Dispositivos de Bloque Reales (Con particiones colapsables) */}
                     {hostDevicesData?.devices?.length > 0 ? (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <div className="cm-choice-cards-grid" style={{ marginBottom: 10 }}>
                         {hostDevicesData.devices.map((dev) => {
                           const isPrimary = dev.is_boot_device || dev.path === selectedStorageDevice;
+                          const isChecked = selectedStorageDevice === dev.path || (!selectedStorageDevice && isPrimary);
                           return (
                             <div
                               key={dev.name}
-                              style={{
-                                border: `1.5px solid ${isPrimary ? "#16a34a" : "#cbd5e1"}`,
-                                borderRadius: 6,
-                                padding: "10px 12px",
-                                backgroundColor: isPrimary ? "#f0fdf4" : "#ffffff",
-                              }}
+                              className={`cm-choice-card ${isChecked ? "is-selected" : ""}`}
+                              onClick={() => setSelectedStorageDevice(dev.path)}
                             >
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                  <input
-                                    type="radio"
-                                    id={`dev-${dev.name}`}
-                                    name="selected_device"
-                                    checked={selectedStorageDevice === dev.path || (!selectedStorageDevice && isPrimary)}
-                                    onChange={() => setSelectedStorageDevice(dev.path)}
-                                    style={{ cursor: "pointer" }}
-                                  />
-                                  <label htmlFor={`dev-${dev.name}`} style={{ cursor: "pointer", fontWeight: 700, fontSize: 14, color: "#1e293b" }}>
-                                    <code>{dev.path}</code> ({dev.model})
-                                  </label>
-                                  <span className="cm-badge" style={{ backgroundColor: "#e2e8f0", color: "#334155", fontSize: 12.5 }}>
-                                    {dev.size_gib} GiB Físicos · {dev.type?.toUpperCase()}
+                              <div>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                    <input
+                                      type="radio"
+                                      id={`dev-${dev.name}`}
+                                      name="selected_device"
+                                      checked={isChecked}
+                                      onChange={() => setSelectedStorageDevice(dev.path)}
+                                      style={{ cursor: "pointer" }}
+                                    />
+                                    <label htmlFor={`dev-${dev.name}`} style={{ cursor: "pointer", fontWeight: 700, fontSize: 13.5, color: "#000716" }}>
+                                      <code>{dev.path}</code>
+                                    </label>
+                                  </div>
+                                  <span className="cm-badge observed" style={{ fontSize: 11.5 }}>
+                                    {dev.size_gib} GiB
                                   </span>
-                                  <span
-                                    className="cm-badge"
-                                    style={{
-                                      backgroundColor: "#dcfce7",
-                                      color: "#166534",
-                                      border: "1px solid #86efac",
-                                      fontSize: 12.5,
-                                      fontWeight: 700,
-                                    }}
-                                  >
-                                    En AWS Academy (Pvoclabs2): se crea como{" "}
-                                    {uc2Decisions.ebs_storage_sizing === "aws_academy_max_100gb"
-                                      ? "100 GiB gp3"
-                                      : uc2Decisions.ebs_storage_sizing === "full_physical_capacity"
-                                      ? `${dev.size_gib} GiB (1:1)`
-                                      : uc2Decisions.ebs_storage_sizing === "aws_academy_root_only_30gb"
-                                      ? "Solo Raíz 30 GiB gp3"
-                                      : "30 GiB gp3 (Evita bloqueo >100 GiB)"}
-                                  </span>
-                                  {dev.is_boot_device && (
-                                    <span className="cm-badge observed" style={{ fontSize: 12.5 }}>
-                                      Disco de Arranque Principal
-                                    </span>
-                                  )}
+                                </div>
+                                <div className="cm-hint" style={{ marginLeft: 20 }}>
+                                  {dev.model} {dev.is_boot_device ? "· Disco Principal" : ""}
                                 </div>
                               </div>
 
-                              {/* Particiones del Dispositivo */}
                               {dev.partitions?.length > 0 && (
-                                <div style={{ marginTop: 8, paddingLeft: 22, display: "flex", flexDirection: "column", gap: 4 }}>
-                                  {dev.partitions.map((p) => (
-                                    <div
-                                      key={p.name}
-                                      style={{
-                                        fontSize: 13.5,
-                                        color: "#475569",
-                                        backgroundColor: "#f8fafc",
-                                        padding: "4px 8px",
-                                        borderRadius: 4,
-                                        display: "flex",
-                                        justifyContent: "space-between",
-                                        alignItems: "center",
-                                        flexWrap: "wrap",
-                                        gap: 6,
-                                      }}
-                                    >
-                                      <div>
-                                        <strong><code>{p.path}</code></strong>
-                                        {p.mount_point && <span> montada en <strong><code>{p.mount_point}</code></strong></span>}
-                                        <span style={{ color: "var(--color-text-muted)" }}> ({p.filesystem})</span>
-                                        {p.uuid && <span style={{ color: "var(--color-text-muted)" }}> · UUID: {p.uuid}</span>}
+                                <details
+                                  style={{ marginLeft: 20, marginTop: 4 }}
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  <summary style={{ fontSize: 12, fontWeight: 700, color: "#0972d3", cursor: "pointer" }}>
+                                    Ver {dev.partitions.length} partición(es) y UUIDs
+                                  </summary>
+                                  <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+                                    {dev.partitions.map((p) => (
+                                      <div
+                                        key={p.name}
+                                        style={{
+                                          fontSize: 12,
+                                          color: "#414d5c",
+                                          backgroundColor: "#f8fafc",
+                                          padding: "4px 8px",
+                                          borderRadius: 4,
+                                          border: "1px solid #eaeded",
+                                          display: "flex",
+                                          justifyContent: "space-between",
+                                          gap: 6,
+                                          flexWrap: "wrap",
+                                        }}
+                                      >
+                                        <span>
+                                          <code>{p.path}</code> {p.mount_point ? `(${p.mount_point})` : ""} · {p.filesystem}
+                                        </span>
+                                        <strong>{p.size_gib} GiB</strong>
                                       </div>
-                                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                                        <span>{p.size_gib} GiB</span>
-                                        {p.mount_point === "/" && (
-                                          <span className="cm-badge" style={{ backgroundColor: "#dbeafe", color: "#1e40af", fontSize: 12.5 }}>
-                                            Espacio Utilizado: {p.used_gib} GiB ({p.usage_percent}%)
-                                          </span>
-                                        )}
-                                        {p.is_boot && (
-                                          <span className="cm-badge" style={{ backgroundColor: "#dcfce7", color: "#166534", fontSize: 12.5 }}>
-                                            Partición de Arranque ESP
-                                          </span>
-                                        )}
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
+                                    ))}
+                                  </div>
+                                </details>
                               )}
                             </div>
                           );
@@ -2407,70 +2333,81 @@ export default function MigrationOrchestratorWorkspace({
                 </div>
               )}
 
-              {/* Estrategia de Consistencia de Datos y Transferencia */}
+              {/* Estrategia de Consistencia de Datos y Transferencia en Tarjetas Comparativas */}
               <div
                 style={{
                   marginTop: 12,
                   padding: "12px 14px",
                   backgroundColor: "#ffffff",
                   borderRadius: 6,
-                  border: "1px solid #cbd5e1",
+                  border: "1px solid #d5dbdb",
                 }}
               >
-                <div style={{ fontWeight: 700, fontSize: 14, color: "#1e293b", marginBottom: 6 }}>
-                  Estrategia de Consistencia de Datos y Transferencia hacia {newProvider.toUpperCase()}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                  <strong style={{ fontSize: 13.5, color: "#000716" }}>
+                    Estrategia de Consistencia en Snapshot / Transferencia AWS
+                  </strong>
+                  <HelpTooltipButton
+                    label="Comparativa técnica"
+                    onClick={() => setShowCase2HelpModal(true)}
+                  />
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14, cursor: "pointer" }}>
-                    <input
-                      type="radio"
-                      name="consistency_strategy"
-                      value="quiesced_snapshot"
-                      checked={consistencyStrategy === "quiesced_snapshot"}
-                      onChange={() => setConsistencyStrategy("quiesced_snapshot")}
-                      style={{ marginTop: 2 }}
-                    />
-                    <div>
-                      <strong>Snapshot Consistente con Quiesce de Servicios (Recomendado)</strong>
-                      <div style={{ color: "#475569", fontSize: 13.5, marginTop: 2 }}>
-                        Vaciado de búferes vía <code>sync()</code> y congelación de escrituras. Garantiza persistencia completa de discos y <code>/etc</code>. Las sesiones TCP volátiles se reabren ordenadamente al arrancar la instancia en la nube.
-                      </div>
-                    </div>
-                  </label>
-
-                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14, cursor: "pointer" }}>
-                    <input
-                      type="radio"
-                      name="consistency_strategy"
-                      value="continuous_replication"
-                      checked={consistencyStrategy === "continuous_replication"}
-                      onChange={() => setConsistencyStrategy("continuous_replication")}
-                      style={{ marginTop: 2 }}
-                    />
-                    <div>
-                      <strong>Replicación Continua a Nivel de Bloques (AWS MGN)</strong>
-                      <div style={{ color: "#475569", fontSize: 13.5, marginTop: 2 }}>
-                        Replicación continua de cambios a nivel de bloque en segundo plano mientras el servidor opera, con cutover final de mínimo downtime.
-                      </div>
-                    </div>
-                  </label>
-
-                  <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14, cursor: "pointer" }}>
-                    <input
-                      type="radio"
-                      name="consistency_strategy"
-                      value="demo_live_ram"
-                      checked={consistencyStrategy === "demo_live_ram"}
-                      onChange={() => setConsistencyStrategy("demo_live_ram")}
-                      style={{ marginTop: 2 }}
-                    />
-                    <div>
-                      <strong style={{ color: "#b91c1c" }}>Exigir Transferencia de RAM Volátil en Caliente (Simulador de Bloqueo por Incompatibilidad Física)</strong>
-                      <div style={{ color: "#64748b", fontSize: 13.5, marginTop: 2 }}>
-                        Activa <code>require_live_memory_state=True</code> para auditar y demostrar por qué los hipervisores en la nube bloquean la transferencia de memoria RAM volátil entre hardware heterogéneo.
-                      </div>
-                    </div>
-                  </label>
+                <div className="cm-choice-cards-grid">
+                  {[
+                    {
+                      id: "quiesced_snapshot",
+                      title: "Snapshot Quiesced",
+                      badge: "Recomendado",
+                      badgeClass: "observed",
+                      desc: "Vaciado sync() de discos y reinicio limpio en EC2.",
+                    },
+                    {
+                      id: "continuous_replication",
+                      title: "Replicación AWS MGN",
+                      badge: "Mínimo downtime",
+                      badgeClass: "info",
+                      desc: "Sincronización continua de bloques en segundo plano.",
+                    },
+                    {
+                      id: "demo_live_ram",
+                      title: "Exigir RAM Volátil",
+                      badge: "Simular bloqueo",
+                      badgeClass: "danger",
+                      desc: "Audita incompatibilidad física de RAM entre hipervisores.",
+                    },
+                  ].map((strat) => {
+                    const active = consistencyStrategy === strat.id;
+                    return (
+                      <label
+                        key={strat.id}
+                        className={`cm-choice-card ${active ? "is-selected" : ""}`}
+                      >
+                        <div>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                              <input
+                                type="radio"
+                                name="consistency_strategy"
+                                value={strat.id}
+                                checked={active}
+                                onChange={() => setConsistencyStrategy(strat.id)}
+                                style={{ cursor: "pointer" }}
+                              />
+                              <strong style={{ fontSize: 13.5, color: active ? "#0972d3" : "#000716" }}>
+                                {strat.title}
+                              </strong>
+                            </div>
+                            <span className={`cm-badge ${strat.badgeClass}`} style={{ fontSize: 11 }}>
+                              {strat.badge}
+                            </span>
+                          </div>
+                          <div className="cm-hint" style={{ marginLeft: 20 }}>
+                            {strat.desc}
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
             </div>
@@ -2531,32 +2468,78 @@ export default function MigrationOrchestratorWorkspace({
           </div>
         </div>
 
-        {/* Vista previa de pre-inspección si el usuario ejecutó el Paso Previo */}
+        {/* Vista previa ejecutiva de pre-inspección estática */}
         {newUseCase === "app_source" && uc1PreInspection?.application && (
           <div className="cm-step-card" style={{ marginTop: 14 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <strong>
-                  Pre-Inspección Estática: {uc1PreInspection.application.app_name} ({uc1PreInspection.application.language} · {uc1PreInspection.application.framework})
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <strong style={{ fontSize: 14.5, color: "#16191f" }}>
+                  Pre-Inspección Estática: {uc1PreInspection.application.app_name}
                 </strong>
                 {uc1PreInspection.application.git_metadata && (
-                  <span className="cm-badge observed" style={{ backgroundColor: "#dbeafe", color: "#1e40af" }}>
-                    Commit: {uc1PreInspection.application.git_metadata.short_sha}
+                  <span className="cm-badge info">
+                    Commit {uc1PreInspection.application.git_metadata.short_sha}
                   </span>
                 )}
               </div>
               <span className="cm-badge observed">
-                Código arbitrario ejecutado: {String(uc1PreInspection.application.arbitrary_code_executed)} (Seguro)
+                Sandbox aislado · Sin ejecución de código
               </span>
             </div>
-            {uc1PreInspection.application.git_metadata && (
-              <div style={{ fontSize: 13.5, marginBottom: 6, color: "#1e3a8a", backgroundColor: "#f0fdf4", padding: "6px 10px", borderRadius: 4, border: "1px solid #bbf7d0" }}>
-                <span><strong>Repositorio Público:</strong> <a href={uc1PreInspection.application.git_metadata.repository_url} target="_blank" rel="noreferrer"><strong>{uc1PreInspection.application.git_metadata.owner}/{uc1PreInspection.application.git_metadata.repo}</strong></a> · Rama: <code>{uc1PreInspection.application.git_metadata.ref}</code> · Mensaje: <em>"{uc1PreInspection.application.git_metadata.commit_message}"</em> · Sandbox efímero: <span style={{ color: "#166534", fontWeight: 600 }}>Aislado y purgado</span></span>
+
+            <div className="cm-kpi-grid" style={{ marginBottom: 10 }}>
+              <div className="cm-kpi-card">
+                <div className="cm-kpi-label">Runtime / Framework</div>
+                <div className="cm-kpi-value" style={{ fontSize: 15 }}>
+                  {uc1PreInspection.application.language || "N/A"} · {uc1PreInspection.application.framework || "Estándar"}
+                </div>
               </div>
-            )}
-            <div style={{ fontSize: 13.5, color: "var(--color-text-secondary)" }}>
-              Archivos analizados: <code>{(uc1PreInspection.application.files_inspected || []).join(", ")}</code> · Puertos: <code>{(uc1PreInspection.application.exposed_ports || []).join(", ")}</code> · Secretos redactados: <strong>{uc1PreInspection.application.secrets_redacted_count}</strong> · Dependencias detectadas: <strong>{uc1PreInspection.application.dependencies?.length || 0}</strong>
+              <div className="cm-kpi-card">
+                <div className="cm-kpi-label">Puertos Detectados</div>
+                <div className="cm-kpi-value" style={{ fontSize: 15 }}>
+                  {(uc1PreInspection.application.exposed_ports || []).length > 0
+                    ? (uc1PreInspection.application.exposed_ports || []).join(", ")
+                    : "Ninguno"}
+                </div>
+              </div>
+              <div className="cm-kpi-card">
+                <div className="cm-kpi-label">Dependencias</div>
+                <div className="cm-kpi-value" style={{ fontSize: 15 }}>
+                  {uc1PreInspection.application.dependencies?.length || 0} paquetes
+                </div>
+              </div>
+              <div className="cm-kpi-card">
+                <div className="cm-kpi-label">Secretos Redactados</div>
+                <div className="cm-kpi-value" style={{ fontSize: 15 }}>
+                  {uc1PreInspection.application.secrets_redacted_count || 0} hallazgos
+                </div>
+              </div>
             </div>
+
+            {uc1PreInspection.application.git_metadata && (
+              <details className="cm-accordion-shell" style={{ marginBottom: 8 }}>
+                <summary className="cm-accordion-trigger" style={{ fontSize: 12.5 }}>
+                  <span>
+                    Metadatos Git ({uc1PreInspection.application.git_metadata.owner}/{uc1PreInspection.application.git_metadata.repo} · {uc1PreInspection.application.git_metadata.ref})
+                  </span>
+                </summary>
+                <div className="cm-accordion-body" style={{ fontSize: 12.5, color: "#545b64" }}>
+                  <div>
+                    <strong>Repositorio:</strong>{" "}
+                    <a href={uc1PreInspection.application.git_metadata.repository_url} target="_blank" rel="noreferrer">
+                      {uc1PreInspection.application.git_metadata.repository_url}
+                    </a>
+                  </div>
+                  <div style={{ marginTop: 4 }}>
+                    <strong>Último commit:</strong> {uc1PreInspection.application.git_metadata.commit_message}
+                  </div>
+                  <div style={{ marginTop: 4 }}>
+                    <strong>Manifiestos inspeccionados:</strong>{" "}
+                    <code>{(uc1PreInspection.application.files_inspected || []).join(", ") || "N/A"}</code>
+                  </div>
+                </div>
+              </details>
+            )}
             {uc1PreInspection.application.repository_tree && (
               <RepositoryTreeViewer
                 treeData={{
@@ -2564,8 +2547,8 @@ export default function MigrationOrchestratorWorkspace({
                   summary: uc1PreInspection.application.tree_summary,
                   key_manifests: uc1PreInspection.application.key_manifests,
                 }}
-                title={`Árbol Completo de Carpetas y Archivos Analizados: ${uc1PreInspection.application.app_name}`}
-                defaultOpen={true}
+                title={`Inventario de Archivos y Lenguajes: ${uc1PreInspection.application.app_name}`}
+                defaultOpen={false}
               />
             )}
 
@@ -2603,48 +2586,62 @@ export default function MigrationOrchestratorWorkspace({
           <div className="cm-step-card" style={{ marginTop: 14 }}>
             {uc2PreInspection?.manifest && (
               <div style={{ marginBottom: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <strong>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <strong style={{ fontSize: 14.5, color: "#000716" }}>
                       {uc2PreInspection.manifest.is_live_capture
-                        ? `Captura de SO en Vivo: ${uc2PreInspection.manifest.name}`
+                        ? `Captura SO en Vivo: ${uc2PreInspection.manifest.name}`
                         : `Pre-Inspección Binaria: ${uc2PreInspection.manifest.name}`} ({uc2PreInspection.manifest.format})
                     </strong>
                     <span className={`cm-badge ${uc2PreInspection.manifest.is_authentic_binary_image ? "observed" : "warning"}`}>
                       {uc2PreInspection.manifest.binary_inspection?.authenticity_classification || "Binario Verificado"}
                     </span>
-                    {uc2PreInspection.manifest.is_live_capture && (
-                      <span className="cm-badge" style={{ backgroundColor: "#dcfce7", color: "#166534" }}>
-                        Host: {uc2PreInspection.manifest.live_capture_details?.host_captured || "Local"}
-                      </span>
-                    )}
                   </div>
                   <span className="cm-badge observed">
-                    Snapshot: {uc2PreInspection.manifest.snapshot_consistency?.consistency_type || "application_quiesced"}
+                    Snapshot: {uc2PreInspection.manifest.snapshot_consistency?.consistency_type || "quiesced"}
                   </span>
                 </div>
-                <div style={{ fontSize: 13.5, color: "var(--color-text-secondary)", lineHeight: 1.6 }}>
-                  <div>
-                    <strong>Sistema Operativo:</strong> {uc2PreInspection.manifest.os?.distro} {uc2PreInspection.manifest.os?.version} · Kernel: <code>{uc2PreInspection.manifest.os?.kernel}</code> ({uc2PreInspection.manifest.os?.architecture}) · Arranque: <code>{uc2PreInspection.manifest.boot_mode}</code> ({uc2PreInspection.manifest.partition_scheme})
+
+                <div className="cm-kpi-grid">
+                  <div className="cm-kpi-card">
+                    <span className="cm-kpi-label">Sistema Operativo y Arranque</span>
+                    <span className="cm-kpi-value" style={{ fontSize: 14.5 }}>
+                      {uc2PreInspection.manifest.os?.distro} {uc2PreInspection.manifest.os?.version}
+                    </span>
+                    <span className="cm-kpi-meta">
+                      {uc2PreInspection.manifest.boot_mode} ({uc2PreInspection.manifest.partition_scheme}) · {uc2PreInspection.manifest.os?.architecture}
+                    </span>
                   </div>
-                  <div>
-                    <strong>Almacenamiento Físico vs. AWS Academy:</strong> {uc2PreInspection.manifest.total_provisioned_gib} GiB físicos ({uc2PreInspection.manifest.total_used_gib} GiB en uso) → Se aprovisionará en nube como{" "}
-                    <strong>
+                  <div className="cm-kpi-card">
+                    <span className="cm-kpi-label">Volumen EBS en AWS</span>
+                    <span className="cm-kpi-value" style={{ fontSize: 14.5 }}>
                       {uc2Decisions.ebs_storage_sizing === "aws_academy_max_100gb"
                         ? "100 GiB gp3"
                         : uc2Decisions.ebs_storage_sizing === "full_physical_capacity"
                         ? `${uc2PreInspection.manifest.total_provisioned_gib} GiB gp3`
-                        : uc2Decisions.ebs_storage_sizing === "aws_academy_root_only_30gb"
-                        ? "Solo Raíz 30 GiB gp3"
-                        : "30 GiB gp3 (Compatible Pvoclabs2)"}
-                    </strong>{" "}
-                    · Archivo generado: <code>{uc2PreInspection.manifest.source_file}</code>
+                        : "30 GiB gp3 (Free Tier)"}
+                    </span>
+                    <span className="cm-kpi-meta">
+                      Origen: {uc2PreInspection.manifest.total_used_gib} GiB en uso / {uc2PreInspection.manifest.total_provisioned_gib} GiB prov.
+                    </span>
                   </div>
-                  <div>
-                    <strong>Usuarios Locales:</strong> {uc2PreInspection.manifest.local_users?.join(", ") || "root"} · <strong>Paquetes Instalados:</strong> {uc2PreInspection.manifest.installed_packages_summary?.total_count || 0} paquetes inventariados · <strong>Procesos Activos:</strong> {(uc2PreInspection.manifest.running_processes || []).length}
+                  <div className="cm-kpi-card">
+                    <span className="cm-kpi-label">Telemetría del Equipo</span>
+                    <span className="cm-kpi-value" style={{ fontSize: 14.5 }}>
+                      {uc2PreInspection.manifest.installed_packages_summary?.total_count || 0} paq · {(uc2PreInspection.manifest.running_processes || []).length} proc
+                    </span>
+                    <span className="cm-kpi-meta">
+                      Usuarios: {(uc2PreInspection.manifest.local_users || ["root"]).slice(0, 3).join(", ")}
+                    </span>
                   </div>
-                  <div>
-                    <strong>Suma Criptográfica:</strong> SHA-256 <code>{uc2PreInspection.manifest.sha256}</code>
+                  <div className="cm-kpi-card">
+                    <span className="cm-kpi-label">Integridad SHA-256</span>
+                    <span className="cm-kpi-value" style={{ fontSize: 13.5, fontFamily: "monospace" }}>
+                      {String(uc2PreInspection.manifest.sha256 || "").slice(0, 16)}...
+                    </span>
+                    <span className="cm-kpi-meta">
+                      Snapshot listo para AWS EC2
+                    </span>
                   </div>
                 </div>
               </div>
@@ -3132,11 +3129,11 @@ export default function MigrationOrchestratorWorkspace({
                               border: "1px solid #f87171",
                             }}
                           >
-                            <div style={{ fontWeight: 700, fontSize: 14, color: "#991b1b", marginBottom: 6 }}>
-                              Resolución / Remediación Operativa de la Arquitectura:
+                            <div style={{ fontWeight: 700, fontSize: 13.5, color: "#991b1b", marginBottom: 4 }}>
+                              Remediación Operativa Requerida
                             </div>
-                            <p style={{ margin: "0 0 10px 0", fontSize: 13.5, color: "#374151", lineHeight: 1.45 }}>
-                              La migración hacia AWS VM Import traslada el estado persistente en disco (particiones, datos, configuración de red y servicios en /etc). La memoria RAM volátil y sockets TCP abiertos no son transferibles entre hipervisores heterogéneos sin la misma capa de virtualización y red L2 extendida. Aplica un snapshot consistente con vaciado de búferes vía <code>sync()</code> o activa la replicación continua:
+                            <p style={{ margin: "0 0 10px 0", fontSize: 13, color: "#374151" }}>
+                              La memoria RAM volátil no es transferible entre hipervisores. Selecciona el método de captura de disco:
                             </p>
                             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                               <button
@@ -3713,69 +3710,73 @@ export default function MigrationOrchestratorWorkspace({
                   targetProvider={currentJob.target_provider}
                 />
 
-                {/* Procesos en Ejecución Capturados (ps) y Puertos Activos (ss -tulpn) */}
-                <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 12 }}>
-                  <div className="cm-card-subtle">
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                      <strong style={{ fontSize: 14 }}>
-                        Procesos en Ejecución Capturados en el SO ({(srcEnv.running_processes || []).length})
-                      </strong>
+                {/* Procesos en Ejecución Capturados (ps) y Directorios del SO (Filesystem) */}
+                <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12 }}>
+                  <details className="cm-accordion-shell">
+                    <summary className="cm-accordion-trigger">
+                      <span>
+                        Procesos en ejecución en el SO ({(srcEnv.running_processes || []).length})
+                      </span>
                       <span className="cm-badge observed" style={{ fontSize: 11.5 }}>ps aux</span>
-                    </div>
-                    <div style={{ maxHeight: 240, overflowY: "auto" }}>
-                      <table className="cm-table" style={{ margin: 0, fontSize: 12 }}>
-                        <thead>
-                          <tr>
-                            <th>PID</th>
-                            <th>Usuario</th>
-                            <th>Proceso</th>
-                            <th>CPU%</th>
-                            <th>MEM%</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(srcEnv.running_processes || []).slice(0, 25).map((proc, idx) => (
-                            <tr key={`${proc.pid}-${idx}`}>
-                              <td><code>{proc.pid}</code></td>
-                              <td><code>{proc.user}</code></td>
-                              <td><strong>{proc.name}</strong></td>
-                              <td>{proc.cpu_percent}%</td>
-                              <td>{proc.mem_percent}%</td>
+                    </summary>
+                    <div className="cm-accordion-body" style={{ padding: 0 }}>
+                      <div style={{ maxHeight: 240, overflowY: "auto" }}>
+                        <table className="cm-table" style={{ margin: 0, fontSize: 12 }}>
+                          <thead>
+                            <tr>
+                              <th>PID</th>
+                              <th>Usuario</th>
+                              <th>Proceso</th>
+                              <th>CPU%</th>
+                              <th>MEM%</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody>
+                            {(srcEnv.running_processes || []).slice(0, 25).map((proc, idx) => (
+                              <tr key={`${proc.pid}-${idx}`}>
+                                <td><code>{proc.pid}</code></td>
+                                <td><code>{proc.user}</code></td>
+                                <td><strong>{proc.name}</strong></td>
+                                <td>{proc.cpu_percent}%</td>
+                                <td>{proc.mem_percent}%</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
+                  </details>
 
-                  <div className="cm-card-subtle">
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                      <strong style={{ fontSize: 14 }}>
-                        Directorios y Archivos del SO Capturados (/etc, /opt, /var, /home)
-                      </strong>
+                  <details className="cm-accordion-shell">
+                    <summary className="cm-accordion-trigger">
+                      <span>
+                        Directorios del SO capturados ({(srcEnv.filesystem_inventory || srcEnv.filesystem_summary || []).length})
+                      </span>
                       <span className="cm-badge info" style={{ fontSize: 11.5 }}>Filesystem</span>
-                    </div>
-                    <div style={{ maxHeight: 240, overflowY: "auto" }}>
-                      <table className="cm-table" style={{ margin: 0, fontSize: 12 }}>
-                        <thead>
-                          <tr>
-                            <th>Directorio</th>
-                            <th>Archivos</th>
-                            <th>Muestra Capturada</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {(srcEnv.filesystem_inventory || srcEnv.filesystem_summary || []).map((dir) => (
-                            <tr key={dir.path}>
-                              <td><strong><code>{dir.path}</code></strong></td>
-                              <td>{dir.files_count ?? 0}</td>
-                              <td><code>{(dir.sample_entries || []).slice(0, 5).join(", ")}</code></td>
+                    </summary>
+                    <div className="cm-accordion-body" style={{ padding: 0 }}>
+                      <div style={{ maxHeight: 240, overflowY: "auto" }}>
+                        <table className="cm-table" style={{ margin: 0, fontSize: 12 }}>
+                          <thead>
+                            <tr>
+                              <th>Directorio</th>
+                              <th>Archivos</th>
+                              <th>Muestra Capturada</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody>
+                            {(srcEnv.filesystem_inventory || srcEnv.filesystem_summary || []).map((dir) => (
+                              <tr key={dir.path}>
+                                <td><strong><code>{dir.path}</code></strong></td>
+                                <td>{dir.files_count ?? 0}</td>
+                                <td><code>{(dir.sample_entries || []).slice(0, 5).join(", ")}</code></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
+                  </details>
                 </div>
               </div>
             )}
@@ -3806,10 +3807,7 @@ export default function MigrationOrchestratorWorkspace({
                     ))}
                   </div>
                 </div>
-                <p className="cm-hint" style={{ marginTop: 0, marginBottom: 12 }}>
-                  CloudMove distingue explícitamente qué elementos del sistema operativo se preservan bit a bit en disco, cuáles se adaptan al hipervisor destino (AWS Nitro) y cuáles no son transferibles entre nubes (como la memoria RAM volátil en vivo).
-                </p>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 10 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 10 }}>
                   {Object.values(fidelityDims)
                     .filter((dim) => fidelityFilter === "ALL" || dim.status === fidelityFilter)
                     .map((dim) => {
@@ -3819,15 +3817,22 @@ export default function MigrationOrchestratorWorkspace({
                       };
                       return (
                         <div key={dim.dimension} className="cm-card-subtle">
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
-                            <strong style={{ fontSize: 14 }}>{dim.dimension}</strong>
-                            <span className={`cm-badge ${meta.badgeClass}`} style={{ fontSize: 12.5 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                            <strong style={{ fontSize: 13.5, color: "#16191f" }}>{dim.dimension}</strong>
+                            <span className={`cm-badge ${meta.badgeClass}`} style={{ fontSize: 11.5 }}>
                               {meta.label}
                             </span>
                           </div>
-                          <div style={{ fontSize: 13.5, color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
-                            {dim.detail}
-                          </div>
+                          {dim.detail && (
+                            <details style={{ marginTop: 6 }}>
+                              <summary style={{ cursor: "pointer", fontSize: 12, color: "#0972d3", fontWeight: 600 }}>
+                                Ver detalle técnico
+                              </summary>
+                              <div style={{ marginTop: 4, fontSize: 12.5, color: "var(--color-text-secondary)", lineHeight: 1.45 }}>
+                                {dim.detail}
+                              </div>
+                            </details>
+                          )}
                         </div>
                       );
                     })}

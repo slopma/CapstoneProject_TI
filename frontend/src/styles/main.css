@@ -5944,4 +5944,208 @@ body {
   font-size: 15px;
 }
 
+/* ==========================================================================
+   12. PROGRESSIVE DISCLOSURE, CONTEXTUAL HELP (?) & RESPONSIVE CHOICE CARDS
+   ========================================================================== */
+
+.cm-help-pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background-color: #f2f8fd;
+  border: 1px solid #a4c9f5;
+  border-radius: 999px;
+  color: #0972d3;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background-color 140ms ease, border-color 140ms ease;
+  white-space: nowrap;
+}
+
+.cm-help-pill-btn:hover {
+  background-color: #e4f1fc;
+  border-color: #0972d3;
+}
+
+.cm-help-circle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background-color: #0972d3;
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.cm-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(15, 23, 42, 0.65);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.cm-modal-surface {
+  background-color: #ffffff;
+  border-radius: 6px;
+  width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #d5dbdb;
+  box-shadow: 0 20px 44px rgba(0, 7, 22, 0.3);
+  overflow: hidden;
+}
+
+.cm-modal-dark-header {
+  padding: 12px 18px;
+  background-color: #232f3e;
+  color: #ffffff;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  border-bottom: 2px solid #ff9900;
+}
+
+.cm-modal-close-dark {
+  background-color: #16191f;
+  color: #ffffff;
+  border: 1px solid #545b64;
+  border-radius: 4px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cm-modal-close-dark:hover {
+  border-color: #ff9900;
+  color: #ff9900;
+}
+
+.cm-modal-body-stack {
+  padding: 16px 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cm-choice-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.cm-choice-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 6px;
+  border: 1px solid #d5dbdb;
+  background-color: #ffffff;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.cm-choice-card:hover {
+  border-color: #539fe5;
+  background-color: #fafcfd;
+}
+
+.cm-choice-card.is-selected {
+  border: 2px solid #0972d3;
+  background-color: #f2f8fd;
+  box-shadow: 0 2px 6px rgba(9, 114, 211, 0.12);
+}
+
+.cm-accordion-shell {
+  background-color: #ffffff;
+  border: 1px solid #d5dbdb;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.cm-accordion-trigger {
+  width: 100%;
+  background-color: #fafafa;
+  border: none;
+  padding: 10px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.cm-accordion-trigger:hover {
+  background-color: #f2f8fd;
+}
+
+.cm-accordion-body {
+  padding: 12px 14px;
+  border-top: 1px solid #eaeded;
+  background-color: #ffffff;
+}
+
+@media (max-width: 768px) {
+  .cm-form-grid,
+  .cm-selector-grid,
+  .cm-choice-cards-grid,
+  .awsui-usecase-cards-grid,
+  .awsui-console-home-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .tab-pane-view,
+  .cm-card,
+  .cm-step-card,
+  .cm-card-subtle,
+  .cm-main,
+  .awsui-main-content,
+  .awsui-app-layout,
+  .cm-section-header,
+  .cm-title-row {
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+  }
+
+  .cm-badge {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    height: auto;
+  }
+
+  .cm-table-wrap {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .cm-btn {
+    white-space: normal;
+    text-align: center;
+  }
+}
+
+
 

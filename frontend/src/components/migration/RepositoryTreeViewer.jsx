@@ -151,7 +151,7 @@ function TreeNode({ node, depth = 0, filter = "" }) {
   );
 }
 
-export default function RepositoryTreeViewer({ treeData, title = "Explorador del Árbol del Repositorio", defaultOpen = false }) {
+export default function RepositoryTreeViewer({ treeData, title = "Inventario de Archivos", defaultOpen = false }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const [filter, setFilter] = useState("");
 
@@ -161,91 +161,68 @@ export default function RepositoryTreeViewer({ treeData, title = "Explorador del
   const rootNode = treeData.hierarchical_tree || treeData;
   const languages = summary.languages || [];
   const keyManifests = treeData.key_manifests || [];
+  const topLangs = languages.slice(0, 3).map((l) => `${l.language} (${l.percentage_files}%)`).join(" · ");
 
   return (
     <div
       style={{
         marginTop: 10,
         marginBottom: 10,
-        border: "1px solid #cbd5e1",
+        border: "1px solid #d5dbdb",
         borderRadius: 6,
         backgroundColor: "#ffffff",
         overflow: "hidden",
       }}
     >
-      {/* Header Bar */}
+      {/* Compact Executive Bar */}
       <button
         type="button"
         className="cm-tree-header-btn"
         aria-expanded={isOpen}
         onClick={() => setIsOpen(!isOpen)}
         style={{
-          borderBottom: isOpen ? "1px solid #e2e8f0" : "none",
+          borderBottom: isOpen ? "1px solid #eaeded" : "none",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 14, color: "#475569" }} aria-hidden="true">{isOpen ? "▼" : ""}</span>
-          <span style={{ fontSize: 14, fontWeight: 700, color: "#1e293b" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minWidth: 0 }}>
+          <span style={{ fontSize: 13.5, fontWeight: 700, color: "#000716" }}>
             {title}
           </span>
-          <span
-            style={{
-              fontSize: 13,
-              fontWeight: 600,
-              padding: "2px 7px",
-              borderRadius: 12,
-              backgroundColor: "#e0f2fe",
-              color: "#0369a1",
-            }}
-          >
+          <span className="cm-badge info">
             {summary.total_files ?? 0} archivos · {summary.total_directories ?? 0} carpetas
           </span>
-          {summary.total_size_bytes > 0 && (
-            <span style={{ fontSize: 13, color: "var(--color-text-muted)" }}>
-              ({formatBytes(summary.total_size_bytes)})
+          {topLangs && (
+            <span className="cm-hint" style={{ fontSize: 12 }}>
+              {topLangs}
             </span>
           )}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, flexShrink: 0 }}>
           {keyManifests.length > 0 && (
-            <span style={{ color: "#15803d", fontWeight: 600 }}>
-              [OK] {keyManifests.length} manifiesto(s) detectado(s)
+            <span className="cm-badge observed">
+              {keyManifests.length} manifiesto(s)
             </span>
           )}
-          <span style={{ color: "#2563eb", fontWeight: 600 }}>
-            {isOpen ? "Ocultar árbol ▲" : "Ver carpetas y archivos ▼"}
+          <span style={{ color: "#0972d3", fontWeight: 700 }}>
+            {isOpen ? "Ocultar inventario ▲" : "Explorar archivos ▾"}
           </span>
         </div>
       </button>
 
-      {/* Expanded Content */}
+      {/* Expanded Content (Progressive Disclosure) */}
       {isOpen && (
         <div style={{ padding: "12px 14px" }}>
-          {/* Languages Breakdown Bar */}
           {languages.length > 0 && (
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: "#475569", marginBottom: 6 }}>
-                Distribución Tecnológica y Lenguajes en el Repositorio:
-              </div>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                {languages.slice(0, 6).map((lang) => (
-                  <div
-                    key={lang.language}
-                    style={{
-                      fontSize: 13,
-                      padding: "3px 8px",
-                      borderRadius: 4,
-                      backgroundColor: "#f1f5f9",
-                      border: "1px solid #e2e8f0",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 4,
-                    }}
-                  >
-                    <strong>{lang.language}</strong>: {lang.file_count} archivos ({lang.percentage_files}%)
-                  </div>
-                ))}
-              </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+              {languages.slice(0, 5).map((lang) => (
+                <span
+                  key={lang.language}
+                  className="cm-badge neutral"
+                  style={{ fontSize: 12 }}
+                >
+                  <strong>{lang.language}</strong>: {lang.file_count} ({lang.percentage_files}%)
+                </span>
+              ))}
             </div>
           )}
 
@@ -255,7 +232,7 @@ export default function RepositoryTreeViewer({ treeData, title = "Explorador del
               type="search"
               className="cm-input"
               aria-label="Filtrar carpetas, subcarpetas o archivos en el árbol del repositorio"
-              placeholder="Filtrar carpetas, subcarpetas o archivos..."
+              placeholder="Filtrar archivos o carpetas..."
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
             />
@@ -264,18 +241,18 @@ export default function RepositoryTreeViewer({ treeData, title = "Explorador del
           {/* Tree View Container */}
           <div
             style={{
-              maxHeight: 340,
+              maxHeight: 300,
               overflowY: "auto",
               padding: "6px 8px",
               backgroundColor: "#fbfcfd",
-              border: "1px solid #f1f5f9",
+              border: "1px solid #eaeded",
               borderRadius: 4,
             }}
           >
             {rootNode ? (
               <TreeNode node={rootNode} depth={0} filter={filter} />
             ) : (
-              <div style={{ fontSize: 13.5, color: "var(--color-text-muted)", textAlign: "center", padding: 12 }}>
+              <div style={{ fontSize: 13, color: "var(--color-text-muted)", textAlign: "center", padding: 12 }}>
                 No se pudo construir la jerarquía del árbol.
               </div>
             )}
