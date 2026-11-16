@@ -41,9 +41,16 @@ from osquery_installer import (  # noqa: E402
 )
 
 COLLECTOR = PROJECT / "cloudmove_osquery_export.py"
-# Guardamos el inventario generado por el agente en backend/data/cloudmove-osquery-agent-inventory.json
-# para mantener el repositorio limpio y no sobrescribir inventarios de muestra.
-INVENTORY = PROJECT / "backend" / "data" / "cloudmove-osquery-agent-inventory.json"
+_DEFAULT_INV_DIR = (
+    Path(os.environ["CLOUDMOVE_DATA_DIR"]).expanduser()
+    if os.environ.get("CLOUDMOVE_DATA_DIR")
+    else PROJECT / "backend" / "data"
+)
+INVENTORY = (
+    Path(os.environ["CLOUDMOVE_AGENT_INVENTORY"]).expanduser()
+    if os.environ.get("CLOUDMOVE_AGENT_INVENTORY")
+    else _DEFAULT_INV_DIR / "cloudmove-osquery-agent-inventory.json"
+)
 
 app = FastAPI(
     title="CloudMove Local Discovery Agent",

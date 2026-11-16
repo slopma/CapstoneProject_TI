@@ -52,7 +52,7 @@ def migrate_cmir_schema(payload: Dict[str, Any], target_version: str = "2.1") ->
         meta["schema_version"] = target_version
 
     arch["name"] = payload.get("name") or arch.get("name") or "default-architecture"
-    arch["provider"] = payload.get("provider") or arch.get("provider") or "multi-cloud"
+    arch["provider"] = payload.get("provider") or arch.get("provider") or "aws"
     arch["version"] = target_version
     arch["metadata"] = meta
 

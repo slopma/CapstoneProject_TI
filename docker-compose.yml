@@ -6,11 +6,12 @@ services:
     container_name: cloudmove-backend
     restart: always
     environment:
-      - CORS_ORIGINS=*
-      - LOG_LEVEL=INFO
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - INVENTORY_PATH=/app/inventory/onprem-example.json
       - AWS_OUTPUT_PATH=/app/generated/aws/main.tf
-      - CLOUDMOVE_API_URL=https://digitalcafeluna.store
+      - CLOUDMOVE_API_URL=${CLOUDMOVE_API_URL:-}
+      - CLOUDMOVE_ALLOW_SERVER_AWS_FALLBACK=${CLOUDMOVE_ALLOW_SERVER_AWS_FALLBACK:-false}
     volumes:
       - ./backend/data:/app/data
       - ./generated:/app/generated
@@ -18,7 +19,7 @@ services:
       - ./cloudmove_agent:/app/cloudmove_agent:ro
       - ./cloudmove_osquery_export.py:/app/cloudmove_osquery_export.py:ro
     ports:
-      - "8000:8000"
+      - "${BACKEND_BIND_HOST:-127.0.0.1}:8000:8000"
 
   frontend:
     build:

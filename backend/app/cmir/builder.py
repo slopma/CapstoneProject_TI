@@ -226,7 +226,7 @@ def build_hierarchical_cmir(
 
     return CMIR(
         name=architecture_meta.get("name", "cloudmove-architecture"),
-        provider=architecture_meta.get("provider", "multi-cloud"),
+        provider=architecture_meta.get("provider", "aws"),
         version=architecture_meta.get("version", "2.1"),
         resources=list(node_map.values()),
         relationships=relationships,

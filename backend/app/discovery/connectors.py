@@ -27,10 +27,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.config import PROJECT_ROOT
+from app.core.text_utils import utc_now_iso
 
 
 def _utc_now() -> str:
-    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    return utc_now_iso(timespec="seconds")
 
 
 class ConnectorError(Exception):
@@ -168,41 +169,27 @@ def validate_endpoint_against_ssrf(url: str, allow_private_datacenter: bool = Tr
     """
     Valida una URL de conector frente a ataques SSRF:
     - Exige esquema `https` o `http`.
-    - Bloquea siempre el endpoint de metadata cloud (`169.254.169.254`, `fd00:ec2::254`) y loopback no autorizado.
+    - Bloquea siempre el endpoint de metadata cloud (`169.254.169.254`, `fd00:ec2::254`),
+      loopback y link-local; resuelve DNS para impedir DNS rebinding.
     """
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme not in ("https", "http"):
-        raise SecurityPolicyViolationError(
-            "INVALID_URL_SCHEME",
-            f"Esquema de URL '{parsed.scheme}' no permitido. Use https (o http en laboratorio autorizado).",
-        )
-    host = (parsed.hostname or "").strip().lower()
-    if not host:
-        raise SecurityPolicyViolationError("INVALID_URL_HOST", "La URL del conector no especifica un host válido.")
-
-    if host in ("169.254.169.254", "metadata.google.internal", "100.100.100.200"):
-        raise SecurityPolicyViolationError(
-            "SSRF_METADATA_BLOCKED",
-            f"Destino '{host}' bloqueado por política anti-SSRF (servicio de metadata cloud).",
-        )
+    from app.core.security import SSRFBlockedError, validate_public_url
 
     try:
-        ip_obj = ipaddress.ip_address(host)
-        if ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_unspecified:
-            raise SecurityPolicyViolationError(
-                "SSRF_LINK_LOCAL_BLOCKED",
-                f"Dirección IP '{host}' bloqueada por política anti-SSRF.",
-            )
-        if not allow_private_datacenter and ip_obj.is_private:
-            raise SecurityPolicyViolationError(
-                "PRIVATE_IP_NOT_AUTHORIZED",
-                f"Dirección privada '{host}' no autorizada para este conector.",
-            )
-    except ValueError:
-        # Es un nombre DNS; comprobar que no apunte a localhost si no está permitido
-        pass
-
-    return parsed
+        return validate_public_url(url, allow_private=allow_private_datacenter)
+    except SSRFBlockedError as exc:
+        msg = str(exc)
+        code = "SSRF_POLICY_BLOCKED"
+        if "Esquema" in msg:
+            code = "INVALID_URL_SCHEME"
+        elif "hostname válido" in msg or "inválido" in msg:
+            code = "INVALID_URL_HOST"
+        elif "metadata" in msg.lower():
+            code = "SSRF_METADATA_BLOCKED"
+        elif "link-local" in msg.lower():
+            code = "SSRF_LINK_LOCAL_BLOCKED"
+        elif "privado" in msg.lower():
+            code = "PRIVATE_IP_NOT_AUTHORIZED"
+        raise SecurityPolicyViolationError(code, msg) from exc
 
 
 class ArchitectureFileScanner:

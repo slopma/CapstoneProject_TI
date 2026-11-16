@@ -608,6 +608,33 @@ def test_multi_os_installer_catalog_and_local_agent():
     assert "macos" in mac_arm["name"] and mac_arm["format"] == "tar.gz"
 
     # Test decoupled local agent FastAPI endpoints (/health, /catalog, /discover, /inventory)
+    from cloudmove_agent.osquery_installer import _resolve_osquery_dirs, find_existing_osquery
+    import stat
+
+    if not find_existing_osquery():
+        # In offline/sandboxed CI environments without preinstalled osqueryi, install a clean mock osqueryi binary
+        _, bin_dir, bname = _resolve_osquery_dirs()
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        mock_osquery = bin_dir / bname
+        mock_osquery.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            "args = ' '.join(sys.argv[1:])\n"
+            "if '--version' in args:\n"
+            "    print('osqueryi version 5.23.1')\n"
+            "    sys.exit(0)\n"
+            "if 'osquery_info' in args:\n"
+            "    print(json.dumps([{'version': '5.23.1', 'build_platform': 'linux', 'build_distro': 'ubuntu'}]))\n"
+            "elif 'system_info' in args:\n"
+            "    print(json.dumps([{'hostname': 'test-agent-node', 'computer_name': 'test-agent-node', 'cpu_logical_cores': '4', 'cpu_physical_cores': '2', 'physical_memory': '8589934592', 'uuid': '00000000-0000-0000-0000-000000000001'}]))\n"
+            "elif 'os_version' in args:\n"
+            "    print(json.dumps([{'name': 'Ubuntu', 'version': '22.04', 'platform': 'ubuntu', 'arch': 'x86_64'}]))\n"
+            "else:\n"
+            "    print('[]')\n",
+            encoding="utf-8",
+        )
+        mock_osquery.chmod(mock_osquery.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
     agent_client = TestClient(agent_app)
     health_res = agent_client.get("/health")
     assert health_res.status_code == 200

@@ -174,8 +174,13 @@ def get_discovery_collectors():
 @router.get("/agent-live")
 def get_discovery_agent_live(request: Request, agent_id: Optional[str] = Query(None)):
     """Return the automatic live discovery inventory from the enrolled CloudMove agent."""
-    from app.api.routers.agents import get_live_agent_discovery
-    return get_live_agent_discovery(request=request, agent_id=agent_id)
+    from app.core.agents_catalog import build_live_agent_discovery_payload, extract_server_url
+
+    return build_live_agent_discovery_payload(
+        server_url=extract_server_url(request),
+        agent_id=agent_id,
+        db_factory=get_transactional_db,
+    )
 
 
 @router.get("/sessions")
@@ -719,11 +724,15 @@ def discover_live_aws_infrastructure(request: Optional[AWSLiveDiscoveryRequest] 
     Never converts an API/auth error into an empty inventory.
     """
     req = request or AWSLiveDiscoveryRequest()
-    primary_region = (req.regions or ["us-east-1"])[0]
+    target_regions = [str(r).strip() for r in (req.regions or ["us-east-1"]) if str(r).strip()] or ["us-east-1"]
     connector = AWSLiveDiscoveryConnector(
-        region=primary_region,
+        region=target_regions[0],
+        regions=target_regions,
         profile_name=req.profile_name,
         role_arn=req.role_arn,
+        aws_access_key_id=req.aws_access_key_id,
+        aws_secret_access_key=req.aws_secret_access_key,
+        aws_session_token=req.aws_session_token,
     )
     try:
         return connector.discover_live_account()

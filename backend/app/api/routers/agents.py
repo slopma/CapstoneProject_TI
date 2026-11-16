@@ -24,6 +24,12 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
+from app.core.agents_catalog import (
+    LATEST_AGENT_VERSION,
+    build_live_agent_discovery_payload,
+    extract_server_url as _get_server_url,
+    is_version_gte as _is_version_gte,
+)
 from app.persistence.transactional_db import get_transactional_db
 from app.cmir.normalizer import normalize_inventory
 from app.cmir.builder import build_cmir_hierarchy
@@ -34,31 +40,6 @@ from app.dependencies.resolver import resolve_dependencies
 router = APIRouter(prefix="/api/v1/agents", tags=["CloudMove Agent Management"])
 
 DEFAULT_OPERATOR = os.getenv("CLOUDMOVE_OPERATOR_USER", "operator")
-LATEST_AGENT_VERSION = "2.2.0"
-
-
-def _is_version_gte(ver: Optional[str], target: str = LATEST_AGENT_VERSION) -> bool:
-    try:
-        cur_p = [int(x) for x in str(ver or "0").split(".")[:3]]
-        tgt_p = [int(x) for x in target.split(".")[:3]]
-        while len(cur_p) < 3:
-            cur_p.append(0)
-        while len(tgt_p) < 3:
-            tgt_p.append(0)
-        return tuple(cur_p) >= tuple(tgt_p)
-    except Exception:
-        return False
-
-
-def _get_server_url(request: Request) -> str:
-    env_url = os.getenv("CLOUDMOVE_API_URL")
-    if env_url:
-        return env_url.rstrip("/")
-    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
-    if "digitalcafeluna.store" in (host or ""):
-        proto = "https"
-    return f"{proto}://{host}".rstrip("/")
 
 
 # ==============================================================================
@@ -287,8 +268,19 @@ def download_agent_bundle():
 @router.get("/install.sh")
 def download_linux_installer(request: Request, token: Optional[str] = Query(None)):
     """Deliver a self-contained, reproducible bash installer script for systemd-managed Linux."""
+    import re
+    import shlex
+
     host_url = _get_server_url(request)
+    if not re.match(r"^https?://[A-Za-z0-9._:/\-]+$", host_url):
+        raise HTTPException(status_code=400, detail="URL de servidor inválida.")
+
     default_token = (token or "").strip()
+    if default_token and not re.fullmatch(r"[A-Za-z0-9_.\-]{6,128}", default_token):
+        raise HTTPException(status_code=400, detail="Formato de token de inscripción inválido.")
+
+    quoted_host = shlex.quote(host_url)
+    quoted_token = shlex.quote(default_token)
     script = f"""#!/usr/bin/env bash
 # ==============================================================================
 # CloudMove Agent — Script de Instalación Oficial para Linux (systemd)
@@ -296,8 +288,8 @@ def download_linux_installer(request: Request, token: Optional[str] = Query(None
 # ==============================================================================
 set -euo pipefail
 
-SERVER_URL="{host_url}"
-ENROLLMENT_TOKEN="{default_token}"
+SERVER_URL={quoted_host}
+ENROLLMENT_TOKEN={quoted_token}
 INSTALL_DIR="/opt/cloudmove-agent"
 SERVICE_NAME="cloudmove-agent"
 UPGRADE_ONLY="false"
@@ -374,7 +366,12 @@ elif [[ -f /var/lib/dbus/machine-id ]]; then
   MACHINE_ID=$(cat /var/lib/dbus/machine-id | tr -d ' \\n')
 fi
 
-ENROLL_PAYLOAD=$(python3 -c "
+ENROLL_PAYLOAD=$(
+CM_HOST_NAME="$HOST_NAME" \
+CM_ENROLLMENT_TOKEN="$ENROLLMENT_TOKEN" \
+CM_MACHINE_ID="$MACHINE_ID" \
+CM_AGENT_VERSION="{LATEST_AGENT_VERSION}" \
+python3 - <<'PY_ENROLL'
 import json, socket, platform, os
 def get_primary_ip():
     try:
@@ -385,20 +382,21 @@ def get_primary_ip():
         return ip
     except Exception:
         return '10.0.0.1'
-real_host = '$HOST_NAME'.strip() or platform.node() or socket.gethostname()
+real_host = os.environ.get('CM_HOST_NAME', '').strip() or platform.node() or socket.gethostname()
 data = {{
-    'enrollment_token': '$ENROLLMENT_TOKEN',
+    'enrollment_token': os.environ.get('CM_ENROLLMENT_TOKEN', ''),
     'hostname': real_host,
     'ip_address': get_primary_ip(),
     'os_family': 'linux',
     'os_name': platform.system(),
     'os_version': platform.version(),
     'architecture': platform.machine(),
-    'machine_id': '$MACHINE_ID' or None,
-    'version': '{LATEST_AGENT_VERSION}'
+    'machine_id': os.environ.get('CM_MACHINE_ID', '') or None,
+    'version': os.environ.get('CM_AGENT_VERSION', '2.2.0')
 }}
 print(json.dumps(data))
-")
+PY_ENROLL
+)
 
 ENROLL_RESP=$(curl -sSL -X POST "$SERVER_URL/api/v1/agents/enroll" \\
   -H "Content-Type: application/json" \\
@@ -578,99 +576,6 @@ def record_heartbeat(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def build_live_agent_discovery_payload(
-    server_url: Optional[str] = None,
-    agent_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Build live discovery payload from enrolled agent telemetry and assets."""
-    base_url = (server_url or os.getenv("CLOUDMOVE_API_URL", "https://digitalcafeluna.store")).rstrip("/")
-    db = get_transactional_db()
-    all_agents = db.list_agents(include_revoked=False)
-    remote_agents = [
-        a for a in all_agents
-        if (a.get("hostname") or "").lower() not in ("cloudmove-server", "localhost")
-        and a.get("ip_address") != "100.50.88.231"
-    ]
-    if not remote_agents:
-        return {
-            "agent_connected": False,
-            "agents": [],
-            "active_agent": None,
-            "inventory": None,
-            "aws_storage_quota": {
-                "free_tier_gib": 30.0,
-                "max_single_volume_gib": 100.0,
-                "academy_account_max_gib": 150.0,
-                "base_os_overhead_gib": 2.5,
-            },
-        }
-
-    # Pick requested agent or first ONLINE agent (or most recently enrolled)
-    online_list = [a for a in remote_agents if a.get("status") == "ONLINE"]
-    chosen_agent = None
-    if agent_id:
-        chosen_agent = next((a for a in remote_agents if a.get("agent_id") == agent_id), None)
-    if not chosen_agent:
-        chosen_agent = online_list[0] if online_list else remote_agents[0]
-
-    target_id = chosen_agent["agent_id"]
-    assets = [
-        a for a in db.list_assets()
-        if a.get("payload", {}).get("agent_id") == target_id or a.get("id") == f"asset-{target_id}"
-    ]
-    payload = assets[0].get("payload", {}) if assets else {}
-
-    filesystem_tree = payload.get("filesystem_tree") or []
-    total_user_files_bytes = sum(node.get("size_bytes", 0) for node in filesystem_tree)
-    total_user_files_gib = round(total_user_files_bytes / (1024 ** 3), 3)
-
-    chosen_version = chosen_agent.get("version") or "2.1.0"
-    upgrade_cmd = f"curl -sSL {base_url}/api/v1/agents/install.sh | sudo bash -s -- --upgrade"
-
-    return {
-        "agent_connected": True,
-        "agents": remote_agents,
-        "active_agent": {
-            **chosen_agent,
-            "supports_file_staging": _is_version_gte(chosen_version, LATEST_AGENT_VERSION),
-            "latest_agent_version": LATEST_AGENT_VERSION,
-            "upgrade_command_linux": upgrade_cmd,
-        },
-        "inventory": {
-            "agent_id": target_id,
-            "hostname": payload.get("hostname") or chosen_agent.get("hostname"),
-            "ip_address": payload.get("ip_address") or chosen_agent.get("ip_address"),
-            "os_name": payload.get("os_name") or chosen_agent.get("os_name"),
-            "os_version": payload.get("os_version") or chosen_agent.get("os_version"),
-            "os_release": payload.get("os_release") or "",
-            "architecture": payload.get("architecture") or chosen_agent.get("architecture"),
-            "discovered_at": payload.get("discovered_at") or chosen_agent.get("last_heartbeat_at"),
-            "cpu": payload.get("cpu") or {},
-            "memory": payload.get("memory") or {},
-            "disks": payload.get("disks") or [],
-            "network_interfaces": payload.get("network_interfaces") or [],
-            "listening_ports": payload.get("listening_ports") or [],
-            "processes": payload.get("processes") or [],
-            "services": payload.get("services") or [],
-            "runtimes": payload.get("runtimes") or [],
-            "databases": payload.get("databases") or [],
-            "filesystem_tree": filesystem_tree,
-            "filesystem_summary": {
-                "roots_count": len(filesystem_tree),
-                "total_size_bytes": total_user_files_bytes,
-                "total_size_mb": round(total_user_files_bytes / (1024 * 1024), 2),
-                "total_size_gib": total_user_files_gib,
-            },
-        },
-        "aws_storage_quota": {
-            "free_tier_gib": 30.0,
-            "max_single_volume_gib": 100.0,
-            "academy_account_max_gib": 150.0,
-            "base_os_overhead_gib": 2.5,
-        },
-    }
-
-
 @router.get("/live-discovery")
 def get_live_agent_discovery(
     request: Request,
@@ -684,6 +589,7 @@ def get_live_agent_discovery(
     return build_live_agent_discovery_payload(
         server_url=_get_server_url(request),
         agent_id=agent_id,
+        db_factory=get_transactional_db,
     )
 
 

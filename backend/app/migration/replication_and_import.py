@@ -25,11 +25,11 @@ import urllib.request
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError, PartialCredentialsError
 
+from app.core.text_utils import utc_now_iso
 from app.discovery.connectors import ConnectorAuthError, ConnectorError, ConnectorTimeoutError
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+_utc_now = utc_now_iso
 
 
 # ==============================================================================

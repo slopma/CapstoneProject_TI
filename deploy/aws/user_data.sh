@@ -44,14 +44,23 @@ curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | tee /
 apt-get update -y
 apt-get install -y caddy
 
-cat << 'CADDY' > /etc/caddy/Caddyfile
-digitalcafeluna.store {
+DOMAIN_NAME="${domain_name}"
+if [ -n "$DOMAIN_NAME" ]; then
+cat << CADDY > /etc/caddy/Caddyfile
+$DOMAIN_NAME {
     reverse_proxy 127.0.0.1:3000
 }
 :80 {
     reverse_proxy 127.0.0.1:3000
 }
 CADDY
+else
+cat << 'CADDY' > /etc/caddy/Caddyfile
+:80 {
+    reverse_proxy 127.0.0.1:3000
+}
+CADDY
+fi
 
 systemctl enable caddy
 systemctl restart caddy

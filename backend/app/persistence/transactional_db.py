@@ -37,14 +37,12 @@ import uuid
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from app.config import DATA_DIR, PROJECT_ROOT
+from app.core.text_utils import utc_now_iso as _utc_now
+from app.persistence.schema import SCHEMA_MIGRATIONS, apply_schema_migrations
 
 
 DEFAULT_SQLITE_PATH = DATA_DIR / "cloudmove_transactional.db"
 DEFAULT_OPERATOR = os.getenv("CLOUDMOVE_OPERATOR_USER", "operator")
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 class ConcurrencyConflictError(RuntimeError):
@@ -59,207 +57,6 @@ class IncompatibleLegacyDataError(ValueError):
     """Raised or recorded when legacy JSON data fails structural schema validation."""
 
 
-SCHEMA_MIGRATIONS: List[Tuple[str, str, str]] = [
-    (
-        "1.0.0",
-        "Initial transactional tables for assets, migration_plans, and audit_events",
-        """
-        CREATE TABLE IF NOT EXISTS schema_migrations (
-            version TEXT PRIMARY KEY,
-            description TEXT NOT NULL,
-            checksum TEXT NOT NULL,
-            applied_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS assets (
-            id TEXT PRIMARY KEY,
-            canonical_key TEXT NOT NULL UNIQUE,
-            hostname TEXT NOT NULL,
-            asset_type TEXT NOT NULL,
-            environment_id TEXT NOT NULL,
-            site_id TEXT NOT NULL,
-            lifecycle_state TEXT NOT NULL,
-            version INTEGER NOT NULL DEFAULT 1,
-            updated_at TEXT NOT NULL,
-            payload_json TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_assets_env_site ON assets(environment_id, site_id);
-        CREATE INDEX IF NOT EXISTS idx_assets_state ON assets(lifecycle_state);
-
-        CREATE TABLE IF NOT EXISTS migration_plans (
-            migration_id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            use_case TEXT NOT NULL,
-            target_provider TEXT NOT NULL,
-            state TEXT NOT NULL,
-            execution_mode TEXT NOT NULL,
-            completed_in_real_cloud INTEGER NOT NULL DEFAULT 0,
-            version INTEGER NOT NULL DEFAULT 1,
-            locked_by TEXT,
-            locked_at TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            payload_json TEXT NOT NULL,
-            CHECK (target_provider IN ('aws', 'gcp')),
-            CHECK (use_case IN ('app_source', 'vm_image'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_migration_plans_uc_prov ON migration_plans(use_case, target_provider);
-        CREATE INDEX IF NOT EXISTS idx_migration_plans_state ON migration_plans(state);
-
-        CREATE TABLE IF NOT EXISTS audit_events (
-            event_id TEXT PRIMARY KEY,
-            actor_id TEXT NOT NULL,
-            action TEXT NOT NULL,
-            target_type TEXT NOT NULL,
-            target_id TEXT NOT NULL,
-            timestamp TEXT NOT NULL,
-            metadata_json TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_audit_events_target ON audit_events(target_type, target_id);
-        """,
-    ),
-    (
-        "2.0.0",
-        "Add migration_stages, stage_executions with idempotency keys, and migration_artifacts",
-        """
-        CREATE TABLE IF NOT EXISTS migration_stages (
-            id TEXT PRIMARY KEY,
-            migration_id TEXT NOT NULL,
-            stage_id TEXT NOT NULL,
-            stage_order INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            status TEXT NOT NULL,
-            attempts INTEGER NOT NULL DEFAULT 0,
-            max_retries INTEGER NOT NULL DEFAULT 3,
-            recovery_point TEXT NOT NULL,
-            locked_by TEXT,
-            locked_at TEXT,
-            started_at TEXT,
-            completed_at TEXT,
-            error_text TEXT,
-            payload_json TEXT NOT NULL,
-            UNIQUE(migration_id, stage_id),
-            FOREIGN KEY(migration_id) REFERENCES migration_plans(migration_id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_migration_stages_mig ON migration_stages(migration_id, stage_order);
-
-        CREATE TABLE IF NOT EXISTS stage_executions (
-            execution_id TEXT PRIMARY KEY,
-            migration_id TEXT NOT NULL,
-            stage_id TEXT NOT NULL,
-            idempotency_key TEXT NOT NULL,
-            operator_id TEXT NOT NULL,
-            execution_mode TEXT NOT NULL,
-            status TEXT NOT NULL,
-            started_at TEXT NOT NULL,
-            completed_at TEXT,
-            result_json TEXT NOT NULL,
-            UNIQUE(migration_id, stage_id, idempotency_key),
-            FOREIGN KEY(migration_id) REFERENCES migration_plans(migration_id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_stage_exec_lookup ON stage_executions(migration_id, stage_id);
-
-        CREATE TABLE IF NOT EXISTS migration_artifacts (
-            artifact_id TEXT PRIMARY KEY,
-            migration_id TEXT NOT NULL,
-            filename TEXT NOT NULL,
-            artifact_type TEXT NOT NULL,
-            sha256 TEXT NOT NULL,
-            content_text TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            UNIQUE(migration_id, filename),
-            FOREIGN KEY(migration_id) REFERENCES migration_plans(migration_id) ON DELETE CASCADE
-        );
-        """,
-    ),
-    (
-        "2.1.0",
-        "Add cloud_discovery_snapshots table for full restart recovery",
-        """
-        CREATE TABLE IF NOT EXISTS cloud_discovery_snapshots (
-            snapshot_id TEXT PRIMARY KEY,
-            provider TEXT NOT NULL,
-            account_or_project TEXT NOT NULL,
-            region TEXT NOT NULL,
-            execution_mode TEXT NOT NULL,
-            discovered_at TEXT NOT NULL,
-            resources_count INTEGER NOT NULL,
-            cmir_json TEXT NOT NULL,
-            reconciliation_json TEXT NOT NULL,
-            errors_json TEXT NOT NULL,
-            CHECK (provider IN ('aws', 'gcp'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_cloud_snapshots_prov ON cloud_discovery_snapshots(provider, account_or_project, discovered_at);
-        """,
-    ),
-    (
-        "2.2.0",
-        "Add agents, agent_enrollment_tokens, agent_tasks and organizations tables for production agent management",
-        """
-        CREATE TABLE IF NOT EXISTS organizations (
-            org_id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            payload_json TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS agent_enrollment_tokens (
-            token_id TEXT PRIMARY KEY,
-            token_hash TEXT NOT NULL UNIQUE,
-            token_prefix TEXT NOT NULL,
-            org_id TEXT NOT NULL DEFAULT 'default',
-            expires_at TEXT NOT NULL,
-            max_uses INTEGER NOT NULL DEFAULT 1,
-            uses_count INTEGER NOT NULL DEFAULT 0,
-            revoked INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            created_by TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_agent_tokens_hash ON agent_enrollment_tokens(token_hash);
-
-        CREATE TABLE IF NOT EXISTS agents (
-            agent_id TEXT PRIMARY KEY,
-            hostname TEXT NOT NULL,
-            ip_address TEXT NOT NULL,
-            os_family TEXT NOT NULL,
-            os_name TEXT NOT NULL,
-            os_version TEXT NOT NULL,
-            architecture TEXT NOT NULL,
-            machine_id TEXT NOT NULL,
-            status TEXT NOT NULL,
-            version TEXT NOT NULL,
-            auth_token_hash TEXT NOT NULL,
-            capabilities_json TEXT NOT NULL,
-            enrolled_at TEXT NOT NULL,
-            last_heartbeat_at TEXT NOT NULL,
-            revoked_at TEXT,
-            revocation_reason TEXT,
-            health_metrics_json TEXT NOT NULL,
-            metadata_json TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
-        CREATE INDEX IF NOT EXISTS idx_agents_machine_id ON agents(machine_id);
-
-        CREATE TABLE IF NOT EXISTS agent_tasks (
-            task_id TEXT PRIMARY KEY,
-            agent_id TEXT NOT NULL,
-            action TEXT NOT NULL,
-            parameters_json TEXT NOT NULL,
-            status TEXT NOT NULL,
-            result_json TEXT,
-            error_message TEXT,
-            created_at TEXT NOT NULL,
-            dispatched_at TEXT,
-            completed_at TEXT,
-            timeout_seconds INTEGER NOT NULL DEFAULT 300,
-            FOREIGN KEY(agent_id) REFERENCES agents(agent_id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_agent_tasks_agent_status ON agent_tasks(agent_id, status);
-        """,
-    ),
-]
-
-
 class TransactionalDatabase:
     """
     ACID transactional persistence engine with versioned schema migrations,
@@ -271,13 +68,23 @@ class TransactionalDatabase:
         db_path: Optional[Path] = None,
         database_url: Optional[str] = None,
     ) -> None:
-        self.database_url = database_url or os.getenv("CLOUDMOVE_DATABASE_URL", "")
+        self.database_url = database_url if database_url is not None else os.getenv("CLOUDMOVE_DATABASE_URL", "")
+        if self.database_url.lower().startswith(("postgresql://", "postgres://")):
+            raise NotImplementedError(
+                "El motor PostgreSQL externo aún no está implementado en TransactionalDatabase; "
+                "use SQLite WAL mediante `sqlite:///...` o `CLOUDMOVE_DATA_DIR`."
+            )
         if db_path is not None:
             self.db_path = Path(db_path)
         elif self.database_url.startswith("sqlite:///"):
             self.db_path = Path(self.database_url.replace("sqlite:///", "", 1))
         else:
-            self.db_path = DEFAULT_SQLITE_PATH
+            env_db_path = os.getenv("CLOUDMOVE_DB_PATH")
+            if env_db_path:
+                self.db_path = Path(env_db_path).expanduser()
+            else:
+                env_data_dir = os.getenv("CLOUDMOVE_DATA_DIR")
+                self.db_path = (Path(env_data_dir).expanduser() / "cloudmove_transactional.db") if env_data_dir else DEFAULT_SQLITE_PATH
 
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
@@ -319,32 +126,7 @@ class TransactionalDatabase:
 
     def _apply_migrations(self) -> None:
         with self.transaction(write=True) as conn:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    version TEXT PRIMARY KEY,
-                    description TEXT NOT NULL,
-                    checksum TEXT NOT NULL,
-                    applied_at TEXT NOT NULL
-                );
-                """
-            )
-            existing = {
-                row["version"]: row["checksum"]
-                for row in conn.execute("SELECT version, checksum FROM schema_migrations").fetchall()
-            }
-            now = _utc_now()
-            for version, description, sql_script in SCHEMA_MIGRATIONS:
-                checksum = hashlib.sha256(sql_script.strip().encode("utf-8")).hexdigest()
-                if version in existing:
-                    continue
-                conn.executescript(sql_script)
-                # Ensure we are in a transaction if executescript committed implicitly
-                conn.execute("BEGIN IMMEDIATE;")
-                conn.execute(
-                    "INSERT OR REPLACE INTO schema_migrations (version, description, checksum, applied_at) VALUES (?, ?, ?, ?)",
-                    (version, description, checksum, now),
-                )
+            apply_schema_migrations(conn)
 
     def get_schema_status(self) -> Dict[str, Any]:
         with self.transaction(write=False) as conn:
@@ -357,8 +139,8 @@ class TransactionalDatabase:
             audit_count = conn.execute("SELECT COUNT(*) AS c FROM audit_events").fetchone()["c"]
 
         return {
-            "engine": "postgresql_compatible_sqlite_wal" if not self.database_url.startswith("postgresql") else "postgresql",
-            "journal_mode": "WAL" if not self.database_url.startswith("postgresql") else "MVCC",
+            "engine": "sqlite_wal",
+            "journal_mode": "WAL",
             "database_path": str(self.db_path),
             "current_version": rows[-1]["version"] if rows else "0.0.0",
             "current_schema_version": rows[-1]["version"] if rows else "0.0.0",
@@ -1188,14 +970,40 @@ class TransactionalDatabase:
         metadata = agent_data.get("metadata") or {}
 
         with self.transaction(write=True) as conn:
+            existing = conn.execute(
+                "SELECT status FROM agents WHERE agent_id = ?",
+                (agent_id,),
+            ).fetchone()
+            if existing and existing["status"] == "REVOKED":
+                raise PermissionError(
+                    f"El agente '{agent_id}' fue revocado permanentemente y no puede re-inscribirse."
+                )
+
             conn.execute(
                 """
-                INSERT OR REPLACE INTO agents (
+                INSERT INTO agents (
                     agent_id, hostname, ip_address, os_family, os_name, os_version,
                     architecture, machine_id, status, version, auth_token_hash,
                     capabilities_json, enrolled_at, last_heartbeat_at, revoked_at,
                     revocation_reason, health_metrics_json, metadata_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ONLINE', ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
+                ON CONFLICT(agent_id) DO UPDATE SET
+                    hostname = excluded.hostname,
+                    ip_address = excluded.ip_address,
+                    os_family = excluded.os_family,
+                    os_name = excluded.os_name,
+                    os_version = excluded.os_version,
+                    architecture = excluded.architecture,
+                    machine_id = excluded.machine_id,
+                    status = 'ONLINE',
+                    version = excluded.version,
+                    auth_token_hash = excluded.auth_token_hash,
+                    capabilities_json = excluded.capabilities_json,
+                    last_heartbeat_at = excluded.last_heartbeat_at,
+                    revoked_at = NULL,
+                    revocation_reason = NULL,
+                    health_metrics_json = excluded.health_metrics_json,
+                    metadata_json = excluded.metadata_json
                 """,
                 (
                     agent_id,
@@ -1259,18 +1067,18 @@ class TransactionalDatabase:
         Record outbound heartbeat from an enrolled host, updating CPU/RAM/load metrics
         and protecting against replay attacks with timestamp verification.
         """
-        now = _utc_now()
+        now_dt = datetime.now(timezone.utc)
+        now = now_dt.isoformat()
         if timestamp:
             try:
-                ts_dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-                curr_dt = datetime.now(timezone.utc)
-                diff = abs((curr_dt - ts_dt).total_seconds())
-                if diff > 300:
-                    raise ValueError(f"Heartbeat timestamp skew out of tolerance ({diff:.1f}s > 300s). Replay rejected.")
-            except Exception as e:
-                if isinstance(e, ValueError) and "skew" in str(e):
-                    raise
-                pass
+                ts_dt = datetime.fromisoformat(str(timestamp).strip().replace("Z", "+00:00"))
+                if ts_dt.tzinfo is None:
+                    ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+            except Exception as exc:
+                raise ValueError("Heartbeat timestamp inválido (se requiere formato ISO 8601).") from exc
+            diff = abs((now_dt - ts_dt).total_seconds())
+            if diff > 300:
+                raise ValueError(f"Heartbeat timestamp skew out of tolerance ({diff:.1f}s > 300s). Replay rejected.")
 
         with self.transaction(write=True) as conn:
             row = conn.execute("SELECT * FROM agents WHERE agent_id = ?", (agent_id,)).fetchone()
@@ -1278,6 +1086,20 @@ class TransactionalDatabase:
                 raise KeyError(f"Agente '{agent_id}' no encontrado.")
             if row["status"] == "REVOKED":
                 raise PermissionError(f"El agente '{agent_id}' está revocado.")
+
+            if nonce is not None:
+                clean_nonce = str(nonce).strip()
+                if not clean_nonce or len(clean_nonce) > 128:
+                    raise ValueError("Heartbeat nonce inválido.")
+                cutoff = datetime.fromtimestamp(now_dt.timestamp() - 600, timezone.utc).isoformat()
+                conn.execute("DELETE FROM agent_nonces WHERE seen_at < ?", (cutoff,))
+                try:
+                    conn.execute(
+                        "INSERT INTO agent_nonces (agent_id, nonce, seen_at) VALUES (?, ?, ?)",
+                        (agent_id, clean_nonce, now),
+                    )
+                except sqlite3.IntegrityError as exc:
+                    raise ValueError("Heartbeat nonce reutilizado; replay rechazado.") from exc
 
             agent_ver = health_metrics.get("agent_version")
             if agent_ver:

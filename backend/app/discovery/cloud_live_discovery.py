@@ -27,12 +27,12 @@ from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError, 
 
 from app.cmir.builder import build_cmir_hierarchy
 from app.cmir.models import CMIR, deterministic_node_id
+from app.core.text_utils import utc_now_iso
 from app.discovery.connectors import ConnectorAuthError, ConnectorError, ConnectorTimeoutError
 from app.persistence.transactional_db import TransactionalDatabase, get_transactional_db
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+_utc_now = utc_now_iso
 
 
 def _fingerprint_resource(res: Dict[str, Any]) -> str:
@@ -147,16 +147,25 @@ class AWSLiveDiscoveryConnector:
     def __init__(
         self,
         region: str = "us-east-1",
+        regions: Optional[List[str]] = None,
         profile_name: Optional[str] = None,
         role_arn: Optional[str] = None,
+        aws_access_key_id: Optional[str] = None,
+        aws_secret_access_key: Optional[str] = None,
+        aws_session_token: Optional[str] = None,
         max_retries: int = 3,
         timeout_seconds: int = 10,
         boto3_session_factory: Optional[Callable[..., Any]] = None,
         db: Optional[TransactionalDatabase] = None,
     ) -> None:
-        self.region = region or os.getenv("AWS_DEFAULT_REGION") or "us-east-1"
+        clean_regions = [str(r).strip() for r in (regions or []) if str(r).strip()]
+        self.region = (region or (clean_regions[0] if clean_regions else "") or os.getenv("AWS_DEFAULT_REGION") or "us-east-1").strip()
+        self.regions = list(dict.fromkeys(clean_regions or [self.region]))
         self.profile_name = profile_name or os.getenv("AWS_PROFILE")
         self.role_arn = role_arn or os.getenv("AWS_ASSUME_ROLE_ARN")
+        self.aws_access_key_id = (aws_access_key_id or "").strip() or None
+        self.aws_secret_access_key = (aws_secret_access_key or "").strip() or None
+        self.aws_session_token = (aws_session_token or "").strip() or None
         self.max_retries = max_retries
         self.timeout_seconds = timeout_seconds
         self.boto3_session_factory = boto3_session_factory
@@ -166,7 +175,12 @@ class AWSLiveDiscoveryConnector:
         if self.boto3_session_factory is not None:
             return self.boto3_session_factory(region_name=self.region, profile_name=self.profile_name)
         kwargs: Dict[str, Any] = {"region_name": self.region}
-        if self.profile_name:
+        if self.aws_access_key_id and self.aws_secret_access_key:
+            kwargs["aws_access_key_id"] = self.aws_access_key_id
+            kwargs["aws_secret_access_key"] = self.aws_secret_access_key
+            if self.aws_session_token:
+                kwargs["aws_session_token"] = self.aws_session_token
+        elif self.profile_name:
             kwargs["profile_name"] = self.profile_name
         session = boto3.Session(**kwargs)
         if self.role_arn:
@@ -272,253 +286,255 @@ class AWSLiveDiscoveryConnector:
         account_id = str(identity.get("Account") or "unknown-account")
         caller_arn = str(identity.get("Arn") or "")
 
-        ec2 = session.client("ec2", region_name=self.region, config=boto_cfg)
-        rds = session.client("rds", region_name=self.region, config=boto_cfg)
         s3 = session.client("s3", region_name=self.region, config=boto_cfg)
         iam = session.client("iam", region_name=self.region, config=boto_cfg)
 
         nodes: List[Dict[str, Any]] = []
         relationships: List[Dict[str, Any]] = []
         read_errors: List[Dict[str, Any]] = []
-        vpc_id_map: Dict[str, str] = {}
-        subnet_id_map: Dict[str, str] = {}
 
-        # 2. Discover VPCs
-        try:
-            vpcs = self._paginate_all(ec2, "describe_vpcs", "Vpcs", "ec2")
-            for v in vpcs:
-                aws_vpc_id = v["VpcId"]
-                tags = {t["Key"]: t["Value"] for t in (v.get("Tags") or []) if "Key" in t and "Value" in t}
-                name = tags.get("Name") or aws_vpc_id
-                cid = f"aws:{account_id}:{self.region}:vpc:{aws_vpc_id}"
-                nid = deterministic_node_id("vpc", cid)
-                vpc_id_map[aws_vpc_id] = nid
-                nodes.append({
-                    "id": nid,
-                    "canonical_id": cid,
-                    "name": name,
-                    "type": "vpc",
-                    "category": "network",
-                    "provider": "aws",
-                    "location": self.region,
-                    "epistemic_state": "observed",
-                    "confidence": 1.0,
-                    "source_connector": "aws_boto3_live_discovery",
-                    "discovered_at": now,
-                    "evidence": [{
-                        "source": f"aws:ec2:DescribeVpcs ({account_id}/{self.region})",
-                        "observed_at": now,
-                        "epistemic_state": "observed",
-                        "confidence": 1.0,
-                        "detail": f"VPC {aws_vpc_id} CIDR={v.get('CidrBlock')}",
-                    }],
-                    "metadata": {
-                        "cloud_service": "ec2:vpc",
-                        "aws_vpc_id": aws_vpc_id,
-                        "cidr_block": v.get("CidrBlock"),
-                        "is_default": v.get("IsDefault", False),
-                        "tags": tags,
-                    },
-                })
-        except ConnectorError as exc:
-            read_errors.append({"service": "ec2:vpc", "code": exc.code, "message": exc.message, "timestamp": now})
+        for active_region in self.regions:
+            ec2 = session.client("ec2", region_name=active_region, config=boto_cfg)
+            rds = session.client("rds", region_name=active_region, config=boto_cfg)
+            vpc_id_map: Dict[str, str] = {}
+            subnet_id_map: Dict[str, str] = {}
 
-        # 3. Discover Subnets
-        try:
-            subnets = self._paginate_all(ec2, "describe_subnets", "Subnets", "ec2")
-            for s in subnets:
-                aws_sub_id = s["SubnetId"]
-                aws_vpc_id = s.get("VpcId", "")
-                tags = {t["Key"]: t["Value"] for t in (s.get("Tags") or []) if "Key" in t and "Value" in t}
-                name = tags.get("Name") or aws_sub_id
-                cid = f"aws:{account_id}:{self.region}:subnet:{aws_sub_id}"
-                nid = deterministic_node_id("subnet", cid)
-                subnet_id_map[aws_sub_id] = nid
-                parent_nid = vpc_id_map.get(aws_vpc_id)
-                nodes.append({
-                    "id": nid,
-                    "canonical_id": cid,
-                    "name": name,
-                    "type": "subnet",
-                    "category": "network",
-                    "parent_id": parent_nid,
-                    "provider": "aws",
-                    "location": s.get("AvailabilityZone", self.region),
-                    "epistemic_state": "observed",
-                    "confidence": 1.0,
-                    "source_connector": "aws_boto3_live_discovery",
-                    "discovered_at": now,
-                    "metadata": {
-                        "cloud_service": "ec2:subnet",
-                        "aws_subnet_id": aws_sub_id,
-                        "aws_vpc_id": aws_vpc_id,
-                        "cidr_block": s.get("CidrBlock"),
-                        "availability_zone": s.get("AvailabilityZone"),
-                    },
-                })
-        except ConnectorError as exc:
-            read_errors.append({"service": "ec2:subnet", "code": exc.code, "message": exc.message, "timestamp": now})
-
-        # 4. Discover Security Groups
-        sg_id_map: Dict[str, str] = {}
-        try:
-            sgs = self._paginate_all(ec2, "describe_security_groups", "SecurityGroups", "ec2")
-            for sg in sgs:
-                aws_sg_id = sg["GroupId"]
-                cid = f"aws:{account_id}:{self.region}:sg:{aws_sg_id}"
-                nid = deterministic_node_id("security_group", cid)
-                sg_id_map[aws_sg_id] = nid
-                nodes.append({
-                    "id": nid,
-                    "canonical_id": cid,
-                    "name": sg.get("GroupName") or aws_sg_id,
-                    "type": "security_group",
-                    "category": "security",
-                    "parent_id": vpc_id_map.get(sg.get("VpcId", "")),
-                    "provider": "aws",
-                    "location": self.region,
-                    "epistemic_state": "observed",
-                    "confidence": 1.0,
-                    "source_connector": "aws_boto3_live_discovery",
-                    "discovered_at": now,
-                    "metadata": {
-                        "cloud_service": "ec2:security_group",
-                        "aws_group_id": aws_sg_id,
-                        "ingress_rules_count": len(sg.get("IpPermissions") or []),
-                        "egress_rules_count": len(sg.get("IpPermissionsEgress") or []),
-                    },
-                })
-        except ConnectorError as exc:
-            read_errors.append({"service": "ec2:security_group", "code": exc.code, "message": exc.message, "timestamp": now})
-
-        # 5. Discover EC2 Instances
-        inst_id_map: Dict[str, str] = {}
-        try:
-            reservations = self._paginate_all(ec2, "describe_instances", "Reservations", "ec2")
-            for resv in reservations:
-                for inst in resv.get("Instances") or []:
-                    aws_inst_id = inst["InstanceId"]
-                    tags = {t["Key"]: t["Value"] for t in (inst.get("Tags") or []) if "Key" in t and "Value" in t}
-                    name = tags.get("Name") or aws_inst_id
-                    cid = f"aws:{account_id}:{self.region}:instance:{aws_inst_id}"
-                    nid = deterministic_node_id("virtual_machine", cid)
-                    inst_id_map[aws_inst_id] = nid
-                    parent_nid = subnet_id_map.get(inst.get("SubnetId", "")) or vpc_id_map.get(inst.get("VpcId", ""))
+            # 2. Discover VPCs
+            try:
+                vpcs = self._paginate_all(ec2, "describe_vpcs", "Vpcs", "ec2")
+                for v in vpcs:
+                    aws_vpc_id = v["VpcId"]
+                    tags = {t["Key"]: t["Value"] for t in (v.get("Tags") or []) if "Key" in t and "Value" in t}
+                    name = tags.get("Name") or aws_vpc_id
+                    cid = f"aws:{account_id}:{active_region}:vpc:{aws_vpc_id}"
+                    nid = deterministic_node_id("vpc", cid)
+                    vpc_id_map[aws_vpc_id] = nid
                     nodes.append({
                         "id": nid,
                         "canonical_id": cid,
                         "name": name,
-                        "type": "virtual_machine",
-                        "category": "compute",
+                        "type": "vpc",
+                        "category": "network",
+                        "provider": "aws",
+                        "location": active_region,
+                        "epistemic_state": "observed",
+                        "confidence": 1.0,
+                        "source_connector": "aws_boto3_live_discovery",
+                        "discovered_at": now,
+                        "evidence": [{
+                            "source": f"aws:ec2:DescribeVpcs ({account_id}/{active_region})",
+                            "observed_at": now,
+                            "epistemic_state": "observed",
+                            "confidence": 1.0,
+                            "detail": f"VPC {aws_vpc_id} CIDR={v.get('CidrBlock')}",
+                        }],
+                        "metadata": {
+                            "cloud_service": "ec2:vpc",
+                            "aws_vpc_id": aws_vpc_id,
+                            "cidr_block": v.get("CidrBlock"),
+                            "is_default": v.get("IsDefault", False),
+                            "tags": tags,
+                        },
+                    })
+            except ConnectorError as exc:
+                read_errors.append({"service": f"ec2:vpc:{active_region}", "code": exc.code, "message": exc.message, "timestamp": now})
+
+            # 3. Discover Subnets
+            try:
+                subnets = self._paginate_all(ec2, "describe_subnets", "Subnets", "ec2")
+                for s in subnets:
+                    aws_sub_id = s["SubnetId"]
+                    aws_vpc_id = s.get("VpcId", "")
+                    tags = {t["Key"]: t["Value"] for t in (s.get("Tags") or []) if "Key" in t and "Value" in t}
+                    name = tags.get("Name") or aws_sub_id
+                    cid = f"aws:{account_id}:{active_region}:subnet:{aws_sub_id}"
+                    nid = deterministic_node_id("subnet", cid)
+                    subnet_id_map[aws_sub_id] = nid
+                    parent_nid = vpc_id_map.get(aws_vpc_id)
+                    nodes.append({
+                        "id": nid,
+                        "canonical_id": cid,
+                        "name": name,
+                        "type": "subnet",
+                        "category": "network",
                         "parent_id": parent_nid,
                         "provider": "aws",
-                        "platform": inst.get("PlatformDetails") or "Linux/UNIX",
-                        "location": self.region,
+                        "location": s.get("AvailabilityZone", active_region),
                         "epistemic_state": "observed",
                         "confidence": 1.0,
                         "source_connector": "aws_boto3_live_discovery",
                         "discovered_at": now,
                         "metadata": {
-                            "cloud_service": "ec2:instance",
-                            "aws_instance_id": aws_inst_id,
-                            "instance_type": inst.get("InstanceType"),
-                            "state": (inst.get("State") or {}).get("Name"),
-                            "private_ip": inst.get("PrivateIpAddress"),
-                            "public_ip": inst.get("PublicIpAddress"),
-                            "architecture": inst.get("Architecture", "x86_64"),
-                            "boot_mode": inst.get("BootMode", "uefi"),
+                            "cloud_service": "ec2:subnet",
+                            "aws_subnet_id": aws_sub_id,
+                            "aws_vpc_id": aws_vpc_id,
+                            "cidr_block": s.get("CidrBlock"),
+                            "availability_zone": s.get("AvailabilityZone"),
                         },
                     })
-                    for sg_ref in inst.get("SecurityGroups") or []:
-                        sg_nid = sg_id_map.get(sg_ref.get("GroupId", ""))
-                        if sg_nid:
-                            relationships.append({
-                                "source": nid,
-                                "target": sg_nid,
-                                "type": "depends_on",
-                                "epistemic_state": "observed",
-                                "confidence": 1.0,
-                                "source_connector": "aws_boto3_live_discovery",
-                                "discovered_at": now,
-                            })
-        except ConnectorError as exc:
-            read_errors.append({"service": "ec2:instance", "code": exc.code, "message": exc.message, "timestamp": now})
+            except ConnectorError as exc:
+                read_errors.append({"service": f"ec2:subnet:{active_region}", "code": exc.code, "message": exc.message, "timestamp": now})
 
-        # 6. Discover EBS Volumes
-        try:
-            volumes = self._paginate_all(ec2, "describe_volumes", "Volumes", "ec2")
-            for vol in volumes:
-                aws_vol_id = vol["VolumeId"]
-                cid = f"aws:{account_id}:{self.region}:volume:{aws_vol_id}"
-                nid = deterministic_node_id("volume", cid)
-                attachments = vol.get("Attachments") or []
-                attached_inst_id = attachments[0].get("InstanceId") if attachments else None
-                parent_nid = inst_id_map.get(attached_inst_id or "")
-                nodes.append({
-                    "id": nid,
-                    "canonical_id": cid,
-                    "name": aws_vol_id,
-                    "type": "volume",
-                    "category": "storage",
-                    "parent_id": parent_nid,
-                    "provider": "aws",
-                    "location": vol.get("AvailabilityZone", self.region),
-                    "epistemic_state": "observed",
-                    "confidence": 1.0,
-                    "source_connector": "aws_boto3_live_discovery",
-                    "discovered_at": now,
-                    "metadata": {
-                        "cloud_service": "ec2:volume",
-                        "aws_volume_id": aws_vol_id,
-                        "size_gib": vol.get("Size"),
-                        "volume_type": vol.get("VolumeType", "gp3"),
-                        "encrypted": vol.get("Encrypted", False),
-                        "state": vol.get("State"),
-                    },
-                })
-                if parent_nid:
-                    relationships.append({
-                        "source": parent_nid,
-                        "target": nid,
-                        "type": "mounts",
+            # 4. Discover Security Groups
+            sg_id_map: Dict[str, str] = {}
+            try:
+                sgs = self._paginate_all(ec2, "describe_security_groups", "SecurityGroups", "ec2")
+                for sg in sgs:
+                    aws_sg_id = sg["GroupId"]
+                    cid = f"aws:{account_id}:{active_region}:sg:{aws_sg_id}"
+                    nid = deterministic_node_id("security_group", cid)
+                    sg_id_map[aws_sg_id] = nid
+                    nodes.append({
+                        "id": nid,
+                        "canonical_id": cid,
+                        "name": sg.get("GroupName") or aws_sg_id,
+                        "type": "security_group",
+                        "category": "security",
+                        "parent_id": vpc_id_map.get(sg.get("VpcId", "")),
+                        "provider": "aws",
+                        "location": active_region,
                         "epistemic_state": "observed",
                         "confidence": 1.0,
                         "source_connector": "aws_boto3_live_discovery",
                         "discovered_at": now,
+                        "metadata": {
+                            "cloud_service": "ec2:security_group",
+                            "aws_group_id": aws_sg_id,
+                            "ingress_rules_count": len(sg.get("IpPermissions") or []),
+                            "egress_rules_count": len(sg.get("IpPermissionsEgress") or []),
+                        },
                     })
-        except ConnectorError as exc:
-            read_errors.append({"service": "ec2:volume", "code": exc.code, "message": exc.message, "timestamp": now})
+            except ConnectorError as exc:
+                read_errors.append({"service": f"ec2:security_group:{active_region}", "code": exc.code, "message": exc.message, "timestamp": now})
 
-        # 7. Discover RDS Databases
-        try:
-            dbs = self._paginate_all(rds, "describe_db_instances", "DBInstances", "rds")
-            for db_inst in dbs:
-                db_id = db_inst["DBInstanceIdentifier"]
-                cid = f"aws:{account_id}:{self.region}:rds:{db_id}"
-                nid = deterministic_node_id("database_instance", cid)
-                nodes.append({
-                    "id": nid,
-                    "canonical_id": cid,
-                    "name": db_id,
-                    "type": "database_instance",
-                    "category": "data",
-                    "provider": "aws",
-                    "engine": db_inst.get("Engine", "postgres"),
-                    "location": self.region,
-                    "epistemic_state": "observed",
-                    "confidence": 1.0,
-                    "source_connector": "aws_boto3_live_discovery",
-                    "discovered_at": now,
-                    "metadata": {
-                        "cloud_service": "rds:db_instance",
-                        "db_instance_class": db_inst.get("DBInstanceClass"),
-                        "engine_version": db_inst.get("EngineVersion"),
-                        "allocated_storage_gib": db_inst.get("AllocatedStorage"),
-                        "multi_az": db_inst.get("MultiAZ", False),
-                    },
-                })
-        except ConnectorError as exc:
-            read_errors.append({"service": "rds:db_instance", "code": exc.code, "message": exc.message, "timestamp": now})
+            # 5. Discover EC2 Instances
+            inst_id_map: Dict[str, str] = {}
+            try:
+                reservations = self._paginate_all(ec2, "describe_instances", "Reservations", "ec2")
+                for resv in reservations:
+                    for inst in resv.get("Instances") or []:
+                        aws_inst_id = inst["InstanceId"]
+                        tags = {t["Key"]: t["Value"] for t in (inst.get("Tags") or []) if "Key" in t and "Value" in t}
+                        name = tags.get("Name") or aws_inst_id
+                        cid = f"aws:{account_id}:{active_region}:instance:{aws_inst_id}"
+                        nid = deterministic_node_id("virtual_machine", cid)
+                        inst_id_map[aws_inst_id] = nid
+                        parent_nid = subnet_id_map.get(inst.get("SubnetId", "")) or vpc_id_map.get(inst.get("VpcId", ""))
+                        nodes.append({
+                            "id": nid,
+                            "canonical_id": cid,
+                            "name": name,
+                            "type": "virtual_machine",
+                            "category": "compute",
+                            "parent_id": parent_nid,
+                            "provider": "aws",
+                            "platform": inst.get("PlatformDetails") or "Linux/UNIX",
+                            "location": active_region,
+                            "epistemic_state": "observed",
+                            "confidence": 1.0,
+                            "source_connector": "aws_boto3_live_discovery",
+                            "discovered_at": now,
+                            "metadata": {
+                                "cloud_service": "ec2:instance",
+                                "aws_instance_id": aws_inst_id,
+                                "instance_type": inst.get("InstanceType"),
+                                "state": (inst.get("State") or {}).get("Name"),
+                                "private_ip": inst.get("PrivateIpAddress"),
+                                "public_ip": inst.get("PublicIpAddress"),
+                                "architecture": inst.get("Architecture", "x86_64"),
+                                "boot_mode": inst.get("BootMode", "uefi"),
+                            },
+                        })
+                        for sg_ref in inst.get("SecurityGroups") or []:
+                            sg_nid = sg_id_map.get(sg_ref.get("GroupId", ""))
+                            if sg_nid:
+                                relationships.append({
+                                    "source": nid,
+                                    "target": sg_nid,
+                                    "type": "depends_on",
+                                    "epistemic_state": "observed",
+                                    "confidence": 1.0,
+                                    "source_connector": "aws_boto3_live_discovery",
+                                    "discovered_at": now,
+                                })
+            except ConnectorError as exc:
+                read_errors.append({"service": f"ec2:instance:{active_region}", "code": exc.code, "message": exc.message, "timestamp": now})
+
+            # 6. Discover EBS Volumes
+            try:
+                volumes = self._paginate_all(ec2, "describe_volumes", "Volumes", "ec2")
+                for vol in volumes:
+                    aws_vol_id = vol["VolumeId"]
+                    cid = f"aws:{account_id}:{active_region}:volume:{aws_vol_id}"
+                    nid = deterministic_node_id("volume", cid)
+                    attachments = vol.get("Attachments") or []
+                    attached_inst_id = attachments[0].get("InstanceId") if attachments else None
+                    parent_nid = inst_id_map.get(attached_inst_id or "")
+                    nodes.append({
+                        "id": nid,
+                        "canonical_id": cid,
+                        "name": aws_vol_id,
+                        "type": "volume",
+                        "category": "storage",
+                        "parent_id": parent_nid,
+                        "provider": "aws",
+                        "location": vol.get("AvailabilityZone", active_region),
+                        "epistemic_state": "observed",
+                        "confidence": 1.0,
+                        "source_connector": "aws_boto3_live_discovery",
+                        "discovered_at": now,
+                        "metadata": {
+                            "cloud_service": "ec2:volume",
+                            "aws_volume_id": aws_vol_id,
+                            "size_gib": vol.get("Size"),
+                            "volume_type": vol.get("VolumeType", "gp3"),
+                            "encrypted": vol.get("Encrypted", False),
+                            "state": vol.get("State"),
+                        },
+                    })
+                    if parent_nid:
+                        relationships.append({
+                            "source": parent_nid,
+                            "target": nid,
+                            "type": "mounts",
+                            "epistemic_state": "observed",
+                            "confidence": 1.0,
+                            "source_connector": "aws_boto3_live_discovery",
+                            "discovered_at": now,
+                        })
+            except ConnectorError as exc:
+                read_errors.append({"service": f"ec2:volume:{active_region}", "code": exc.code, "message": exc.message, "timestamp": now})
+
+            # 7. Discover RDS Databases
+            try:
+                dbs = self._paginate_all(rds, "describe_db_instances", "DBInstances", "rds")
+                for db_inst in dbs:
+                    db_id = db_inst["DBInstanceIdentifier"]
+                    cid = f"aws:{account_id}:{active_region}:rds:{db_id}"
+                    nid = deterministic_node_id("database_instance", cid)
+                    nodes.append({
+                        "id": nid,
+                        "canonical_id": cid,
+                        "name": db_id,
+                        "type": "database_instance",
+                        "category": "data",
+                        "provider": "aws",
+                        "engine": db_inst.get("Engine", "postgres"),
+                        "location": active_region,
+                        "epistemic_state": "observed",
+                        "confidence": 1.0,
+                        "source_connector": "aws_boto3_live_discovery",
+                        "discovered_at": now,
+                        "metadata": {
+                            "cloud_service": "rds:db_instance",
+                            "db_instance_class": db_inst.get("DBInstanceClass"),
+                            "engine_version": db_inst.get("EngineVersion"),
+                            "allocated_storage_gib": db_inst.get("AllocatedStorage"),
+                            "multi_az": db_inst.get("MultiAZ", False),
+                        },
+                    })
+            except ConnectorError as exc:
+                read_errors.append({"service": f"rds:db_instance:{active_region}", "code": exc.code, "message": exc.message, "timestamp": now})
 
         # 8. Discover S3 Buckets
         try:
@@ -585,6 +601,7 @@ class AWSLiveDiscoveryConnector:
                 "account_id": account_id,
                 "caller_arn": caller_arn,
                 "region": self.region,
+                "regions": self.regions,
                 "discovered_at": now,
             },
         })
@@ -599,6 +616,7 @@ class AWSLiveDiscoveryConnector:
             "account_or_project": account_id,
             "caller_identity": caller_arn,
             "region": self.region,
+            "regions": self.regions,
             "execution_mode": "live_cloud_api",
             "discovered_at": now,
             "resources_count": len(cmir_dict["resources"]),

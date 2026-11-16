@@ -19,8 +19,8 @@ output "web_url_ip" {
 }
 
 output "web_url_domain" {
-  description = "URL una vez propagado tu dominio de Namecheap"
-  value       = "http://${var.domain_name}"
+  description = "URL pública una vez configurado un dominio personalizado (opcional)"
+  value       = var.domain_name != "" ? "https://${var.domain_name}" : "http://${aws_eip.cloudmove_ip.public_ip}"
 }
 
 output "namecheap_dns_instructions" {

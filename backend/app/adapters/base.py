@@ -112,7 +112,7 @@ class BaseProviderAdapter(ABC):
                 vname = vref.group(1)
                 if vname not in declared_vars:
                     errors.append(f"Variable HCL no declarada 'var.{vname}' referenciada en '{fname}'.")
-            for rref in re.finditer(r"\b((?:aws|google)_[a-z0-9_]+)\.([a-zA-Z0-9_]+)\.[a-zA-Z0-9_]+\b", uncommented):
+            for rref in re.finditer(r"\b(aws_[a-z0-9_]+)\.([a-zA-Z0-9_]+)\.[a-zA-Z0-9_]+\b", uncommented):
                 rtype_name = f"{rref.group(1)}.{rref.group(2)}"
                 if rtype_name not in declared_resources:
                     errors.append(f"Referencia a recurso HCL no declarado '{rtype_name}' en '{fname}'.")

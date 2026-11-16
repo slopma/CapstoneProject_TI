@@ -8,7 +8,7 @@ if not (_repo_root_cand / "backend").exists() and Path("/app/app").is_dir():
 else:
     PROJECT_ROOT = _repo_root_cand
 
-DATA_DIR = (
+_default_data_dir = (
     PROJECT_ROOT / "data"
     if (PROJECT_ROOT == Path("/app") and (PROJECT_ROOT / "data").is_dir())
     else PROJECT_ROOT / "backend" / "data"
@@ -23,8 +23,14 @@ def _path_from_env(name: str, default: Path) -> Path:
     return default
 
 
+DATA_DIR = _path_from_env("CLOUDMOVE_DATA_DIR", _default_data_dir)
+
+
 def _origins_from_env() -> list[str]:
-    raw = os.getenv("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000,*")
+    raw = os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000",
+    )
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
@@ -37,6 +43,7 @@ AWS_OUTPUT_PATH = _path_from_env(
     PROJECT_ROOT / "generated" / "aws" / "main.tf",
 )
 CORS_ORIGINS = _origins_from_env()
+ALLOW_SERVER_AWS_FALLBACK = os.getenv("CLOUDMOVE_ALLOW_SERVER_AWS_FALLBACK", "false").strip().lower() in ("1", "true", "yes")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 API_HOST = os.getenv("HOST", os.getenv("API_HOST", "0.0.0.0"))
 API_PORT = int(os.getenv("PORT", os.getenv("API_PORT", "8000")))

@@ -28,12 +28,15 @@ import os
 from pathlib import Path
 import secrets
 import shutil
+import tempfile
+import threading
 import uuid
 from typing import Any, Dict, List, Optional
 
 from app.adapters.aws_adapter import AWSAdapter
 from app.cmir.models import CMIR
 from app.config import DATA_DIR, PROJECT_ROOT
+from app.core.text_utils import utc_now_iso as _utc_now
 from app.dependencies.resolver import resolve_dependencies
 from app.dependencies.validator import validate_migration_subgraph
 from app.discovery.connectors import SecretRedactor
@@ -144,10 +147,6 @@ ALLOWED_STATE_TRANSITIONS: Dict[str, set[str]] = {
 }
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _sanitize_error_message(message: str) -> str:
     """Redact any accidental secrets or tokens before storing an error message."""
     redacted, _ = SecretRedactor.redact_text(str(message or ""))
@@ -172,31 +171,55 @@ class MigrationOrchestrator:
     ) -> None:
         self.store_path = store_path
         self.db: TransactionalDatabase = db or get_transactional_db()
+        self._jobs_lock = threading.RLock()
+        self._transient_secrets: Dict[str, Dict[str, Any]] = {}
         self.jobs: Dict[str, Dict[str, Any]] = {}
         self.db.migrate_legacy_json_files(migrations_json_path=self.store_path)
         self._load()
 
+    def _atomic_write_store(self, jobs_snapshot: Dict[str, Dict[str, Any]]) -> None:
+        """Atomically persist the JSON backup via same-directory temp file + os.replace."""
+        self.store_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps({"jobs": jobs_snapshot, "updated_at": _utc_now()}, indent=2, ensure_ascii=False)
+        fd, tmp_name = tempfile.mkstemp(prefix=".migrations_state_", suffix=".tmp", dir=str(self.store_path.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+            os.replace(tmp_name, self.store_path)
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+
     def _load(self) -> None:
         db_jobs = self.db.list_migration_jobs()
         if db_jobs:
-            self.jobs = {j["migration_id"]: j for j in db_jobs}
+            with self._jobs_lock:
+                self.jobs = {j["migration_id"]: j for j in db_jobs}
             return
         if self.store_path.is_file():
             try:
                 raw = json.loads(self.store_path.read_text(encoding="utf-8"))
                 if isinstance(raw, dict) and isinstance(raw.get("jobs"), dict):
+                    loaded: Dict[str, Dict[str, Any]] = {}
                     for mid, job in raw["jobs"].items():
                         if isinstance(job, dict) and job.get("target_provider") in SUPPORTED_TARGET_PROVIDERS:
                             saved = self.db.save_migration_job(job, actor_id="startup_loader")
-                            self.jobs[mid] = saved
+                            loaded[mid] = saved
+                    with self._jobs_lock:
+                        self.jobs = loaded
             except Exception:
-                self.jobs = {}
+                with self._jobs_lock:
+                    self.jobs = {}
 
     def reload_from_db(self) -> Dict[str, Dict[str, Any]]:
         """Reload all migration jobs directly from the transactional database (e.g., after backend restart)."""
         db_jobs = self.db.list_migration_jobs()
-        self.jobs = {j["migration_id"]: j for j in db_jobs}
-        return self.jobs
+        with self._jobs_lock:
+            self.jobs = {j["migration_id"]: j for j in db_jobs}
+            return dict(self.jobs)
 
     def _save_job(
         self,
@@ -205,13 +228,11 @@ class MigrationOrchestrator:
         actor_id: str = "orchestrator@cloudmove.local",
     ) -> Dict[str, Any]:
         saved = self.db.save_migration_job(job, expected_version=expected_version, actor_id=actor_id)
-        self.jobs[saved["migration_id"]] = saved
+        with self._jobs_lock:
+            self.jobs[saved["migration_id"]] = saved
+            snapshot = dict(self.jobs)
         try:
-            self.store_path.parent.mkdir(parents=True, exist_ok=True)
-            self.store_path.write_text(
-                json.dumps({"jobs": self.jobs, "updated_at": _utc_now()}, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
+            self._atomic_write_store(snapshot)
         except Exception:
             pass
         return saved
@@ -248,6 +269,7 @@ class MigrationOrchestrator:
         target_config: Optional[Dict[str, Any]] = None,
         source_config: Optional[Dict[str, Any]] = None,
         auto_assess_and_plan: bool = True,
+        transient_secrets: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Create a new migration job in DRAFT state, validate target provider (`aws`),
@@ -336,12 +358,19 @@ class MigrationOrchestrator:
 
         self._save_job(job, actor_id="creator@cloudmove.local")
 
-        if auto_assess_and_plan:
-            self.run_discovery_and_assessment(migration_id)
-            if self.jobs[migration_id]["state"] == MigrationState.ASSESSED.value:
-                self.generate_plan_and_artifacts(migration_id)
+        if transient_secrets:
+            with self._jobs_lock:
+                self._transient_secrets[migration_id] = dict(transient_secrets)
+        try:
+            if auto_assess_and_plan:
+                self.run_discovery_and_assessment(migration_id)
+                if self.get_migration(migration_id)["state"] == MigrationState.ASSESSED.value:
+                    self.generate_plan_and_artifacts(migration_id)
+        finally:
+            with self._jobs_lock:
+                self._transient_secrets.pop(migration_id, None)
 
-        return self.jobs[migration_id]
+        return self.get_migration(migration_id)
 
     def run_discovery_and_assessment(self, migration_id: str) -> Dict[str, Any]:
         """Transition DRAFT -> DISCOVERING -> ASSESSED (or FAILED if blocked)."""
@@ -356,6 +385,12 @@ class MigrationOrchestrator:
 
         try:
             if uc == "app_source":
+                with self._jobs_lock:
+                    transient_token = (self._transient_secrets.get(migration_id) or {}).get("github_token")
+                stored_tok = src_cfg.get("github_token")
+                effective_gh_token = transient_token or (
+                    stored_tok if stored_tok and stored_tok != "[REDACTED]" else None
+                )
                 app_disc = inspect_application_source(
                     source_path=src_cfg.get("source_path"),
                     inline_files=src_cfg.get("inline_files"),
@@ -363,7 +398,7 @@ class MigrationOrchestrator:
                     app_name_override=src_cfg.get("app_name"),
                     github_url=src_cfg.get("github_url"),
                     github_ref=src_cfg.get("github_ref"),
-                    github_token=src_cfg.get("github_token"),
+                    github_token=effective_gh_token,
                 )
                 deployment_mode = src_cfg.get("deployment_mode", "vm_rehost")
                 user_decisions = src_cfg.get("user_decisions")
@@ -396,7 +431,7 @@ class MigrationOrchestrator:
                     stages[3]["evidence"].append("Módulos Terraform (main.tf, variables.tf, user_data.sh) sintetizados exitosamente.")
 
                 job["source_environment"] = app_disc
-                job["name"] = _sanitize_app_name(job.get("name"), fallback=app_disc.get("app_name", "CocoaApp"))
+                job["name"] = _sanitize_app_name(job.get("name"), fallback=app_disc.get("app_name", "Migración Aplicación"))
                 if job["name"] == f"Migración {uc.upper()} hacia {provider.upper()}" and app_disc.get("app_name"):
                     job["name"] = app_disc["app_name"]
                 job["cmir"] = cmir_obj.model_dump()
@@ -412,11 +447,12 @@ class MigrationOrchestrator:
                 resolved_agent_id = src_cfg.get("agent_id")
                 if capture_live and not resolved_agent_id:
                     try:
+                        from app.core.security import is_control_plane_agent
+
                         online_agents = [
                             a for a in get_transactional_db().list_agents(include_revoked=False)
                             if a.get("status") == "ONLINE"
-                            and (a.get("hostname") or "").lower() not in ("cloudmove-server", "localhost")
-                            and a.get("ip_address") != "100.50.88.231"
+                            and not is_control_plane_agent(a)
                         ]
                         if online_agents:
                             resolved_agent_id = online_agents[0].get("agent_id")
@@ -1326,9 +1362,11 @@ class MigrationOrchestrator:
         self._ensure_seeded()
         db_job = self.db.get_migration_job(migration_id)
         if db_job is not None:
-            self.jobs[migration_id] = db_job
+            with self._jobs_lock:
+                self.jobs[migration_id] = db_job
             return db_job
-        job = self.jobs.get(migration_id)
+        with self._jobs_lock:
+            job = self.jobs.get(migration_id)
         if not job:
             raise KeyError(f"Migración '{migration_id}' no encontrada.")
         return job
@@ -1340,21 +1378,21 @@ class MigrationOrchestrator:
     ) -> List[Dict[str, Any]]:
         self._ensure_seeded()
         items = self.db.list_migration_jobs(use_case=use_case, target_provider=target_provider)
-        for j in items:
-            self.jobs[j["migration_id"]] = j
+        with self._jobs_lock:
+            for j in items:
+                self.jobs[j["migration_id"]] = j
         return items
 
     def delete_migration(self, migration_id: str, actor_id: str = "operator@cloudmove.local") -> bool:
         """Permanently delete a migration job from memory, database, filesystem artifacts, zip packages, and staging."""
-        job = self.jobs.get(migration_id)
+        with self._jobs_lock:
+            job = self.jobs.get(migration_id)
         deleted = self.db.delete_migration_job(migration_id)
-        if migration_id in self.jobs:
-            del self.jobs[migration_id]
+        with self._jobs_lock:
+            self.jobs.pop(migration_id, None)
+            snapshot = dict(self.jobs)
         try:
-            self.store_path.write_text(
-                json.dumps({"jobs": self.jobs, "updated_at": _utc_now()}, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
+            self._atomic_write_store(snapshot)
         except Exception:
             pass
 
@@ -1402,12 +1440,10 @@ class MigrationOrchestrator:
     def clear_all_migrations(self, actor_id: str = "operator@cloudmove.local", clean_staging_images: bool = True) -> int:
         """Permanently clear all migration jobs from memory, transactional db, project zips, folders, and staging images."""
         count = self.db.clear_all_migration_jobs()
-        self.jobs.clear()
+        with self._jobs_lock:
+            self.jobs.clear()
         try:
-            self.store_path.write_text(
-                json.dumps({"jobs": {}, "updated_at": _utc_now()}, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
+            self._atomic_write_store({})
         except Exception:
             pass
 
@@ -1456,11 +1492,13 @@ class MigrationOrchestrator:
         return count
 
     def _ensure_seeded(self) -> None:
-        if self.jobs:
-            return
+        with self._jobs_lock:
+            if self.jobs:
+                return
         existing = self.db.list_migration_jobs()
         if existing:
-            self.jobs = {j["migration_id"]: j for j in existing}
+            with self._jobs_lock:
+                self.jobs = {j["migration_id"]: j for j in existing}
             return
         # Starts from scratch: no preloaded or seeded migration jobs
 

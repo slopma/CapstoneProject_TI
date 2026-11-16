@@ -26,6 +26,7 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from app.core.text_utils import utc_now_iso as _utc_now
 from app.persistence.transactional_db import get_transactional_db
 
 
@@ -34,10 +35,6 @@ MIN_FREE_DISK_BYTES = 4 * 1024 * 1024 * 1024  # Keep at least 4 GiB free on Clou
 STAGE_ID_RE = re.compile(r"^[A-Za-z0-9_.\-]{3,80}$")
 
 _STAGE_LOCK = threading.RLock()
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _ensure_staging_base() -> Path:
@@ -553,12 +550,13 @@ def push_stage_to_ec2(
 
 def _find_active_remote_agent(preferred_agent_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Return ONLINE remote host agent (excluding CloudMove server itself)."""
+    from app.core.security import is_control_plane_agent
+
     db = get_transactional_db()
     remote = [
         a for a in db.list_agents(include_revoked=False)
         if a.get("status") == "ONLINE"
-        and (a.get("hostname") or "").lower() not in ("cloudmove-server", "localhost")
-        and a.get("ip_address") != "100.50.88.231"
+        and not is_control_plane_agent(a)
     ]
     if not remote:
         return None
@@ -607,15 +605,15 @@ def ensure_uc2_selected_paths_staged(
     if not agent:
         return {"status": "no_online_agent", "ready": False}
 
-    from app.api.routers.agents import LATEST_AGENT_VERSION, _is_version_gte
+    from app.core.agents_catalog import LATEST_AGENT_VERSION, is_version_gte
 
     ver = str(agent.get("version") or "2.1.0")
     upgrade_cmd = (
         f"curl -sSL {public_api_url.rstrip('/')}/api/v1/agents/install.sh | sudo bash -s -- --upgrade"
         if public_api_url
-        else "curl -sSL https://digitalcafeluna.store/api/v1/agents/install.sh | sudo bash -s -- --upgrade"
+        else "curl -sSL http://localhost:8000/api/v1/agents/install.sh | sudo bash -s -- --upgrade"
     )
-    if not _is_version_gte(ver, LATEST_AGENT_VERSION):
+    if not is_version_gte(ver, LATEST_AGENT_VERSION):
         return {
             "status": "upgrade_required",
             "ready": False,
@@ -698,9 +696,9 @@ def dispatch_push_to_ec2(
     agent = _find_active_remote_agent(agent_id)
     if not agent:
         return None
-    from app.api.routers.agents import LATEST_AGENT_VERSION, _is_version_gte
+    from app.core.agents_catalog import LATEST_AGENT_VERSION, is_version_gte
 
-    if not _is_version_gte(str(agent.get("version") or "2.1.0"), LATEST_AGENT_VERSION):
+    if not is_version_gte(str(agent.get("version") or "2.1.0"), LATEST_AGENT_VERSION):
         return None
 
     db = get_transactional_db()

@@ -204,11 +204,22 @@ def validate_external_credentials(service_type: str, credentials: Dict[str, str]
                 "latency_ms": 0,
             }
 
-        # Safe regex validation of Supabase URL
-        if not re.match(r"^https://[a-zA-Z0-9_\.-]+\.supabase\.co/?$", url):
-            # Also allow custom domains with http/https
-            if not url.startswith("http://") and not url.startswith("https://"):
-                url = f"https://{url}"
+        # Strictly enforce public HTTPS/HTTP + DNS resolution anti-SSRF policy
+        if not url.startswith("http://") and not url.startswith("https://"):
+            url = f"https://{url}"
+
+        from app.core.security import SSRFBlockedError, validate_public_url
+
+        try:
+            validate_public_url(url, allow_private=False)
+        except SSRFBlockedError as exc:
+            return {
+                "valid": False,
+                "status": "SSRF_BLOCKED",
+                "service": "supabase",
+                "error": f"URL externa rechazada por política anti-SSRF: {exc}",
+                "latency_ms": round((time.time() - start_time) * 1000, 1),
+            }
 
         probe_url = f"{url}/rest/v1/"
         headers = {}
@@ -217,7 +228,7 @@ def validate_external_credentials(service_type: str, credentials: Dict[str, str]
             headers["Authorization"] = f"Bearer {anon_key}"
 
         try:
-            with httpx.Client(timeout=6.0, follow_redirects=True) as client:
+            with httpx.Client(timeout=6.0, follow_redirects=False) as client:
                 res = client.get(probe_url, headers=headers)
                 latency = round((time.time() - start_time) * 1000, 1)
 

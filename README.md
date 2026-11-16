@@ -1,6 +1,8 @@
 # CloudMove — Informe Técnico de Arquitectura y Funcionamiento Interno
 
-**CloudMove** es una plataforma de ingeniería para el descubrimiento automatizado, modelado semántico intermedio (**CMIR v2.1**), validación epistémica de dependencias, síntesis determinista de Infraestructura como Código (**Terraform HCL**) y orquestación transaccional de migraciones hacia **Amazon Web Services (AWS)** y **Google Cloud Platform (GCP)**.
+**CloudMove** es una plataforma web de ingeniería para el descubrimiento automatizado, modelado semántico intermedio (**CMIR v2.1**), validación epistémica de dependencias, síntesis determinista de Infraestructura como Código (**Terraform HCL**) y orquestación transaccional de migraciones hacia **Amazon Web Services (AWS)**.
+
+> **Operación Web Multi-Usuario en AWS**: CloudMove está diseñada como una aplicación web pública alojada en AWS (EC2 + Docker Compose + Nginx + Certbot). Cualquier usuario puede acceder desde su navegador y operar sus propias migraciones con **aislamiento estricto de credenciales por pestaña (`sessionStorage` + bóveda cifrada por sesión)**, bloqueo de acceso de peticiones de usuario al rol IAM o metadata IMDSv2 del servidor anfitrión (`ALLOW_SERVER_AWS_FALLBACK=false`), protección SSRF contra redes internas/IMDS y resguardo del plano de control de CloudMove.
 
 Este documento constituye un **informe técnico exhaustivo** sobre cómo funciona CloudMove por detrás, cómo está diseñado su motor interno de 7 capas y cómo operan paso a paso desde cero sus flujos de migración, con énfasis profundo en el **Caso de Uso 1 (Migración desde GitHub / Código Fuente)** y el **Caso de Uso 2 (Migración de Imágenes de Disco, ISO, VM y Captura de Sistema Operativo en Vivo)**.
 
@@ -13,7 +15,7 @@ Este documento constituye un **informe técnico exhaustivo** sobre cómo funcion
    - [2.1 Capa 1: Motores de Descubrimiento Multi-Fuente](#21-capa-1-motores-de-descubrimiento-multi-fuente)
    - [2.2 Capa 2: Representación Intermedia Neutral (CMIR v2.1)](#22-capa-2-representación-intermedia-neutral-cmir-v21)
    - [2.3 Capa 3: Motor de Grafos (`networkx.DiGraph`) y Resolución Epistémica de Dependencias (BFS)](#23-capa-3-motor-de-grafos-networkxdigraph-y-resolución-epistémica-de-dependencias-bfs)
-   - [2.4 Capa 4: Adaptadores de Proveedor (`AWSAdapter` y `GCPAdapter`)](#24-capa-4-adaptadores-de-proveedor-awsadapter-y-gcpadapter)
+   - [2.4 Capa 4: Adaptador Exclusivo de Proveedor (`AWSAdapter`)](#24-capa-4-adaptador-exclusivo-de-proveedor-awsadapter)
    - [2.5 Capa 5: Generador Modular de Terraform HCL y Validador en 4 Niveles](#25-capa-5-generador-modular-de-terraform-hcl-y-validador-en-4-niveles)
    - [2.6 Capa 6: Orquestador de Máquina de Estados y Persistencia Transaccional ACID (`SQLite WAL`)](#26-capa-6-orquestador-de-máquina-de-estados-y-persistencia-transaccional-acid-sqlite-wal)
    - [2.7 Capa 7: Consola de Despliegue Interactivo en la Nube Real (`CloudDeploymentRunner`)](#27-capa-7-consola-de-despliegue-interactivo-en-la-nube-real-clouddeploymentrunner)
@@ -32,7 +34,7 @@ Este documento constituye un **informe técnico exhaustivo** sobre cómo funcion
    - [4.2 Modo A: Inspección Forense de Imágenes Binarias (`VMDK`, `QCOW2`, `VHD`, `VHDX`, `RAW`, `OVA`, `OVF`)](#42-modo-a-inspección-forense-de-imágenes-binarias-vmdk-qcow2-vhd-vhdx-raw-ova-ovf)
    - [4.3 Modo B: Sondeo y Captura en Caliente del Sistema Operativo en Vivo (`Live OS Capture`)](#43-modo-b-sondeo-y-captura-en-caliente-del-sistema-operativo-en-vivo-live-os-capture)
    - [4.4 ¿Cómo se Valida la Imagen? Bloqueadores, Remediación de Boot/Drivers y 8 Dimensiones de Fidelidad](#44-cómo-se-valida-la-imagen-bloqueadores-remediación-de-bootdrivers-y-8-dimensiones-de-fidelidad)
-   - [4.5 Matriz Oficial de Estrategias: Replicación Continua (MGN / Migrate to VMs) vs Importación de Imagen](#45-matriz-oficial-de-estrategias-replicación-continua-mgn--migrate-to-vms-vs-importación-de-imagen)
+   - [4.5 Matriz Oficial de Estrategias: Replicación Continua (`AWS MGN`) vs Importación de Imagen](#45-matriz-oficial-de-estrategias-replicación-continua-aws-mgn-vs-importación-de-imagen)
    - [4.6 Catálogo Interactivo de Transformación y las 4 Salvaguardas para AWS Academy Learner Lab](#46-catálogo-interactivo-de-transformación-y-las-4-salvaguardas-para-aws-academy-learner-lab)
    - [4.7 Copia en Staging, Conversión `qemu-img convert` y Artefactos Multi-Plataforma](#47-copia-en-staging-conversión-qemu-img-convert-y-artefactos-multi-plataforma)
    - [4.8 Rehidratación Autónoma Cloud-Init y Portal Web de Telemetría en Vivo](#48-rehidratación-autónoma-cloud-init-y-portal-web-de-telemetría-en-vivo)
@@ -47,13 +49,13 @@ Las herramientas tradicionales de migración a la nube suelen fallar en dos extr
 1. **Re-arquitectura forzada**: intentan empaquetar aplicaciones monolíticas, con estado local o librerías científicas pesadas (`PostGIS`, `geopandas`, `scikit-learn`) dentro de funciones serverless con límites estrictos de tamaño y tiempo, rompiendo la aplicación original.
 2. **Traducción ciega sin validación epistémica**: convierten inventarios en plantillas estáticas sin distinguir entre **dependencias observadas** (`observed`), **inferidas heurísticamente** (`inferred`) o **externas desconocidas** (`unknown`), y sin verificar si un recurso compartido (`is_shared=True`) está siendo utilizado por otros sistemas que no se van a migrar.
 
-**CloudMove** resuelve este problema unificando tres escenarios de migración bajo un mismo motor semántico (**CMIR v2.1**) y un único orquestador de ciclo de vida (**`MigrationOrchestrator`**), apuntando exclusivamente a **AWS** y **GCP** (según [`ADR-001`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/docs/ADR/ADR-001-cloud-providers-scope.md) y [`ADR-003`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/docs/ADR/ADR-003-unified-migration-orchestrator-and-three-use-cases.md)):
+**CloudMove** resuelve este problema unificando tres escenarios de migración bajo un mismo motor semántico (**CMIR v2.1**) y un único orquestador de ciclo de vida (**`MigrationOrchestrator`**), apuntando exclusivamente a **AWS** (según [`ADR-001`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/docs/ADR/ADR-001-cloud-providers-scope.md) y [`ADR-003`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/docs/ADR/ADR-003-unified-migration-orchestrator-and-three-use-cases.md)):
 
 | Caso de Uso | Identificador Interno | Entrada Principal | Motor Principal | Qué Produce y Despliega |
 | :--- | :--- | :--- | :--- | :--- |
-| **Caso 1: Aplicación desde Código Fuente / GitHub** | `app_source` | URL de GitHub (`https://github.com/org/repo`), rama/tag/SHA, directorio local o manifiestos | [`app_migrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py), [`github_connector.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/github_connector.py), [`ai_translator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/generators/ai_translator.py) | VPC Multi-AZ, Security Groups/Firewalls, EC2/GCE o ALB+ASG, contenedores Docker Compose, hidratación automática de backups PostgreSQL/PostGIS (`.dump`/`.sql`), reescritura dinámica de `VITE_API_URL` vía IMDSv2 y smoke tests. |
-| **Caso 2: Imagen de Disco, ISO, VM o Captura de SO en Vivo** | `vm_image` | Archivo binario de disco (`VMDK`, `QCOW2`, `VHD`, `VHDX`, `RAW`, `OVA`, `OVF`) o captura en caliente del SO físico/VM en ejecución | [`image_migrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/image_migrator.py), [`replication_and_import.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/replication_and_import.py) | Copia verificada por SHA-256 en staging, conversión `qemu-img convert`, remediación de drivers (`ena`/`nvme`/`virtio`) y `/etc/fstab`, importación nativa (`ec2:ImportImage` / `MGN` / `GCP Image Import`), o rehidratación autónoma Cloud-Init con portal web de telemetría en vivo + lanzadores para VirtualBox y VMware. |
-| **Caso 3: Campaña de Data Center y Subgrafos** | `datacenter_campaign` | Telemetría de agentes [`osquery`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/osquery_parser.py), snapshots cloud reales (`boto3` / GCP SDK) y campañas multi-sitio | [`campaigns.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/campaigns.py), [`resolver.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/dependencies/resolver.py), [`cloud_connector.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/cloud_connector.py) | Reconciliación de identidad canónica entre múltiples fuentes, cálculo de clausura transitiva de dependencias con BFS, aislamiento de recursos compartidos (`is_shared=True`) y migración por oleadas (*waves*). |
+| **Caso 1: Aplicación desde Código Fuente / GitHub** | `app_source` | URL de GitHub (`https://github.com/org/repo`), rama/tag/SHA, directorio local o manifiestos | [`app_migrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py), [`github_connector.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/github_connector.py), [`ai_translator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/generators/ai_translator.py) | VPC Multi-AZ, Security Groups, EC2 o ALB+ASG, contenedores Docker Compose, hidratación automática de backups PostgreSQL/PostGIS (`.dump`/`.sql`), reescritura dinámica de `VITE_API_URL` vía IMDSv2 y smoke tests. |
+| **Caso 2: Imagen de Disco, ISO, VM o Captura de SO en Vivo** | `vm_image` | Archivo binario de disco (`VMDK`, `QCOW2`, `VHD`, `VHDX`, `RAW`, `OVA`, `OVF`) o captura en caliente del SO físico/VM en ejecución | [`image_migrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/image_migrator.py), [`replication_and_import.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/replication_and_import.py) | Copia verificada por SHA-256 en staging, conversión `qemu-img convert`, remediación de drivers (`ena`/`nvme`) y `/etc/fstab`, importación nativa (`ec2:ImportImage` / `AWS MGN`), o rehidratación autónoma Cloud-Init con portal web de telemetría en vivo + lanzadores para VirtualBox y VMware. |
+| **Caso 3: Campaña de Data Center y Subgrafos** | `datacenter_campaign` | Telemetría de agentes [`osquery`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/osquery_parser.py), snapshots cloud reales (`boto3` multi-región) y campañas multi-sitio | [`campaigns.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/campaigns.py), [`resolver.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/dependencies/resolver.py), [`cloud_live_discovery.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/cloud_live_discovery.py) | Reconciliación de identidad canónica entre múltiples fuentes, cálculo de clausura transitiva de dependencias con BFS, aislamiento de recursos compartidos (`is_shared=True`) y migración por oleadas (*waves*). |
 
 ---
 
@@ -66,7 +68,7 @@ flowchart TB
     subgraph L1["Capa 1: Motores de Descubrimiento Multi-Fuente"]
         GH["GitHub / Source Scanner<br/>(github_connector.py + app_migrator.py)"]
         VMI["Forense Binario & Captura SO en Vivo<br/>(image_migrator.py + qemu-img + lsblk)"]
-        DC["Campañas Data Center & Agentes osquery<br/>(campaigns.py + osquery_parser.py + cloud_connector.py)"]
+        DC["Campañas Data Center & Agentes osquery<br/>(campaigns.py + osquery_parser.py + cloud_live_discovery.py)"]
     end
 
     subgraph L2["Capa 2: Representación Intermedia Neutral (CMIR v2.1)"]
@@ -78,9 +80,8 @@ flowchart TB
         BFS["Resolución BFS Directa y Transitiva<br/>(dependencies/resolver.py)<br/>Separa: Confirmadas vs Inferidas vs Desconocidas + Recursos Compartidos"]
     end
 
-    subgraph L4["Capa 4: Adaptadores de Proveedor Cloud"]
+    subgraph L4["Capa 4: Adaptador Exclusivo de Proveedor Cloud"]
         AWS["AWSAdapter (adapters/aws_adapter.py)<br/>VPC, Subnet, SG, EC2, ALB/ASG, EBS, RDS, S3"]
-        GCP["GCPAdapter (adapters/gcp_adapter.py)<br/>Compute Network, Firewall, GCE, Disks, Cloud SQL, GCS"]
     end
 
     subgraph L5["Capa 5: Síntesis Modular HCL y Validación en 4 Niveles"]
@@ -101,8 +102,8 @@ flowchart TB
     VMI --> CMIR
     DC --> CMIR
     CMIR --> NX --> BFS
-    BFS --> AWS & GCP
-    AWS & GCP --> TFGEN --> VAL
+    BFS --> AWS
+    AWS --> TFGEN --> VAL
     VAL --> ORCH
     ORCH <--> DB
     ORCH --> DEPLOY
@@ -113,9 +114,9 @@ flowchart TB
 ### 2.1 Capa 1: Motores de Descubrimiento Multi-Fuente
 
 Cada fuente de entrada cuenta con un analizador especializado que opera **estrictamente en modo de solo lectura** sobre el entorno origen:
-- **Código Fuente y Repositorios GitHub** ([`backend/app/migration/github_connector.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/github_connector.py) y [`backend/app/migration/app_migrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py)): Fija el commit SHA exacto vía la API REST de GitHub, descarga el tarball en un directorio temporal aislado contra ataques *Zip-Slip*, inspecciona el AST/código estático de Python/JS/TS, analiza servicios en `docker-compose.yml` y decompila backups binarios de PostgreSQL (`PGDMP`).
+- **Código Fuente y Repositorios GitHub** ([`backend/app/discovery/github_connector.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/github_connector.py) y [`backend/app/migration/app_migrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py)): Fija el commit SHA exacto vía la API REST de GitHub, descarga el tarball en un directorio temporal aislado contra ataques *Tar-Slip* / enlaces simbólicos (`filter="data"`), inspecciona el AST/código estático de Python/JS/TS, analiza servicios en `docker-compose.yml` y decompila backups binarios de PostgreSQL (`PGDMP`).
 - **Imágenes de Disco y Sistemas Operativos en Vivo** ([`backend/app/migration/image_migrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/image_migrator.py)): Lee las cabeceras binarias mágicas (`KDMV`, `QFI\xfb`, `conectix`, `vhdxfile`, `0x55AA`, `EFI PART`, `ustar`), invoca `qemu-img info -U --output=json` y, cuando opera en modo de captura en vivo, sondea los dispositivos de bloque reales con `lsblk -J -b`, `os.statvfs()`, `/etc/os-release`, `ip -j addr`, `ss -tulpn`, `dpkg-query` y `ps`.
-- **Telemetría de Agentes `osquery` y Cuentas Cloud** ([`backend/app/discovery/osquery_parser.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/osquery_parser.py), [`backend/app/discovery/campaigns.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/campaigns.py) y [`backend/app/discovery/cloud_connector.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/cloud_connector.py)): Normaliza snapshots de agentes instalados en servidores on-premise y reconcilia activos repetidos mediante llaves de identidad canónica (`canonical_identity_key`).
+- **Telemetría de Agentes `osquery` y Cuentas AWS** ([`backend/app/discovery/osquery_parser.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/osquery_parser.py), [`backend/app/discovery/campaigns.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/campaigns.py) y [`backend/app/discovery/cloud_live_discovery.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/cloud_live_discovery.py)): Normaliza snapshots de agentes instalados en servidores on-premise, descubre recursos en vivo en múltiples regiones AWS mediante credenciales efímeras del usuario y reconcilia activos repetidos mediante llaves de identidad canónica (`canonical_identity_key`).
 
 ---
 
@@ -167,36 +168,28 @@ Cuando el usuario selecciona un conjunto de nodos para migrar (o la aplicación 
 
 ---
 
-### 2.4 Capa 4: Adaptadores de Proveedor (`AWSAdapter` y `GCPAdapter`)
+### 2.4 Capa 4: Adaptador Exclusivo de Proveedor (`AWSAdapter`)
 
-El subgrafo validado se entrega al adaptador correspondiente heredado de [`BaseProviderAdapter`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/base.py):
-- **[`AWSAdapter`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/aws_adapter.py)**: Traduce los nodos CMIR a recursos nativos del proveedor `hashicorp/aws` (`~> 5.0`):
+El subgrafo validado se entrega al adaptador oficial heredado de [`BaseProviderAdapter`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/base.py):
+- **[`AWSAdapter`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/aws_adapter.py)**: Traduce los nodos CMIR exclusivamente a recursos nativos del proveedor `hashicorp/aws` (`~> 5.0`, conforme a [`ADR-001`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/docs/ADR/ADR-001-cloud-providers-scope.md)):
   - `network` $\rightarrow$ `aws_vpc` + `aws_internet_gateway` + `aws_route_table`
   - `subnet` $\rightarrow$ `aws_subnet` + `aws_route_table_association`
-  - `security_group` / `firewall` $\rightarrow$ `aws_security_group`
-  - `compute` / `virtual_machine` $\rightarrow$ `aws_instance` (o `aws_launch_template` + `aws_autoscaling_group`)
+  - `security_group` / `firewall` $\rightarrow$ `aws_security_group` (puertos `22` y `5432` parametrizados mediante `var.ssh_ingress_cidr` y `var.db_ingress_cidr`)
+  - `compute` / `virtual_machine` $\rightarrow$ `aws_instance` (o `aws_launch_template` + `aws_autoscaling_group` en modo HA)
   - `load_balancer` $\rightarrow$ `aws_lb` + `aws_lb_target_group` + `aws_lb_listener`
   - `storage_volume` $\rightarrow$ `aws_ebs_volume` + `aws_volume_attachment`
   - `object_storage` $\rightarrow$ `aws_s3_bucket`
   - `database` / `database_instance` $\rightarrow$ `aws_db_instance` + `aws_db_subnet_group`
-- **[`GCPAdapter`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/gcp_adapter.py)**: Traduce los mismos nodos CMIR a recursos nativos de `hashicorp/google` (`~> 5.0`):
-  - `network` $\rightarrow$ `google_compute_network` (`auto_create_subnetworks = false`)
-  - `subnet` $\rightarrow$ `google_compute_subnetwork`
-  - `security_group` / `firewall` $\rightarrow$ `google_compute_firewall`
-  - `compute` / `virtual_machine` $\rightarrow$ `google_compute_instance`
-  - `storage_volume` $\rightarrow$ `google_compute_disk` + `google_compute_attached_disk`
-  - `object_storage` $\rightarrow$ `google_storage_bucket`
-  - `database` / `database_instance` $\rightarrow$ `google_sql_database_instance` + `google_sql_user`
 
-Ambos adaptadores normalizan todos los nombres mediante [`sanitize_id()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/base.py#L46-L55) (`snake_case` válido para identificadores internos de Terraform) y [`sanitize_name()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/base.py#L57-L66) (`kebab-case` de máximo 60 caracteres para nombres en las APIs de AWS y GCP), e infieren recursos de red implícitos si el usuario seleccionó un servidor huérfano sin VPC asociada.
+El adaptador normaliza todos los nombres mediante [`sanitize_id()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/base.py#L46-L55) (`snake_case` válido para identificadores internos de Terraform) y [`sanitize_name()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/base.py#L57-L66) (`kebab-case` de máximo 60 caracteres para nombres en las APIs de AWS), e infiere recursos de red implícitos si el usuario seleccionó un servidor huérfano sin VPC asociada.
 
 ---
 
 ### 2.5 Capa 5: Generador Modular de Terraform HCL y Validador en 4 Niveles
 
 El módulo [`TerraformGenerator`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/generators/terraform.py) y el sintetizador híbrido [`ai_translator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/generators/ai_translator.py) nunca generan un archivo monolítico desordenado; producen siempre una estructura modular de **4 archivos HCL** más scripts operativos:
-1. **`provider.tf`**: Bloque `terraform { required_version = ">= 1.5.0" ... }` y configuración del `provider "aws"` o `provider "google"`.
-2. **`variables.tf`**: Variables parametrizadas (`aws_region`, `gcp_project_id`, `environment`, `instance_type`, `db_password` con `sensitive = true`, `github_token`, `enable_vm_import`).
+1. **`provider.tf`**: Bloque `terraform { required_version = ">= 1.5.0" ... }` y configuración del `provider "aws"`.
+2. **`variables.tf`**: Variables parametrizadas (`aws_region`, `environment`, `instance_type`, `ssh_ingress_cidr`, `db_ingress_cidr`, `db_password` con `sensitive = true`, `github_token`, `enable_vm_import`).
 3. **`main.tf`**: Topología completa de red, seguridad, cómputo, almacenamiento, bases de datos y cloud-init (`user_data_base64 = base64gzip(file("${path.module}/user_data.sh"))`).
 4. **`outputs.tf`**: Salidas listas para consumo automatizado (`public_ip`, `application_url`, `frontend_url`, `backend_api_url`, `ssh_command`, `rds_endpoint`, `migration_summary`).
 
@@ -249,17 +242,18 @@ stateDiagram-v2
 
 ### 2.7 Capa 7: Consola de Despliegue Interactivo en la Nube Real (`CloudDeploymentRunner`)
 
-Implementado en [`backend/app/migration/cloud_deployer.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/cloud_deployer.py), este motor permite al usuario desplegar los artefactos generados directamente desde la interfaz web de CloudMove hacia su cuenta real de AWS o GCP:
+Implementado en [`backend/app/migration/cloud_deployer.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/cloud_deployer.py), este motor permite al usuario desplegar los artefactos generados directamente desde la interfaz web de CloudMove hacia **su propia cuenta real de AWS** con aislamiento multi-usuario estricto:
+- Inyecta únicamente variables `AWS_*` permitidas desde las credenciales efímeras enviadas en la petición HTTP actual (`_build_env` con `AWS_EC2_METADATA_DISABLED=true` cuando no se envían credenciales explícitas y `ALLOW_SERVER_AWS_FALLBACK=false`), bloqueando cualquier acceso al rol IAM de la instancia EC2 anfitriona.
 - Ejecuta subprocesos reales de `/usr/bin/terraform` (`init`, `validate`, `plan`, `apply -auto-approve`, `refresh`, `destroy -auto-approve`, `force-unlock`) capturando `stdout`/`stderr` línea por línea en tiempo real mediante hilos lectores asíncronos.
 - **Auto-reparación de RDS huérfanos (`_auto_import_orphaned_rds`)**: Si un `terraform apply` previo fue interrumpido mientras AWS creaba una instancia RDS lenta (10 min) y el reintento arroja `DBInstanceAlreadyExists`, CloudMove intercepta el error, ejecuta automáticamente `terraform import aws_db_instance.<addr> <db_id>` y reanuda el `apply` sin intervención manual.
 - **Diagnóstico Inteligente de AWS Academy Learner Lab**: Detecta errores de sesión expirada (`InvalidClientTokenId`, `ExpiredToken`) o revocación de credenciales por creación no permitida de llaves IAM (`voc-cancel-cred`), mostrando instrucciones exactas de remediación.
-- **Inspección en Vivo de `terraform.tfstate` (`inspect_tfstate`)**: Lee el archivo de estado real de Terraform para extraer todas las instancias, discos, IPs públicas, DNS de balanceadores, endpoints de bases de datos y construir las URLs clicables (`http://<IP>:3000`, `http://<IP>:8000/docs`, comando `ssh`) en el panel del usuario.
+- **Inspección en Vivo de `terraform.tfstate` (`inspect_tfstate`)**: Lee el archivo de estado real de Terraform para extraer todas las instancias, discos, IPs públicas, DNS de balanceadores, endpoints de bases de datos y construir las URLs clicables en el panel del usuario.
 
 ---
 
 ## 3. Caso de Uso 1 (`app_source`): Migración desde GitHub / Código Fuente Paso a Paso desde Cero
 
-Esta sección explica con precisión quirúrgica cómo funciona el **Caso de Uso 1** desde el instante en que el usuario introduce una URL de GitHub (o ruta de código fuente) hasta que la aplicación queda ejecutándose en AWS o GCP con su frontend, su backend API y su base de datos restaurada.
+Esta sección explica con precisión quirúrgica cómo funciona el **Caso de Uso 1** desde el instante en que el usuario introduce una URL de GitHub (o ruta de código fuente) hasta que la aplicación queda ejecutándose en **AWS** con su frontend, su backend API y su base de datos restaurada.
 
 ### 3.1 Visión End-to-End del Caso 1
 
@@ -267,18 +261,18 @@ Esta sección explica con precisión quirúrgica cómo funciona el **Caso de Uso
 sequenceDiagram
     autonumber
     actor User as Operador / Usuario
-    participant API as FastAPI (/api/v1/migrations/app/inspect)
-    participant GH as GitHubConnector (github_connector.py)
+    participant API as FastAPI (/api/v1/migration/use-case-1/inspect)
+    participant GH as GitHubConnector (discovery/github_connector.py)
     participant AM as AppMigrator (app_migrator.py)
     participant CAT as Catálogo de Transformación & Viabilidad
-    participant CMIR as CMIR v2.1 + Adapters (AWS/GCP)
+    participant CMIR as CMIR v2.1 + AWSAdapter
     participant AI as AI/Container Synthesizer (ai_translator.py)
     participant CLOUD as CloudDeploymentRunner (Terraform Live)
 
-    User->>API: Ingresa URL de GitHub + Ref (main) + Proveedor (AWS/GCP)
-    API->>GH: parse_github_url() & fetch_and_analyze_github_repository()
+    User->>API: Ingresa URL de GitHub + Ref (main) + Credenciales efímeras AWS
+    API->>GH: parse_repo_url() & ephemeral_checkout()
     GH->>GH: Consulta API GitHub (/commits/main) -> Fija Commit SHA (40 hex)
-    GH->>GH: Descarga Tarball en Sandbox temporal (mkdtemp) con filtro Anti-Zip-Slip
+    GH->>GH: Descarga Tarball en Sandbox temporal (mkdtemp) con filtro Anti-Tar-Slip y Symlink Guard
     GH->>AM: Entrega árbol de archivos en modo estático (CERO ejecución de código)
     AM->>AM: 1. scan_local_filesystem_tree() (Lenguajes, bytes, manifiestos)
     AM->>AM: 2. discover_app_components_and_code() (Tiers Docker Compose, Rutas FastAPI, Fetch JS, Supabase)
@@ -287,23 +281,23 @@ sequenceDiagram
     AM->>CAT: build_github_to_cloud_transformation_catalog() + evaluate_app_migration_viability()
     CAT-->>User: Presenta Topología + 6 Chequeos Pre-Flight + Opciones Interactivas de Transformación
     User->>API: Confirma decisiones (user_decisions) y solicita Generar Plan
-    API->>CMIR: build_application_cmir() -> DependencyResolver (BFS) -> AWSAdapter / GCPAdapter
+    API->>CMIR: build_application_cmir() -> DependencyResolver (BFS) -> AWSAdapter
     CMIR->>AI: generate_app_migration_artifacts() (main.tf, user_data.sh, docker-compose, migrate_database_data.sh)
     AI-->>User: Artefactos validados en 4 niveles listos para revisión (PLAN_READY)
     User->>CLOUD: Aprueba Plan (APPROVED) y ejecuta Despliegue en Vivo (terraform init -> plan -> apply)
-    CLOUD-->>User: Infraestructura activa + DB restaurada + URLs en vivo (:3000, :8000, /health)
+    CLOUD-->>User: Infraestructura activa + DB restaurada + URLs en vivo
 ```
 
 ---
 
-### 3.2 Paso 1: Ingesta desde GitHub, Pinning de Commit SHA y Sandbox Efímero Anti-Zip-Slip
+### 3.2 Paso 1: Ingesta desde GitHub, Pinning de Commit SHA y Sandbox Efímero Anti-Tar-Slip
 
-Todo comienza en [`backend/app/migration/github_connector.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/github_connector.py):
+Todo comienza en [`backend/app/discovery/github_connector.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/github_connector.py):
 
-1. **Validación y Normalización de URL (`parse_github_url`)**:
-   Valida la URL mediante la expresión regular [`GITHUB_URL_REGEX`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/github_connector.py#L22-L24), soportando tanto `https://github.com/<owner>/<repo>` como `git@github.com:<owner>/<repo>.git` e incluso subrutas `/tree/<branch>/<subpath>`.
+1. **Validación y Normalización de URL (`parse_repo_url`)**:
+   Valida la URL soportando formatos `https://github.com/<owner>/<repo>` y subrutas de rama/archivo.
 2. **Pinning Determinista del Commit SHA**:
-   En lugar de clonar a ciegas una rama móvil, [`fetch_and_analyze_github_repository()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/github_connector.py#L64-L162) realiza una petición autenticada (si se provee `github_token`) a:
+   En lugar de clonar a ciegas una rama móvil, [`resolve_and_pin_commit()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/github_connector.py#L351-L390) realiza una petición autenticada (token pasado transitoriamente en memoria sin persistirse) a:
    ```http
    GET https://api.github.com/repos/{owner}/{repo}/commits/{resolved_ref}
    ```
@@ -458,18 +452,18 @@ En el directorio `generated/<plan_slug>/`, el Caso 1 emite **13 artefactos listo
 
 | Archivo Generado | Propósito Técnico Exacto |
 | :--- | :--- |
-| `provider.tf`, `variables.tf`, `main.tf`, `outputs.tf` | Código Terraform modular validado. Incluye VPC, Subnets, Internet Gateway, Security Group (`22, 80, 443, 3000, 5432, 8000`), EC2/GCE con disco `gp3` de `30 GB`, RDS/Cloud SQL opcional, S3/GCS opcional e inyección de `user_data.sh` comprimido con `base64gzip(...)`. |
+| `provider.tf`, `variables.tf`, `main.tf`, `outputs.tf` | Código Terraform modular validado. Incluye VPC, Subnets, Internet Gateway, Security Group (`22, 80, 443, 3000, 5432, 8000`, con `22` y `5432` parametrizados mediante `ssh_ingress_cidr` y `db_ingress_cidr`), EC2 o ALB+ASG con disco `gp3` de `30 GB`, RDS opcional, S3 opcional e inyección de `user_data.sh` comprimido con `base64gzip(...)`. |
 | `user_data.sh` | Script Bash Cloud-Init que se ejecuta automáticamente como `root` durante el primer arranque de la instancia en la nube. |
 | `Dockerfile.cloudmove` | Dockerfile multi-lenguaje auto-generado (Python/Node/Java/Go) por si el repositorio original carece de uno. |
 | `docker-compose.cloudmove.yml` | Orquestación de contenedores con `restart: always`, healthchecks y servicio `db` (`postgis/postgis:17-3.5` o `postgres:16-alpine`) con volumen persistente `pgdata`. |
 | `migrate_database_data.sh` | Script automatizado que restaura dumps `PGDMP` (`.dump`) o `.sql`, pre-crea roles/esquemas de Supabase + extensión `postgis`, ejecuta scripts semilla y verifica el conteo exacto de filas (`SELECT COUNT(*)`). |
-| `{app_slug}.service` | Unidad `systemd` que garantiza que el stack de Docker Compose vuelva a levantarse automáticamente si la instancia EC2/GCE se reinicia. |
+| `{app_slug}.service` | Unidad `systemd` que garantiza que el stack de Docker Compose vuelva a levantarse automáticamente si la instancia EC2 se reinicia. |
 | `.env.cloud.template` | Plantilla de variables de entorno con todos los nombres descubiertos y secretos redactados. |
 | `smoke_test.sh` | Script de verificación post-despliegue que comprueba por HTTP el endpoint `/health` y los puertos expuestos con reintentos exponenciales. |
 | `app_migration_diff_report.json` | Reporte auditable JSON con el diff entre el código fuente origen y la topología cloud generada. |
 | `DEPLOYMENT_INSTRUCTIONS.md` | Guía paso a paso con la arquitectura, comandos y checklist de cutover. |
 
-#### ¿Qué hace exactamente `user_data.sh` cuando arranca la máquina en AWS o GCP?
+#### ¿Qué hace exactamente `user_data.sh` cuando arranca la máquina en AWS?
 1. **Expansión del Sistema de Archivos y Creación de Swap (`2 GB`)**: Ejecuta `growpart` / `resize2fs` sobre el volumen raíz de 30 GB y crea `/swapfile` (`2048 MB`) para evitar muertes por falta de RAM (*OOM Killer*) en instancias `t3.micro` (1 GB RAM) mientras compila paquetes de Python o TypeScript.
 2. **Instalación de Docker Engine, Docker Compose v2 y Clientes PostgreSQL**: Instala `docker.io`, `docker-compose-v2`, `git`, `postgresql-client` (`pg_restore`, `psql`) y `jq`.
 3. **Clonación del Repositorio en el Commit Exacto**: Clona el repositorio en `/opt/cloudmove/<app_slug>` y hace `git checkout <commit_sha>`.
@@ -485,7 +479,7 @@ En el directorio `generated/<plan_slug>/`, el Caso 1 emite **13 artefactos listo
 
 ## 4. Caso de Uso 2 (`vm_image`): Migración de Imágenes de Disco, ISO, VM y Captura de SO en Vivo Paso a Paso
 
-El **Caso de Uso 2** aborda el escenario donde la carga de trabajo es una **máquina completa**: ya sea un archivo de imagen de disco o electrodoméstico virtual (`VMDK`, `QCOW2`, `VHD`, `VHDX`, `RAW`, `OVA`, `OVF`) exportado desde VMware ESXi, VirtualBox, Hyper-V o KVM/QEMU, o bien un **Sistema Operativo en Vivo (Linux físico o VM)** del cual se desea capturar el estado real de sus discos, particiones, paquetes, usuarios, servicios, procesos y archivos para llevarlo a AWS, GCP o hipervisores locales.
+El **Caso de Uso 2** aborda el escenario donde la carga de trabajo es una **máquina completa**: ya sea un archivo de imagen de disco o electrodoméstico virtual (`VMDK`, `QCOW2`, `VHD`, `VHDX`, `RAW`, `OVA`, `OVF`) exportado desde VMware ESXi, VirtualBox, Hyper-V o KVM/QEMU, o bien un **Sistema Operativo en Vivo (Linux físico o VM)** del cual se desea capturar el estado real de sus discos, particiones, paquetes, usuarios, servicios, procesos y archivos para llevarlo a **AWS** o hipervisores locales.
 
 ### 4.1 ¿Qué Hace Funcionar al Caso 2 por Dentro?
 
@@ -520,7 +514,7 @@ flowchart TD
 
     VAL --> CAT["Catálogo Interactivo de Transformación + 4 Salvaguardas AWS Academy<br/>(build_vm_image_transformation_catalog)"]
     CAT --> STG["Copia Verificada en Staging (source_sha256 == staging_sha256)<br/>+ Conversión qemu-img convert (si QCOW2 -> RAW)"]
-    STG --> ART["Generación de Artefactos Cloud & Hipervisor:<br/>Terraform (AWS/GCP) + user_data.sh (Portal en Vivo)<br/>+ launch_virtualbox.sh + launch_vmware.sh (.vmx)"]
+    STG --> ART["Generación de Artefactos AWS & Hipervisor:<br/>Terraform AWS + user_data.sh (Portal en Vivo)<br/>+ launch_virtualbox.sh + launch_vmware.sh (.vmx)"]
 ```
 
 ---
@@ -584,7 +578,7 @@ Cuando el operador selecciona capturar la máquina en vivo (`capture_live_os=Tru
 
 ### 4.4 ¿Cómo se Valida la Imagen? Bloqueadores, Remediación de Boot/Drivers y 8 Dimensiones de Fidelidad
 
-Una vez inspeccionada la imagen (por Modo A o Modo B), [`evaluate_vm_image_compatibility()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/image_migrator.py#L1697-L1988) evalúa si la máquina puede arrancar de forma segura en AWS o GCP.
+Una vez inspeccionada la imagen (por Modo A o Modo B), [`evaluate_vm_image_compatibility()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/image_migrator.py) evalúa si la máquina puede arrancar de forma segura en AWS.
 
 #### 1. Los 4 Bloqueadores Críticos (`blockers`)
 Si ocurre cualquiera de estas 4 condiciones, CloudMove marca `compatible = False` y detiene el aprovisionamiento hasta que se corrija:
@@ -594,17 +588,15 @@ Si ocurre cualquiera de estas 4 condiciones, CloudMove marca `compatible = False
 4. **`require_live_memory_state = True`**: Si el usuario exige explícitamente preservar el estado volátil de la memoria RAM o las conexiones TCP abiertas sin corte, CloudMove bloquea la migración basada en imagen explicando la limitación física documentada en [`ADR-004`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/docs/ADR/ADR-004-vm-image-migration-fidelity-and-limitations.md): *la importación de imágenes de disco o replicación de bloques migra el estado persistente en disco, nunca la memoria RAM volátil ni los sockets TCP en vuelo*.
 
 #### 2. Validación de Formato, Bootloader y Drivers Paravirtuales (`remediation_steps`)
-CloudMove verifica y planifica automáticamente las remediaciones necesarias para el hipervisor de destino:
+CloudMove verifica y planifica automáticamente las remediaciones necesarias para AWS EC2:
 - **Conversión Automática de Formato (`conversion_plan`)**:
   - **AWS (`ec2:ImportImage`)** acepta nativamente `VMDK`, `VHD`, `VHDX`, `RAW` y `OVA`. Si la imagen de entrada es **`QCOW2`**, CloudMove programa una conversión sin pérdida (`qemu-img convert -f qcow2 -O raw <staging.qcow2> <staging.raw>`) trabajando **exclusivamente sobre la copia en staging**.
-  - **GCP (`compute.images.insert`)** acepta `RAW` (empaquetado como `disk.raw` dentro de `.tar.gz`), `VMDK`, `VHD`, `VHDX`, `QCOW2` y `OVA`.
 - **Inyección de Drivers Paravirtuales de Red y Almacenamiento**:
   - En **AWS (Hipervisor Nitro — familias `t3`, `m5`, `c5`, `r6i`)**: verifica que el `initramfs` (Linux) o el registro de controladores (Windows) incluya los módulos **`ena`** (*Elastic Network Adapter*) y **`nvme` / `nvme_core`** (ya que Nitro expone los volúmenes EBS como dispositivos `/dev/nvme0n1`, no como `/dev/xvda`). Si faltan, añade el paso de remediación `dracut -f --add-drivers 'ena nvme nvme_core'` / `update-initramfs -u`.
-  - En **GCP (Compute Engine)**: verifica la presencia de los módulos VirtIO **`virtio_blk`**, **`virtio_scsi`**, **`virtio_net`** y **`gvnic`**.
 - **Normalización de `/etc/fstab` a `UUID=`**:
   Si el archivo `/etc/fstab` de la máquina origen monta particiones por nombre de dispositivo físico (`/dev/sda1`, `/dev/sdb1`), al arrancar en AWS Nitro (donde los discos pasan a llamarse `/dev/nvme0n1p1`) el arranque caería en *emergency mode*. CloudMove normaliza los montajes para usar `UUID=<blkid>` o `LABEL=`.
 - **Reconfiguración de Red DHCP y Consola Serial (`ttyS0`)**:
-  Elimina reglas persistentes de `udev` (`70-persistent-net.rules`) que atan la configuración de red a la dirección MAC antigua de VMware/VirtualBox, habilita DHCP para que la instancia tome su IP privada de la VPC de AWS/GCP, y añade `console=ttyS0,115200n8` en `/etc/default/grub` para diagnóstico desde la consola serial de EC2/GCE.
+  Elimina reglas persistentes de `udev` (`70-persistent-net.rules`) que atan la configuración de red a la dirección MAC antigua de VMware/VirtualBox, habilita DHCP para que la instancia tome su IP privada de la VPC de AWS, y añade `console=ttyS0,115200n8` en `/etc/default/grub` para diagnóstico desde la consola serial de EC2.
 
 #### 3. Las 8 Dimensiones de Fidelidad y el Reporte Diff (`generate_source_vs_target_diff_report`)
 Para que el usuario sepa exactamente qué se preserva al 100%, qué se adapta y qué no se transfiere, CloudMove evalúa las **8 dimensiones de fidelidad** y genera `inventory_diff_report.json`:
@@ -612,24 +604,24 @@ Para que el usuario sepa exactamente qué se preserva al 100%, qué se adapta y 
 | # | Dimensión de Fidelidad | Estado en CloudMove | Qué Ocurre Exactamente |
 | :---: | :--- | :--- | :--- |
 | **1** | **Sistema Operativo, Kernel y Usuarios** | `preserved` | Se conserva la distribución, versión, cuentas de usuario, UIDs/GIDs, hashes y permisos. |
-| **2** | **Volúmenes de Disco, Particiones y Archivos** | `preserved_with_uuid_normalization` | Todos los volúmenes (`root` + discos de datos secundarios) se mapean a volúmenes EBS (`gp3`) o Persistent Disks (`pd-balanced`), normalizando `/etc/fstab` a `UUID=`. |
+| **2** | **Volúmenes de Disco, Particiones y Archivos** | `preserved_with_uuid_normalization` | Todos los volúmenes (`root` + discos de datos secundarios) se mapean a volúmenes EBS (`gp3`), normalizando `/etc/fstab` a `UUID=`. |
 | **3** | **Paquetes Instalados, Binarios y Runtimes** | `preserved` | Los paquetes `.deb`/`.rpm`, librerías en `/usr` y aplicaciones en `/opt` o `/srv` permanecen intactos en el disco o manifiesto de restauración. |
 | **4** | **Servicios del Sistema (`systemd`) y Tareas (`cron`)** | `preserved` | Todas las unidades `.service` habilitadas y los jobs de `crontab` / timers se mantienen activos tras el arranque. |
-| **5** | **Configuración de Red, Firewalls y Puertos** | `adapted_to_cloud_vpc` | Las IPs estáticas on-premise y MACs fijas se adaptan a DHCP dentro de la VPC de AWS/GCP, y los puertos TCP/UDP descubiertos por `ss -tulpn` se traducen a reglas de `aws_security_group` o `google_compute_firewall`. |
-| **6** | **Arranque (UEFI/BIOS) y Drivers de Hipervisor** | `remediated_automatically` | El modo `UEFI` o `Legacy BIOS` se configura en la AMI/Instancia, y se aseguran los drivers `ena`/`nvme` (AWS) o `virtio`/`gvnic` (GCP). |
+| **5** | **Configuración de Red, Firewalls y Puertos** | `adapted_to_cloud_vpc` | Las IPs estáticas on-premise y MACs fijas se adaptan a DHCP dentro de la VPC de AWS, y los puertos TCP/UDP descubiertos por `ss -tulpn` se traducen a reglas de `aws_security_group`. |
+| **6** | **Arranque (UEFI/BIOS) y Drivers de Hipervisor** | `remediated_automatically` | El modo `UEFI` o `Legacy BIOS` se configura en la AMI/Instancia, y se aseguran los drivers `ena`/`nvme` de AWS Nitro. |
 | **7** | **Consistencia Transaccional de Bases de Datos en Disco** | `verified_by_consistency_level` | Validada mediante `application_quiesced_snapshot` (`os.sync()`) o `cold_disk_image` (`dirty-flag == False`). |
 | **8** | **Estado Volátil de Memoria RAM y Sockets TCP Activos** | `not_transferred_by_design` | Documentado explícitamente: la RAM volátil y las sesiones TCP en vuelo se reinician limpiamente en el primer boot de la instancia en la nube. |
 
 ---
 
-### 4.5 Matriz Oficial de Estrategias: Replicación Continua (MGN / Migrate to VMs) vs Importación de Imagen
+### 4.5 Matriz Oficial de Estrategias: Replicación Continua (`AWS MGN`) vs Importación de Imagen
 
-El módulo [`backend/app/migration/replication_and_import.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/replication_and_import.py) implementa la función [`select_machine_migration_strategy()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/replication_and_import.py#L106-L185), que selecciona e invoca los servicios nativos de AWS (`boto3`) y GCP (`google-cloud-compute` / `vmmigration`):
+El módulo [`backend/app/migration/replication_and_import.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/replication_and_import.py) implementa la función [`select_machine_migration_strategy()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/replication_and_import.py#L106-L185), que selecciona e invoca los servicios nativos de AWS (`boto3`):
 
-| Tipo de Activo Origen | Destino AWS | Destino GCP | Cuándo se Usa y Qué APIs Invoca |
-| :--- | :--- | :--- | :--- |
-| **Servidor Físico o VM en Vivo con Agente / Conector de Hipervisor** (`live_server`, `hypervisor_vm` con requerimiento de corte mínimo) | **AWS Application Migration Service (`aws_mgn`)** | **GCP Migrate to Virtual Machines (`gcp_vmmigration`)** | Cuando se requiere **replicación continua a nivel de bloque** con *cutover* de pocos minutos. Usa `boto3.client("mgn")` (`describe_source_servers`, `start_Replication`, `start_test`, `start_cutover`) o la API `vmmigration.googleapis.com`. |
-| **Archivo de Imagen de Disco / Appliance Exportado o Snapshot de Disco** (`disk_image`: `VMDK`, `QCOW2`, `VHD`, `VHDX`, `RAW`, `OVA`) | **AWS VM Import/Export (`aws_vm_import`)** o **Rehidratación Cloud-Init (`autonomous_cloud_init`)** | **GCP Compute Engine Image Import (`gcp_image_import`)** | Sube el disco desde staging hacia un bucket S3 (`aws_s3_bucket`) o GCS (`google_storage_bucket`) e invoca `ec2:ImportImage` (`describe_import_image_tasks`) para registrar una AMI privada, o `compute.images.insert` en GCP. |
+| Tipo de Activo Origen | Destino AWS | Cuándo se Usa y Qué APIs Invoca |
+| :--- | :--- | :--- |
+| **Servidor Físico o VM en Vivo con Agente / Conector de Hipervisor** (`live_server`, `hypervisor_vm` con requerimiento de corte mínimo) | **AWS Application Migration Service (`aws_mgn`)** | Cuando se requiere **replicación continua a nivel de bloque** con *cutover* de pocos minutos. Usa `boto3.client("mgn")` (`describe_source_servers`, `start_Replication`, `start_test`, `start_cutover`). |
+| **Archivo de Imagen de Disco / Appliance Exportado o Snapshot de Disco** (`disk_image`: `VMDK`, `QCOW2`, `VHD`, `VHDX`, `RAW`, `OVA`) | **AWS VM Import/Export (`aws_vm_import`)** o **Rehidratación Cloud-Init (`autonomous_cloud_init`)** | Sube el disco desde staging hacia un bucket S3 (`aws_s3_bucket`) e invoca `ec2:ImportImage` (`describe_import_image_tasks`) para registrar una AMI privada, o despliega mediante Cloud-Init autónomo compatible con AWS Academy. |
 
 ---
 
@@ -668,9 +660,9 @@ Durante la generación de artefactos ([`generate_vm_image_migration_artifacts()`
    - Si el formato de entrada es `QCOW2` y el destino es AWS, ejecuta `/usr/bin/qemu-img convert -f qcow2 -O raw` **únicamente sobre la copia en staging**, generando el archivo `.raw` listo para S3 y registrando su nuevo hash SHA-256 (`converted_sha256`).
 
 2. **Artefactos Emitidos en `generated/<plan_slug>/`**:
-   Además de los 4 archivos de Terraform (`provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`) y `user_data.sh`, el Caso 2 genera herramientas para desplegar la máquina tanto en la nube como en hipervisores locales:
-   - **`deploy_to_aws.sh` / `deploy_to_gcp.sh`**: Script automatizado que crea el bucket S3/GCS, sube el archivo de imagen desde staging (`aws s3 cp` / `gsutil cp`), ejecuta el flujo de importación y aplica el plan de Terraform.
-   - **`create_full_raw_disk_clone.sh`**: Script de clonación de bloques físicos (`dd` / `qemu-img convert`) con soporte para destino `local`, streaming directo a `s3` o streaming directo a `gcs`.
+   Además de los 4 archivos de Terraform (`provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`) y `user_data.sh`, el Caso 2 genera herramientas para desplegar la máquina tanto en AWS como en hipervisores locales:
+   - **`deploy_to_aws.sh`**: Script automatizado que sube el archivo de imagen al bucket S3 configurado, ejecuta el flujo de importación y aplica el plan de Terraform.
+   - **`create_full_raw_disk_clone.sh`**: Script de clonación de bloques físicos (`dd` / `qemu-img convert`) con soporte para destino `local` o streaming directo a `s3`.
    - **`restore_system_image.sh`**: Script de restauración post-arranque que reinstala la lista exacta de paquetes (`dpkg`/`rpm`), recrea usuarios/grupos, aplica `/etc/sysctl.conf` y habilita los servicios `systemd`.
    - **`launch_virtualbox.sh`**: Script listo para ejecutar en la máquina local que convierte la imagen de staging a formato **`.vdi`** al vuelo (`VBoxManage convertfromraw` o `qemu-img convert -O vdi`), registra una máquina virtual en **Oracle VirtualBox** (`VBoxManage createvm`), configura RAM, CPUs, controlador SATA, adaptador de red con port-forwarding (`8080 -> 80`, `2222 -> 22`) y la arranca (`VBoxManage startvm`).
    - **`launch_vmware.sh` + `<plan_slug>.vmx`**: Genera el archivo de descriptor de máquina virtual `.vmx` para **VMware Workstation / Player / Fusion**, convierte la imagen a `.vmdk` si es necesario (`qemu-img convert -O vmdk`) e inicia la VM con `vmrun start` o `vmplayer`.
@@ -680,15 +672,15 @@ Durante la generación de artefactos ([`generate_vm_image_migration_artifacts()`
 
 ### 4.8 Rehidratación Autónoma Cloud-Init y Portal Web de Telemetría en Vivo
 
-Cuando se despliega el Caso 2 en AWS o GCP mediante la consola interactiva de CloudMove, el script `user_data.sh` ([`_generate_vm_rehydration_user_data_sh()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/image_migrator.py#L2459-L2966)) realiza la **rehidratación completa en vivo**:
+Cuando se despliega el Caso 2 en AWS mediante la consola web de CloudMove, el script `user_data.sh` realiza la **rehidratación completa en vivo**:
 
-1. **Extracción de Archivos Reales Capturados (`/etc/cloudmove_migrated_root`)**:
-   Decodifica el bundle `os_real_files_bundle.tar.gz` incrustado en Base64 y extrae en `/etc/cloudmove_migrated_root/` todos los archivos reales capturados de la máquina origen (`/etc/os-release`, `/etc/hostname`, `/etc/hosts`, `/etc/fstab`, `/etc/sysctl.conf`, `/etc/crontab`, unidades `systemd` y configuraciones).
+1. **Extracción de Archivos Reales Capturados (`/opt/cloudmove/os_capture/rootfs`)**:
+   Extrae en `/opt/cloudmove/os_capture/rootfs/` (y refleja en el volumen EBS `/mnt/cloudmove_ebs/rootfs/`) los archivos de configuración reales capturados del origen (`/etc/os-release`, `/etc/hostname`, `/etc/hosts`, `/etc/fstab`, `/etc/sysctl.conf`, etc.), además de aceptar paquetes incrementales por chunks desde staging con validación segura Anti-Tar-Slip y bloqueo de symlinks/traversals.
 2. **Recreación de Usuarios Humanos y Aplicación de Parámetros de Kernel**:
-   Recrea los usuarios humanos descubiertos en la máquina origen (`useradd -m -s /bin/bash`), aplica los parámetros de kernel de `/etc/sysctl.conf` y monta automáticamente cualquier volumen EBS / Persistent Disk secundario en `/mnt/cloudmove_ebs` registrándolo por `UUID=` en `/etc/fstab`.
+   Recrea los usuarios humanos descubiertos en la máquina origen (`useradd -m -s /bin/bash`), aplica los parámetros de kernel de `/etc/sysctl.conf` y monta automáticamente cualquier volumen EBS secundario en `/mnt/cloudmove_ebs` registrándolo por `UUID=` en `/etc/fstab`.
 3. **Portal Web Interactivo y Explorador de Archivos en Vivo (`cloudmove-os-telemetry.service`)**:
-   Para que el operador pueda verificar visualmente desde su navegador que la máquina migrada está viva y contiene toda la información capturada del sistema operativo origen, `user_data.sh` registra y levanta el servicio `systemd` `cloudmove-os-telemetry.service` (con un servidor multihilo en Python que escucha simultáneamente en los puertos **`80`**, **`3000`** y **`8000`**):
-   - **`GET /` (Dashboard Interactivo en Vivo)**: Muestra el estado en tiempo real de la instancia EC2/GCE (Uptime, Load Average, RAM libre/usada, discos montados con `df -h`, tabla de comparación entre el disco físico origen y el volumen EBS en la nube), junto con pestañas interactivas que permiten explorar:
+   Para que el operador pueda verificar visualmente desde su navegador que la máquina migrada está viva y contiene toda la información capturada del sistema operativo origen, `user_data.sh` registra y levanta el servicio `systemd` `cloudmove-os-telemetry.service` (con un servidor multihilo en Python que escucha en los puertos **`80`**, **`3000`** y **`8000`**):
+   - **`GET /` (Dashboard Interactivo en Vivo)**: Muestra el estado en tiempo real de la instancia EC2 (Uptime, Load Average, RAM libre/usada, discos montados con `df -h`, tabla de comparación entre el disco físico origen y el volumen EBS en la nube).
      - El **Explorador del Sistema de Archivos Capturado** (`/etc`, `/opt`, `/var`, `/home`, `/usr/local`, `/srv`) con permisos, propietarios y visor de contenido de los archivos reales extraídos en `/etc/cloudmove_migrated_root`.
      - La tabla de **Procesos Activos y Puertos de Red** capturados de la máquina origen.
      - El listado completo de **Paquetes Instalados (`dpkg`/`rpm`), Servicios `systemd`, Usuarios y Tareas `cron`**.
@@ -721,25 +713,29 @@ Para entornos empresariales con decenas o cientos de servidores distribuidos en 
 CapstoneProject_TI/
 ├── backend/
 │   ├── app/
-│   │   ├── adapters/                  # Adaptadores de proveedor Cloud (AWS y GCP) + Validador de 4 niveles
+│   │   ├── adapters/                  # Adaptador exclusivo AWS + Validador de 4 niveles
 │   │   │   ├── base.py                # BaseProviderAdapter y validate_artifacts()
-│   │   │   ├── aws_adapter.py         # Traducción CMIR -> Terraform AWS Provider (~> 5.0)
-│   │   │   └── gcp_adapter.py         # Traducción CMIR -> Terraform Google Provider (~> 5.0)
+│   │   │   └── aws_adapter.py         # Traducción CMIR -> Terraform AWS Provider (~> 5.0)
+│   │   ├── core/                      # Controles transversales de seguridad y plano de control
+│   │   │   └── security.py            # Protección SSRF DNS/redirects, validate_safe_id e IMDSv2 guard
 │   │   ├── api/routers/               # Endpoints FastAPI REST
 │   │   │   ├── migration.py           # Orquestación, Casos 1, 2 y 3, Catálogos de Transformación y Cloud Deploy
-│   │   │   ├── discovery.py           # Ingesta osquery, escaneo cloud real y campañas
+│   │   │   ├── discovery.py           # Ingesta osquery, escaneo AWS multi-región real y campañas
 │   │   │   ├── graph.py               # Consultas al grafo y resolución de dependencias BFS
+│   │   │   ├── architecture.py        # Exportación Archify + vistas del subgrafo CMIR
 │   │   │   ├── terraform.py           # Generación y descarga de paquetes Terraform
-│   │   │   └── agents.py              # Enrolamiento, heartbeat y tareas de agentes remotos
+│   │   │   └── agents.py              # Enrolamiento, heartbeat con anti-replay nonce y tareas de agentes
 │   │   ├── cmir/                      # Representación Intermedia Neutral CMIR v2.1
 │   │   │   ├── models.py              # CMIRGraph, CMIRNode, CMIRRelationship, CMIREvidence, Niveles 0..8
 │   │   │   └── builder.py             # CMIRBuilder y validación de invariantes del grafo
 │   │   ├── dependencies/              # Motor de resolución de dependencias
 │   │   │   └── resolver.py            # DependencyResolver (BFS, separación epistémica e is_shared)
-│   │   ├── discovery/                 # Parsers de telemetría de infraestructura
+│   │   ├── discovery/                 # Conectores y parsers de telemetría de infraestructura
+│   │   │   ├── github_connector.py    # Pinning SHA en GitHub + Tarball sandbox Anti-Tar-Slip
 │   │   │   ├── osquery_parser.py      # Normalización de snapshots osquery -> CMIR v2.1
 │   │   │   ├── campaigns.py           # Campañas por fases y reconciliación de identidad canónica
-│   │   │   └── cloud_connector.py     # Descubrimiento real en AWS (boto3) y GCP + Drift Detection
+│   │   │   ├── connectors.py          # Conectores VMware/Proxmox + SecretRedactor + SSRF Guard
+│   │   │   └── cloud_live_discovery.py # Descubrimiento multi-región real en AWS (boto3) + Drift Detection
 │   │   ├── generators/                # Síntesis de Infraestructura como Código
 │   │   │   ├── terraform.py           # Generador modular HCL (provider.tf, variables.tf, main.tf, outputs.tf)
 │   │   │   └── ai_translator.py       # Orquestador Híbrido (Gemini + Fallback Determinista HA & Docker)
@@ -747,43 +743,54 @@ CapstoneProject_TI/
 │   │   │   └── builder.py             # InfrastructureGraphBuilder (networkx.DiGraph)
 │   │   ├── migration/                 # Motores de los Casos de Uso y Ejecución Cloud
 │   │   │   ├── orchestrator.py        # MigrationOrchestrator (Máquina de 12 estados + Safety Guarantees)
-│   │   │   ├── github_connector.py    # Pinning SHA en GitHub + Sandbox efímero Anti-Zip-Slip
 │   │   │   ├── app_migrator.py        # Caso 1: AST/Regex, PGDMP parser, Catálogo y Artefactos App
 │   │   │   ├── image_migrator.py      # Caso 2: Forense binario, Captura de SO en vivo, Catálogo y Rehidratación
-│   │   │   ├── replication_and_import.py # Caso 2: Matriz MGN/VM Import (AWS) y Migrate to VMs/Image Import (GCP)
-│   │   │   └── cloud_deployer.py      # CloudDeploymentRunner (Streaming Terraform CLI + lectura de tfstate)
+│   │   │   ├── replication_and_import.py # Caso 2: Matriz AWS MGN y AWS VM Import/Export
+│   │   │   ├── uc2_staging.py         # Staging seguro por chunks y descarga autenticada para UC2
+│   │   │   └── cloud_deployer.py      # CloudDeploymentRunner (Terraform CLI aislado por petición + tfstate)
 │   │   ├── persistence/               # Almacenamiento Transaccional ACID
-│   │   │   └── transactional_db.py    # SQLite WAL, Optimistic Concurrency, Stage Locks e Idempotencia
+│   │   │   └── transactional_db.py    # SQLite WAL, Optimistic Concurrency, Stage Locks, Nonces e Idempotencia
 │   │   └── security/                  # Hardening, RBAC, Auditoría y Redacción de Secretos
 │   │       └── security_hardening.py  # SecretRedactor, RBAC y cadena de auditoría SHA-256
-│   └── tests/                         # Suite de pruebas automatizadas (Unitarias, Integración y E2E)
-├── frontend/                          # Interfaz Web Interactiva (Asistente de los 3 Casos de Uso + Visor de Grafo)
+│   └── tests/                         # Suite de pruebas automatizadas (Unitarias, Integración y Seguridad)
+├── cloudmove_agent/                   # Agente autónomo outbound para captura de servidores y SO locales
+├── deploy/aws/                        # Plantilla Terraform + user_data para desplegar CloudMove en AWS
+├── frontend/                          # Interfaz Web Interactiva React 19 + Vite (proxy Nginx /api -> :8000)
 ├── docs/                              # Documentación de Arquitectura y ADRs (ADR-001 a ADR-004)
 └── generated/                         # Directorio de salida de planes Terraform, copias en staging y capturas
 ```
 
-### 6.2 Ejecución Local del Proyecto
+### 6.2 Ejecución en Producción Web (AWS / Docker Compose) y Desarrollo Local
 
-1. **Iniciar el Backend (FastAPI en puerto `8000`)**:
+1. **Despliegue Web en Producción (Docker Compose + Nginx HTTPS Reverse Proxy)**:
+   ```bash
+   cp .env.example .env
+   # Configurar CORS_ORIGINS, CLOUDMOVE_API_URL y ALLOW_SERVER_AWS_FALLBACK=false
+   docker compose up -d --build
+   ```
+   - La plantilla en [`deploy/aws/`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/deploy/aws) aprovisiona CloudMove en EC2 detrás de Nginx (puertos `80`/`443` y `/api/* -> 127.0.0.1:8000`), con TLS automatizado por Certbot si se configura `domain_name` y SSH restringido por `allowed_ssh_cidrs`.
+
+2. **Desarrollo Local — Backend (FastAPI en puerto `8000`)**:
    ```bash
    cd backend
-   python3 -m venv venv
-   source venv/bin/activate
+   python3 -m venv .venv
+   source .venv/bin/activate
    pip install -r requirements.txt
-   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
    ```
-   - Documentación interactiva OpenAPI (Swagger UI): `http://localhost:8000/docs`
-   - Verificación de salud y estado de componentes: `http://localhost:8000/health`
+   - OpenAPI / Swagger UI: `http://127.0.0.1:8000/docs`
+   - Salud del sistema: `http://127.0.0.1:8000/health`
 
-2. **Iniciar el Frontend (en puerto `3000`)**:
+3. **Desarrollo Local — Frontend React + Vite (en puerto `3000`)**:
    ```bash
-   cd frontend
-   python3 -m http.server 3000
+   npm --prefix frontend install
+   npm --prefix frontend run dev -- --port 3000
    ```
-   - Interfaz gráfica principal de CloudMove: `http://localhost:3000`
+   - Interfaz web principal de CloudMove: `http://localhost:3000` (o `npm --prefix frontend run build` para generar el paquete de producción servido por Nginx).
 
-3. **Ejecutar la Suite de Pruebas**:
+4. **Ejecutar la Suite de Pruebas**:
    ```bash
-   cd backend
-   pytest -q
+   .venv/bin/python3 -m pytest -v
+   npm --prefix frontend run lint
+   npm --prefix frontend run build
    ```

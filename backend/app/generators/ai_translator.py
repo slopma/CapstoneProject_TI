@@ -37,6 +37,8 @@ import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
 
+from app.core.text_utils import slugify as _slug
+
 
 ARCHITECTURAL_SYSTEM_PROMPT = """Eres un Arquitecto Cloud Experto especializado en AWS, Alta Disponibilidad (High Availability), Contenerización con Docker y optimización inteligente de costos.
 Recibirás un JSON con la topología descubierta de una aplicación de GitHub.
@@ -67,11 +69,6 @@ RESTRICCIONES ESTRICTAS:
   "user_data_sh": "<script bash completo de user_data.sh>"
 }
 """
-
-
-def _slug(value: str) -> str:
-    cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", str(value or "app").strip().lower()).strip("-")
-    return cleaned or "app"
 
 
 def prepare_ai_payload(
@@ -311,7 +308,7 @@ CMD {cmd_str}
             "    restart: always",
             "    environment:",
             "      POSTGRES_USER: ${POSTGRES_USER:-postgres}",
-            "      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CloudMoveDB2026!}",
+            "      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}",
             "      POSTGRES_DB: ${POSTGRES_DB:-postgres}",
             "    ports:",
             '      - "5432:5432"',
@@ -355,12 +352,12 @@ CMD {cmd_str}
                 *(
                     [
                         "    environment:",
-                        "      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-CloudMoveDB2026!}@db:5432/${POSTGRES_DB:-postgres}",
+                        "      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-postgres}",
                         "      - DB_HOST=db",
                         "      - DB_PORT=5432",
                         "      - DB_NAME=${POSTGRES_DB:-postgres}",
                         "      - DB_USER=${POSTGRES_USER:-postgres}",
-                        "      - DB_PASSWORD=${POSTGRES_PASSWORD:-CloudMoveDB2026!}",
+                        "      - DB_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}",
                         "    depends_on:",
                         "      db:",
                         "        condition: service_healthy",
@@ -385,7 +382,7 @@ CMD {cmd_str}
             *(
                 [
                     "    environment:",
-                    "      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-CloudMoveDB2026!}@db:5432/${POSTGRES_DB:-postgres}",
+                    "      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}@db:5432/${POSTGRES_DB:-postgres}",
                     "    depends_on:",
                     "      db:",
                     "        condition: service_healthy",
@@ -442,7 +439,7 @@ def _conn():
     return psycopg2.connect(
         host=os.getenv("DB_HOST", "db"), port=int(os.getenv("DB_PORT", "5432")),
         dbname=os.getenv("DB_NAME", "postgres"), user=os.getenv("DB_USER", "postgres"),
-        password=os.getenv("DB_PASSWORD", "CloudMoveDB2026!"), connect_timeout=4
+        password=os.getenv("DB_PASSWORD") or os.getenv("POSTGRES_PASSWORD") or "", connect_timeout=4
     )
 
 class _Res:
@@ -611,7 +608,7 @@ def generate_container_user_data_sh(ai_payload: Dict[str, Any]) -> str:
     if include_db_container and not (use_repo_compose and compose_has_own_db):
         env_lines.extend([
             "POSTGRES_USER=${POSTGRES_USER:-postgres}",
-            "POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-CloudMoveDB2026!}",
+            "POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}",
             "POSTGRES_DB=${POSTGRES_DB:-postgres}",
         ])
     env_block = "\n".join(env_lines)
@@ -622,7 +619,7 @@ def generate_container_user_data_sh(ai_payload: Dict[str, Any]) -> str:
     compose_target = compose_file if use_repo_compose else "docker-compose.cloudmove.yml"
 
     import base64, gzip
-    from app.migration.app_migrator import _build_database_migration_script
+    from app.generators.db_migration_script import build_database_migration_script as _build_database_migration_script
     migrate_b64 = ""
     if has_bkp and not (use_repo_compose and compose_has_own_db):
         migrate_db_script_content = _build_database_migration_script(
@@ -854,8 +851,8 @@ if [ -n "${{CLOUDMOVE_RDS_HOST:-}}" ] && [ "${{CLOUDMOVE_RDS_HOST:-}}" != "__CLO
     PGPASSWORD="$CLOUDMOVE_RDS_PASSWORD" PGSSLMODE=require psql -h "$CLOUDMOVE_RDS_HOST" -U "${{CLOUDMOVE_RDS_USER:-cloudmove_admin}}" -d postgres -c "CREATE DATABASE \"$TARGET_DB_NAME\";" || true
   DB_HOST="$CLOUDMOVE_RDS_HOST" DB_PORT="5432" DB_NAME="$TARGET_DB_NAME" \
     DB_ADMIN_USER="${{CLOUDMOVE_RDS_USER:-cloudmove_admin}}" DB_ADMIN_PASSWORD="$CLOUDMOVE_RDS_PASSWORD" \
-    APP_DB_USER="${{APP_DB_USER:-bookstore_app}}" APP_DB_PASSWORD="${{APP_DB_PASSWORD:-change_me_for_local_development}}" \
-    INGEST_DB_USER="${{INGEST_DB_USER:-bookstore_ingest}}" INGEST_DB_PASSWORD="${{INGEST_DB_PASSWORD:-change_me_for_local_development}}" \
+    APP_DB_USER="${{APP_DB_USER:-app_user}}" APP_DB_PASSWORD="${{APP_DB_PASSWORD:-$CLOUDMOVE_RDS_PASSWORD}}" \
+    INGEST_DB_USER="${{INGEST_DB_USER:-ingest_user}}" INGEST_DB_PASSWORD="${{INGEST_DB_PASSWORD:-$CLOUDMOVE_RDS_PASSWORD}}" \
     PGSSLMODE=require bash "/opt/{app_slug}/database/rds/bootstrap.sh" || echo "[WARN] Revisa /var/log/cloudmove-user-data.log para detalles del bootstrap RDS."
 fi
 
@@ -938,14 +935,15 @@ def generate_cheap_infrastructure(
     ai_payload: Dict[str, Any],
     api_key: Optional[str] = None,
     model_name: str = "gemini-1.5-flash",
+    cmir_builder: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Step 3: Query Gemini LLM with Structured JSON Output to design the AWS infrastructure,
     validate the HCL with `AWSAdapter().validate_artifacts()`, and seamlessly fall back to
-    CloudMove's upgraded deterministic HA Containerized generator if offline or if no API key is set.
+    CloudMove's deterministic HA Containerized CMIR synthesis without upward layer coupling.
     """
     from app.adapters.aws_adapter import AWSAdapter
-    from app.migration.app_migrator import build_application_cmir
+    from app.cmir.builder import build_cmir_hierarchy
 
     effective_key = api_key or os.environ.get("GEMINI_API_KEY", "").strip()
     user_data_sh = generate_container_user_data_sh(ai_payload)
@@ -1073,7 +1071,77 @@ def generate_cheap_infrastructure(
         ],
     }
 
-    cmir = build_application_cmir(synthetic_discovery, target_provider="aws", deployment_mode="container")
+    if callable(cmir_builder):
+        cmir = cmir_builder(synthetic_discovery)
+    else:
+        slug = _slug(ai_payload.get("app_name", "app"))
+        compute_id = f"compute-{slug}-host"
+        identity_id = f"identity-{slug}-sa"
+        cmir_nodes: List[Dict[str, Any]] = [
+            {
+                "id": compute_id,
+                "canonical_id": f"asset:compute:{slug}",
+                "name": f"{synthetic_discovery['app_name']}-runtime-host",
+                "type": "container",
+                "category": "compute",
+                "provider": "aws",
+                "platform": synthetic_discovery["runtime"],
+                "epistemic_state": "observed",
+                "confidence": 0.99,
+                "metadata": {
+                    "is_primary_host": True,
+                    "deployment_mode": "container",
+                    "compute_architecture_choice": "ha_asg_alb_containerized",
+                    "disable_ha_alb_asg": False,
+                    "root_volume_size_gb": 30,
+                    "exposed_ports": synthetic_discovery["exposed_ports"],
+                    "health_endpoints": synthetic_discovery["health_endpoints"],
+                },
+            },
+            {
+                "id": identity_id,
+                "canonical_id": f"asset:identity:{slug}",
+                "name": f"{slug}-workload-role",
+                "type": "identity",
+                "category": "identity",
+                "provider": "aws",
+                "epistemic_state": "derived",
+                "confidence": 0.95,
+                "metadata": {"role_type": "IAM Instance Profile Role"},
+            },
+        ]
+        cmir_rels: List[Dict[str, Any]] = []
+        for dep in synthetic_discovery["dependencies"]:
+            cmir_nodes.append({
+                "id": dep["id"],
+                "canonical_id": f"asset:dep:{dep['id']}",
+                "name": dep["name"],
+                "type": dep["type"],
+                "category": "external" if dep["is_external_baas"] else "database",
+                "provider": "aws",
+                "engine": dep.get("engine", "postgres"),
+                "epistemic_state": "observed",
+                "confidence": 0.99,
+                "metadata": {
+                    "port": dep.get("port", 5432),
+                    "requires_data_migration": dep.get("requires_data_migration", False),
+                    "is_external_baas": dep.get("is_external_baas", False),
+                },
+            })
+            cmir_rels.append({
+                "source": compute_id,
+                "target": dep["id"],
+                "type": dep.get("relationship_type", "depends_on"),
+                "epistemic_state": "observed",
+                "confidence": 0.99,
+            })
+        cmir = build_cmir_hierarchy({
+            "name": f"ai-ha-{slug}",
+            "provider": "aws",
+            "resources": cmir_nodes,
+            "relationships": cmir_rels,
+        })
+
     iac = AWSAdapter().generate_iac(cmir)
     files = iac["files"]
 

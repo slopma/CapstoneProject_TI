@@ -26,14 +26,17 @@ logger = logging.getLogger("cloudmove")
 
 app = FastAPI(
     title="CloudMove Enterprise API",
-    description="Plataforma de abstracción de arquitectura, migración selectiva jerárquica y generación IaC multicloud",
+    description="Plataforma web de descubrimiento, modelado CMIR v2.1 y orquestación IaC hacia AWS",
     version="2.0.0",
 )
 
+_effective_origins = CORS_ORIGINS if CORS_ORIGINS else ["*"]
+_has_wildcard_origin = "*" in _effective_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=CORS_ORIGINS if CORS_ORIGINS else ["*"],
-    allow_credentials=True,
+    allow_origins=_effective_origins,
+    allow_credentials=not _has_wildcard_origin,
     allow_methods=["*"],
     allow_headers=["*"],
 )

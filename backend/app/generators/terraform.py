@@ -146,6 +146,30 @@ variable "github_token" {{
   sensitive   = true
   default     = ""
 }}
+
+variable "ssh_ingress_cidr" {{
+  description = "CIDR block allowed for SSH administration (port 22). Restrict to your IP/32 in production."
+  type        = string
+  default     = "0.0.0.0/0"
+}}
+
+variable "db_ingress_cidr" {{
+  description = "CIDR block allowed for database ingress (port 5432). Restricted to target VPC CIDR by default."
+  type        = string
+  default     = "10.0.0.0/16"
+}}
+
+variable "eks_cluster_role_arn" {{
+  description = "IAM Role ARN for Amazon EKS cluster (required when deploying aws_eks_cluster)"
+  type        = string
+  default     = ""
+}}
+
+variable "vm_import_s3_bucket" {{
+  description = "S3 bucket name holding staged VM images for AWS VM Import/Export"
+  type        = string
+  default     = ""
+}}
 """
 
     app_ingress_ports = {80, 443}
@@ -165,8 +189,8 @@ variable "github_token" {{
         and r.get("type") not in ("containerized_in_compose", "external_baas")
     ]
 
-    expose_db_port_externally = not any(
-        (r.get("metadata") or {}).get("expose_db_port_externally") is False
+    expose_db_port_externally = any(
+        (r.get("metadata") or {}).get("expose_db_port_externally") is True
         for r in resources
     )
     for r in resources:
@@ -192,7 +216,7 @@ variable "github_token" {{
             first_hp = meta["health_endpoints"][0]
             if isinstance(first_hp, str) and first_hp.startswith("/"):
                 health_check_path = first_hp
-        if expose_db_port_externally and (
+        if (
             r.get("type") in ("containerized_in_compose", "aws_db_instance")
             or meta.get("database_migration_plan")
             or "postg" in str(r.get("engine", "")).lower()
@@ -201,25 +225,36 @@ variable "github_token" {{
 
     sg_ingress_blocks = [
         '  ingress {',
-        '    description = "SSH administration access"',
+        '    description = "SSH administration access (parameterized CIDR)"',
         '    from_port   = 22',
         '    to_port     = 22',
         '    protocol    = "tcp"',
-        '    cidr_blocks = ["0.0.0.0/0"]',
+        '    cidr_blocks = [var.ssh_ingress_cidr]',
         '  }',
     ]
     for port in sorted(app_ingress_ports):
         if not isinstance(port, int) or port == 22 or port < 1 or port > 65535:
             continue
-        sg_ingress_blocks.extend([
-            '  ingress {',
-            f'    description = "Application TCP port {port}"',
-            f'    from_port   = {port}',
-            f'    to_port     = {port}',
-            '    protocol    = "tcp"',
-            '    cidr_blocks = ["0.0.0.0/0"]',
-            '  }',
-        ])
+        if port == 5432:
+            sg_ingress_blocks.extend([
+                '  ingress {',
+                '    description = "PostgreSQL TCP port 5432 (restricted via var.db_ingress_cidr)"',
+                '    from_port   = 5432',
+                '    to_port     = 5432',
+                '    protocol    = "tcp"',
+                '    cidr_blocks = ["0.0.0.0/0"]' if expose_db_port_externally else '    cidr_blocks = [var.db_ingress_cidr]',
+                '  }',
+            ])
+        else:
+            sg_ingress_blocks.extend([
+                '  ingress {',
+                f'    description = "Application TCP port {port}"',
+                f'    from_port   = {port}',
+                f'    to_port     = {port}',
+                '    protocol    = "tcp"',
+                '    cidr_blocks = ["0.0.0.0/0"]',
+                '  }',
+            ])
 
     has_managed_db = any(
         (r.get("type") in ("aws_db_instance", "database_instance", "database") or r.get("cmir_type") in ("database", "database_instance"))
@@ -230,11 +265,18 @@ variable "github_token" {{
         r.get("type") == "aws_elasticache_cluster"
         for r in resources
     )
-    enable_ha_alb_asg = not any(
+    has_explicit_single = any(
         (r.get("metadata") or {}).get("disable_ha_alb_asg") is True
         or (r.get("metadata") or {}).get("compute_architecture_choice") == "single_instance_containerized"
         for r in resources
     )
+    has_explicit_ha = any(
+        (r.get("metadata") or {}).get("disable_ha_alb_asg") is False
+        or (r.get("metadata") or {}).get("compute_architecture_choice") in ("ha_asg_alb_containerized", "ha_launch_template_asg")
+        or (r.get("metadata") or {}).get("deployment_mode") == "container"
+        for r in resources
+    )
+    enable_ha_alb_asg = has_explicit_ha and not has_explicit_single
 
     main_lines = [
         '# ============================================================',
@@ -627,40 +669,40 @@ variable "github_token" {{
                     '}',
                     '',
                 ])
-
-            root_vol_gb = max(8, int(meta.get("root_volume_size_gb") or 30))
-            created_instance_ids.append(r_id)
-            main_lines.extend([
-                f'resource "aws_instance" "{r_id}" {{',
-                f'  ami                         = {ami_expr}',
-                '  instance_type               = var.instance_type',
-                '  subnet_id                   = aws_subnet.public_subnet.id',
-                '  vpc_security_group_ids      = [aws_security_group.app_sg.id]',
-                '  associate_public_ip_address = true',
-                f'  user_data_base64            = base64gzip({rds_user_data_expr})'
-                if rds_user_data_expr
-                else '  user_data_base64            = base64gzip(file("${path.module}/user_data.sh"))',
-                '  user_data_replace_on_change = true',
-                *(
-                    [f'  depends_on                  = [aws_db_instance.{planned_db_ids[0]}]']
-                    if planned_db_ids
-                    else []
-                ),
-                '  root_block_device {',
-                f'    volume_size           = {root_vol_gb}',
-                '    volume_type           = "gp3"',
-                '    encrypted             = true',
-                '    delete_on_termination = true',
-                '  }',
-                '  tags = {',
-                f'    Name      = "{r_name}"',
-                f'    CMIR_Type = "{cmir_type}"',
-                f'    CMIR_ID   = "{r.get("id")}"',
-                '    ManagedBy = "CloudMove"',
-                '  }',
-                '}',
-                '',
-            ])
+            else:
+                root_vol_gb = max(8, int(meta.get("root_volume_size_gb") or 30))
+                created_instance_ids.append(r_id)
+                main_lines.extend([
+                    f'resource "aws_instance" "{r_id}" {{',
+                    f'  ami                         = {ami_expr}',
+                    '  instance_type               = var.instance_type',
+                    '  subnet_id                   = aws_subnet.public_subnet.id',
+                    '  vpc_security_group_ids      = [aws_security_group.app_sg.id]',
+                    '  associate_public_ip_address = true',
+                    f'  user_data_base64            = base64gzip({rds_user_data_expr})'
+                    if rds_user_data_expr
+                    else '  user_data_base64            = base64gzip(file("${path.module}/user_data.sh"))',
+                    '  user_data_replace_on_change = true',
+                    *(
+                        [f'  depends_on                  = [aws_db_instance.{planned_db_ids[0]}]']
+                        if planned_db_ids
+                        else []
+                    ),
+                    '  root_block_device {',
+                    f'    volume_size           = {root_vol_gb}',
+                    '    volume_type           = "gp3"',
+                    '    encrypted             = true',
+                    '    delete_on_termination = true',
+                    '  }',
+                    '  tags = {',
+                    f'    Name      = "{r_name}"',
+                    f'    CMIR_Type = "{cmir_type}"',
+                    f'    CMIR_ID   = "{r.get("id")}"',
+                    '    ManagedBy = "CloudMove"',
+                    '  }',
+                    '}',
+                    '',
+                ])
         elif r_type == "aws_iam_role":
             role_name = sanitize_kebab_identifier(r_name, prefix="cm", max_len=64)
             profile_name = sanitize_kebab_identifier(f"{r_name}-profile", prefix="cm", max_len=64)
@@ -815,7 +857,7 @@ variable "github_token" {{
             main_lines.extend([
                 f'resource "aws_eks_cluster" "{r_id}" {{',
                 f'  name     = "{r_name}"',
-                '  role_arn = "arn:aws:iam::123456789012:role/eks-cluster-role"',
+                '  role_arn = var.eks_cluster_role_arn',
                 '  vpc_config {',
                 '    subnet_ids = [aws_subnet.private_subnet_a.id, aws_subnet.private_subnet_b.id]',
                 '  }',
@@ -837,12 +879,12 @@ variable "github_token" {{
                 imp_fmt = "RAW"
             main_lines.extend([
                 f'resource "aws_ebs_snapshot_import" "{r_id}_import" {{',
-                '  count = var.enable_vm_import ? 1 : 0',
+                '  count = var.enable_vm_import && var.vm_import_s3_bucket != "" ? 1 : 0',
                 '  disk_container {',
                 f'    description = "Imported disk image for {r_name}"',
                 f'    format      = "{imp_fmt}"',
                 '    user_bucket {',
-                '      s3_bucket = "cloudmove-vm-import-staging"',
+                '      s3_bucket = var.vm_import_s3_bucket',
                 f'      s3_key    = "images/{r_name}.{imp_fmt.lower()}"',
                 '    }',
                 '  }',
@@ -855,7 +897,7 @@ variable "github_token" {{
                 '}',
                 '',
                 f'resource "aws_ami" "{r_id}" {{',
-                '  count               = var.enable_vm_import ? 1 : 0',
+                '  count               = var.enable_vm_import && var.vm_import_s3_bucket != "" ? 1 : 0',
                 f'  name                = "{r_name}-ami"',
                 f'  virtualization_type = "{virt}"',
                 f'  architecture        = "{arch}"',
@@ -883,23 +925,10 @@ variable "github_token" {{
             )
 
     primary_inst_id = created_instance_ids[0] if created_instance_ids else None
-    instance_output_blocks = ""
-    if primary_inst_id:
-        fe_port = service_fe_port or (3000 if 3000 in app_ingress_ports else primary_http_port)
-        be_port = service_be_port or (8000 if 8000 in app_ingress_ports else primary_http_port)
-        db_output_block = ""
-        if 5432 in app_ingress_ports:
-            db_output_block = f"""
-output "database_connection_url" {{
-  description = "PostgreSQL / PostGIS Container Connection URL on the EC2 Instance"
-  value       = "postgresql://postgres:${{local.effective_db_password}}@${{aws_instance.{primary_inst_id}.public_ip}}:5432/postgres"
-  sensitive   = true
-}}
-"""
-        rds_output_block = ""
-        if created_db_ids:
-            db_rid = created_db_ids[0]
-            rds_output_block = f"""
+    rds_output_block = ""
+    if created_db_ids:
+        db_rid = created_db_ids[0]
+        rds_output_block = f"""
 output "db_endpoint" {{
   description = "Managed Amazon RDS Endpoint"
   value       = aws_db_instance.{db_rid}.endpoint
@@ -908,6 +937,20 @@ output "db_endpoint" {{
 output "db_address" {{
   description = "Managed Amazon RDS Hostname"
   value       = aws_db_instance.{db_rid}.address
+}}
+"""
+    instance_output_blocks = rds_output_block
+    if primary_inst_id:
+        fe_port = service_fe_port or (3000 if 3000 in app_ingress_ports else primary_http_port)
+        be_port = service_be_port or (8000 if 8000 in app_ingress_ports else primary_http_port)
+        db_output_block = ""
+        if 5432 in app_ingress_ports:
+            db_host_expr = f"${{aws_instance.{primary_inst_id}.public_ip}}" if expose_db_port_externally else f"${{aws_instance.{primary_inst_id}.private_ip}}"
+            db_output_block = f"""
+output "database_connection_url" {{
+  description = "PostgreSQL / PostGIS Container Connection URL on the EC2 Instance"
+  value       = "postgresql://postgres:${{local.effective_db_password}}@{db_host_expr}:5432/postgres"
+  sensitive   = true
 }}
 """
         instance_output_blocks = f"""

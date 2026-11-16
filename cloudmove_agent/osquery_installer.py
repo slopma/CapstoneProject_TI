@@ -37,16 +37,31 @@ BASE_URL = f"https://github.com/osquery/osquery/releases/download/{VERSION}"
 GITHUB_RELEASE_API = f"https://api.github.com/repos/osquery/osquery/releases/tags/{VERSION}"
 GITHUB_LATEST_API = "https://api.github.com/repos/osquery/osquery/releases/latest"
 
-# Directorios locales en espacio de usuario (sin requerir root/administrador)
-if platform.system() == "Windows":
-    _LOCAL_BASE = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "CloudMove"
-    INSTALL_DIR = _LOCAL_BASE / "osquery"
-    BIN_DIR = _LOCAL_BASE / "bin"
-    BINARY_NAME = "osqueryi.exe"
-else:
-    INSTALL_DIR = Path.home() / ".local" / "share" / "cloudmove" / "osquery"
-    BIN_DIR = Path.home() / ".local" / "bin"
-    BINARY_NAME = "osqueryi"
+# Directorios locales en espacio de usuario (resueltos dinámicamente con fallback escribible a /tmp si $HOME es solo lectura)
+def _resolve_osquery_dirs() -> Tuple[Path, Path, str]:
+    override_dir = os.environ.get("CLOUDMOVE_OSQUERY_DIR", "").strip()
+    if override_dir:
+        base = Path(override_dir).expanduser()
+        bname = "osqueryi.exe" if platform.system() == "Windows" else "osqueryi"
+        return base / "osquery", base / "bin", bname
+
+    if platform.system() == "Windows":
+        local_base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "CloudMove"
+        return local_base / "osquery", local_base / "bin", "osqueryi.exe"
+
+    home_base = Path.home() / ".local"
+    cand_install = home_base / "share" / "cloudmove" / "osquery"
+    cand_bin = home_base / "bin"
+    try:
+        cand_install.parent.mkdir(parents=True, exist_ok=True)
+        cand_bin.mkdir(parents=True, exist_ok=True)
+        return cand_install, cand_bin, "osqueryi"
+    except OSError:
+        tmp_base = Path(tempfile.gettempdir()) / "cloudmove-osquery"
+        return tmp_base / "osquery", tmp_base / "bin", "osqueryi"
+
+
+INSTALL_DIR, BIN_DIR, BINARY_NAME = _resolve_osquery_dirs()
 
 # Catálogo oficial de respaldo (v5.23.1) con sus hashes SHA-256 verificados
 FALLBACK_RELEASE_ASSETS: List[Dict[str, Any]] = [
@@ -346,6 +361,8 @@ def find_existing_osquery() -> Optional[str]:
     Linux/macOS `osqueryi` es un symlink hacia `osqueryd` y el binario inspecciona `argv[0]`
     para ejecutarse en modo interactivo sin exigir pidfile de demonio.
     """
+    install_dir, bin_dir, binary_name = _resolve_osquery_dirs()
+
     # 1. Binario en el PATH del sistema
     system_bin = shutil.which("osqueryi") or shutil.which("osqueryi.exe")
     if system_bin and Path(system_bin).exists():
@@ -353,7 +370,7 @@ def find_existing_osquery() -> Optional[str]:
 
     # 2. Binario en rutas habituales del sistema operativo
     common_paths = [
-        BIN_DIR / BINARY_NAME,
+        bin_dir / binary_name,
         Path("/usr/bin/osqueryi"),
         Path("/usr/local/bin/osqueryi"),
         Path("/opt/osquery/bin/osqueryi"),
@@ -363,10 +380,10 @@ def find_existing_osquery() -> Optional[str]:
         if candidate.exists():
             return str(candidate.absolute())
 
-    # 3. Binario previamente extraído en INSTALL_DIR
-    if INSTALL_DIR.exists():
+    # 3. Binario previamente extraído en install_dir
+    if install_dir.exists():
         found = next(
-            (p for p in INSTALL_DIR.rglob(BINARY_NAME) if p.exists()),
+            (p for p in install_dir.rglob(binary_name) if p.exists()),
             None,
         )
         if found:
@@ -517,8 +534,9 @@ def install_osquery(force_download: bool = False) -> str:
     expected_sha256 = selected.get("sha256")
     archive_format = selected["format"]
 
-    BIN_DIR.mkdir(parents=True, exist_ok=True)
-    INSTALL_DIR.parent.mkdir(parents=True, exist_ok=True)
+    install_dir, bin_dir, binary_name = _resolve_osquery_dirs()
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    install_dir.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory(prefix="cloudmove-osquery-") as temp:
         archive = Path(temp) / selected["name"]
@@ -563,7 +581,7 @@ def install_osquery(force_download: bool = False) -> str:
         # Conservar la estructura completa del paquete (incluyendo symlinks relativos)
         shutil.copytree(
             extracted,
-            INSTALL_DIR,
+            install_dir,
             symlinks=True,
             dirs_exist_ok=True,
         )
@@ -572,7 +590,7 @@ def install_osquery(force_download: bool = False) -> str:
     real_binary = next(
         (
             p
-            for p in INSTALL_DIR.rglob("osquery*")
+            for p in install_dir.rglob("osquery*")
             if p.is_file() and not p.is_symlink() and p.name in ("osqueryi", "osqueryi.exe", "osqueryd", "osqueryd.exe")
         ),
         None,
@@ -580,7 +598,7 @@ def install_osquery(force_download: bool = False) -> str:
     installed = next(
         (
             p
-            for p in INSTALL_DIR.rglob("osqueryi*")
+            for p in install_dir.rglob("osqueryi*")
             if (p.exists() or p.is_symlink()) and p.name in ("osqueryi", "osqueryi.exe")
         ),
         None,
@@ -590,13 +608,13 @@ def install_osquery(force_download: bool = False) -> str:
         raise RuntimeError("No se encontró osqueryi tras la extracción.")
 
     target_executable = installed or real_binary
-    # Asegurar permisos de ejecución en sistemas POSIX y enlazar como `osqueryi` en ~/.local/bin
+    # Asegurar permisos de ejecución en sistemas POSIX y enlazar como `osqueryi` en bin_dir
     if platform.system() != "Windows":
         bin_to_chmod = real_binary or target_executable
         if bin_to_chmod and bin_to_chmod.exists():
             current_mode = bin_to_chmod.stat().st_mode
             bin_to_chmod.chmod(current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        link_path = BIN_DIR / BINARY_NAME
+        link_path = bin_dir / binary_name
         link_target = real_binary or target_executable
         try:
             if link_path.exists() or link_path.is_symlink():

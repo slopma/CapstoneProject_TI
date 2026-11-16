@@ -44,7 +44,19 @@ variable "ssh_public_key" {
 }
 
 variable "domain_name" {
-  description = "Dominio o subdominio registrado en Namecheap que apuntará a esta instancia"
+  description = "Dominio o subdominio opcional (ej. cloudmove.midominio.com) para HTTPS automático con Caddy. Déjalo vacío para servir por HTTP sobre la IP elástica."
   type        = string
-  default     = "digitalcafeluna.store"
+  default     = ""
+}
+
+variable "allowed_ssh_cidrs" {
+  description = "Rangos CIDR autorizados para SSH (puerto 22). Se recomienda restringir a tu IP pública (ej. [\"1.2.3.4/32\"]) en lugar de 0.0.0.0/0."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+}
+
+variable "expose_direct_api_port" {
+  description = "Exponer puerto directo 8000 en el Security Group además del proxy inverso Nginx (:80/:443). Desactivado por defecto por seguridad."
+  type        = bool
+  default     = false
 }

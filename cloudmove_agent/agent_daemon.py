@@ -227,8 +227,6 @@ class CloudMoveAgentDaemon:
                 result = self._task_inspect_disk(params)
             elif action == "check_mgn_prerequisites":
                 result = self._task_check_mgn_prerequisites(params)
-            elif action == "check_gcp_migrate_prerequisites":
-                result = self._task_check_gcp_prerequisites(params)
             elif action in ("quiesce_database", "unquiesce_database"):
                 result = self._task_quiesce(action, params)
             elif action in ("capture_live_os", "create_disk_image"):
@@ -320,24 +318,6 @@ class CloudMoveAgentDaemon:
             "ready_for_mgn_agent": tcp_443_ok,
         }
 
-    def _task_check_gcp_prerequisites(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Verify prerequisites for Google Cloud Migrate to Virtual Machines."""
-        gcp_host = "vmmigration.googleapis.com"
-        tcp_443_ok = False
-        try:
-            s = socket.create_connection((gcp_host, 443), timeout=5)
-            s.close()
-            tcp_443_ok = True
-        except Exception:
-            tcp_443_ok = False
-
-        return {
-            "service": "gcp_vmmigration",
-            "endpoint": gcp_host,
-            "tcp_443_outbound": tcp_443_ok,
-            "ready_for_gcp_migration": tcp_443_ok,
-        }
-
     def _task_quiesce(self, action: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Safe database / filesystem quiescing hook."""
         now = _utc_now()
@@ -357,20 +337,10 @@ class CloudMoveAgentDaemon:
         }
 
     def _task_capture_live_os(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute full live OS capture and VM disk image creation."""
-        from app.migration.image_migrator import capture_live_operating_system
-        res = capture_live_operating_system(
-            target_provider=params.get("target_provider", "aws"),
-            output_format=params.get("output_format", "QCOW2"),
-            agent_id=self.agent_id,
+        """Legacy server-side action is unsupported in standalone remote agent bundles."""
+        raise NotImplementedError(
+            "La acción 'capture_live_os' se orquesta vía 'stage_selected_paths' y el servidor de CloudMove."
         )
-        return {
-            "status": "success",
-            "image_id": res["image_id"],
-            "image_file": res["source_file"],
-            "sha256": res["sha256"],
-            "manifest": res,
-        }
 
     def _pack_selected_paths(
         self,

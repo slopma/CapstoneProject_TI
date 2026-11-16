@@ -1,51 +1,63 @@
+# Environment & secrets (keep examples)
 .env
 .env.*
 !.env.example
 
-# Terraform generated files
+# Terraform generated files & credentials
 **/.terraform/
 **/*.tfstate
 **/*.tfstate*
 **/*.tfvars
+**/*.tfvars.json
 **/tfplan
 deploy/aws/*id_*
 deploy/aws/*.pem
 deploy/aws/*.pub
+**/*id_rsa*
+**/*id_ed25519*
+**/*.pem
+**/*.key
 generated/aws/plan-evidence.txt
 
-
+# Python & test caches
 __pycache__/
+*.py[cod]
 .pytest_cache/
 .venv/
 
-# User discovery inventories & local session artifacts (Privacy & Data Quality)
-docs/cloudmove-osquery-inventory.json
-*osquery-inventory*.json
-backend/data/discovery_sessions/
-backend/data/datacenter_campaigns.json
-cloudmove-parsed/
+# Frontend / Node build & OS artifacts
+node_modules/
+dist/
+dist-ssr/
+*.log
+.DS_Store
 *.bak
+
+# Local AI / editor tooling directories
 .codex/
 .cursor/
 .gemini/
 .grok/
+.impeccable/
+
+# User discovery inventories & local session artifacts (Privacy & Data Quality)
+docs/cloudmove-osquery-inventory.json
+*osquery-inventory*.json
+cloudmove-parsed/
+
 # Generated VM images and deployment packages
 /generated/staging_images/
 generated/deployments/
-cloudm/
-cloudmove/
-cocoapp/
 *.zip
 
-# Runtime SQLite databases and transaction logs
+# Runtime SQLite databases, UC2 staging & session state
 backend/data/*.db
 backend/data/*.db-journal
 backend/data/*.db-wal
+backend/data/*.db-shm
 backend/data/*.db.bak
 backend/data/discovery_sessions/
-backend/data/datacenter_campaigns.json
-backend/data/migrations_state.json
-backend/data/migrations_store.json
+backend/data/uc2_staged/
 backend/data/*.json
 backend/data/*.json.bak
 !backend/data/.gitkeep

@@ -19,6 +19,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import tarfile
 import tempfile
@@ -26,6 +27,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 import urllib.error
 import urllib.request
 
+from app.core.text_utils import utc_now_iso
 from app.discovery.connectors import ConnectorAuthError, ConnectorError, ConnectorTimeoutError
 
 
@@ -35,8 +37,7 @@ GITHUB_URL_REGEX = re.compile(
 )
 
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+_utc_now = utc_now_iso
 
 
 LANGUAGE_EXTENSIONS: Dict[str, str] = {
@@ -495,16 +496,31 @@ class GitHubConnector:
         tar_path = target_dir / "repo_archive.tar.gz"
         tar_path.write_bytes(data)
 
-        # Extract safely avoiding path traversal
+        # Extract safely avoiding zip-slip / symlink / hardlink / device injection
         extract_dir = target_dir / "unpacked"
         extract_dir.mkdir(parents=True, exist_ok=True)
+        resolved_root = extract_dir.resolve()
         with tarfile.open(tar_path, "r:gz") as tar:
+            safe_members = []
             for member in tar.getmembers():
-                # Defend against zip-slip / absolute path injection
-                member_path = Path(member.name)
+                if member.issym() or member.islnk() or not (member.isfile() or member.isdir()):
+                    continue
+                clean_name = member.name.lstrip("/").lstrip("./")
+                if not clean_name:
+                    continue
+                member_path = Path(clean_name)
                 if member_path.is_absolute() or ".." in member_path.parts:
                     continue
-                tar.extract(member, extract_dir)
+                dest_candidate = (resolved_root / member_path).resolve()
+                if dest_candidate != resolved_root and resolved_root not in dest_candidate.parents:
+                    continue
+                member.name = clean_name
+                safe_members.append(member)
+
+            try:
+                tar.extractall(extract_dir, members=safe_members, filter="data")
+            except TypeError:
+                tar.extractall(extract_dir, members=safe_members)
 
         # GitHub tarballs nest files in an outer folder e.g. owner-repo-sha
         subdirs = [d for d in extract_dir.iterdir() if d.is_dir()]

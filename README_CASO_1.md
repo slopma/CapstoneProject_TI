@@ -1,9 +1,9 @@
 # CloudMove — Informe Técnico Completo: Caso de Uso 1 (`app_source`)
 ## Funcionamiento Interno Extremo a Extremo: Del Descubrimiento Estático al Modelo CMIR v2.1, Traducción Cloud y Generación de Terraform
 
-> **Proyecto:** CloudMove — Plataforma de Abstracción Semántica y Migración Selectiva Multicloud  
+> **Proyecto:** CloudMove — Plataforma Web de Abstracción Semántica y Migración Selectiva a AWS  
 > **Capstone Project in IT · Universidad EAFIT · 2026-2**  
-> **Caso de Uso Analizado:** Caso 1 (`app_source`) — Migración Guiada desde Aplicación, Código Fuente o Repositorio GitHub hacia **AWS** y **GCP**
+> **Caso de Uso Analizado:** Caso 1 (`app_source`) — Migración Guiada desde Aplicación, Código Fuente o Repositorio GitHub hacia **AWS**
 
 ---
 
@@ -27,9 +27,9 @@
 6. [Fase 3: Grafo en Memoria, Resolución de Dependencias y Evaluación de Viabilidad](#6-fase-3-grafo-en-memoria-resolución-de-dependencias-y-evaluación-de-viabilidad)
    - [6.1. Construcción del `networkx.DiGraph` y Recorrido BFS (`resolve_dependencies`)](#61-construcción-del-networkxdigraph-y-recorrido-bfs-resolve_dependencies)
    - [6.2. Evaluación de Viabilidad sin Refactorización Forzada (`evaluate_app_migration_viability`)](#62-evaluación-de-viabilidad-sin-refactorización-forzada-evaluate_app_migration_viability)
-7. [Fase 4: Cómo Traduce el CMIR a Recursos Nativos de AWS y GCP (`Adapters`)](#7-fase-4-cómo-traduce-el-cmir-a-recursos-nativos-de-aws-y-gcp-adapters)
+7. [Fase 4: Cómo Traduce el CMIR a Recursos Nativos de AWS (`AWSAdapter`)](#7-fase-4-cómo-traduce-el-cmir-a-recursos-nativos-de-aws-awsadapter)
    - [7.1. El Patrón `BaseProviderAdapter` y la Separación entre Traductor y Generador](#71-el-patrón-baseprovideradapter-y-la-separación-entre-traductor-y-generador)
-   - [7.2. Matriz Completa de Traducción Semántica (`CMIR` → `AWS` vs `GCP`)](#72-matriz-completa-de-traducción-semántica-cmir--aws-vs-gcp)
+   - [7.2. Matriz Completa de Traducción Semántica (`CMIR` → `AWS`)](#72-matriz-completa-de-traducción-semántica-cmir--aws)
    - [7.3. Sanitización Léxica (`safe_id` vs `safe_name`) y Estructura del Diccionario Traducido](#73-sanitización-léxica-safe_id-vs-safe_name-y-estructura-del-diccionario-traducido)
 8. [Fase 5: Cómo Crea, Formatea y Valida el Código Terraform y los Artefactos Operativos](#8-fase-5-cómo-crea-formatea-y-valida-el-código-terraform-y-los-artefactos-operativos)
    - [8.1. Generación Modular de los 4 Archivos HCL (`provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`)](#81-generación-modular-de-los-4-archivos-hcl-providertf-variablestf-maintf-outputstf)
@@ -50,7 +50,7 @@ El **Caso de Uso 1 (`app_source` — Migración Guiada desde Aplicación)** perm
 
 1. Un **inventario técnico profundo y seguro** (con secretos redactados automáticamente y revisión de código fijada a un commit SHA inmutable).
 2. Un **subgrafo semántico neutral CMIR v2.1** donde cada nodo y dependencia conserva su estado epistémico (`observed`, `derived`, `inferred`, `unknown`), nivel de confianza (`0.0` a `1.0`) y evidencia auditable.
-3. Una **evaluación de viabilidad cloud en AWS o GCP** que **nunca fuerza refactorizaciones destructivas** (por ejemplo, si detecta estado persistente en disco local o múltiples puertos TCP, alerta de la incompatibilidad con contenedores efímeros tipo Cloud Run/Fargate y recomienda o adapta a `vm_rehost` en EC2/Compute Engine o almacenamiento compartido EFS/Filestore).
+3. Una **evaluación de viabilidad cloud en AWS** que **nunca fuerza refactorizaciones destructivas** (por ejemplo, si detecta estado persistente en disco local o múltiples puertos TCP, alerta de la incompatibilidad con contenedores efímeros tipo ECS Fargate y recomienda o adapta a `vm_rehost` en EC2 + EBS o almacenamiento compartido EFS).
 4. Un **paquete completo de Infraestructura como Código (Terraform modular)** validado sintácticamente con el binario real `terraform fmt -check`, acompañado de scripts de migración de datos de bases de datos (`pg_dump`/`pg_restore` con verificación SHA-256), unidades `systemd`, plantillas `.env` saneadas, pruebas de humo (`smoke_test.sh`) y un manual de despliegue paso a paso (`DEPLOYMENT_INSTRUCTIONS.md`).
 
 ---
@@ -89,14 +89,13 @@ flowchart TB
         Viability["evaluate_app_migration_viability()\nDetecta incompatibilidades stateful/multi-port y define target_architecture"]
     end
 
-    subgraph Translation["5. Traducción al Proveedor Destino (adapters/aws_adapter.py & gcp_adapter.py)"]
-        AdapterChoice{"target_provider?"}
+    subgraph Translation["5. Traducción al Proveedor Destino (adapters/aws_adapter.py)"]
+        AdapterChoice{"target_provider == aws"}
         AWS_Ad["AWSAdapter.translate_cmir()\nMapea AWS_RESOURCE_MAP + sanitiza safe_id / safe_name"]
-        GCP_Ad["GCPAdapter.translate_cmir()\nMapea GCP_RESOURCE_MAP + sanitiza safe_id / safe_name"]
     end
 
     subgraph Generation["6. Generación y Validación IaC (generators/terraform.py & deployment_guide_generator.py)"]
-        TF_Gen["generate_aws_terraform_files() /\ngenerate_gcp_terraform_files()"]
+        TF_Gen["generate_aws_terraform_files()"]
         TF_Files["4 Archivos HCL Modulares:\nprovider.tf, variables.tf, main.tf, outputs.tf"]
         TF_Fmt["format_terraform_code()\nEjecuta /usr/bin/terraform fmt"]
         TF_Val["BaseProviderAdapter.validate_artifacts()\nLlaves {}, anti-leaks AKIA/PEM, refs cruzadas var.*/resource.* y terraform fmt -check"]
@@ -116,7 +115,6 @@ flowchart TB
     CMIR_Obj --> NX --> BFS --> Viability
     Viability --> AdapterChoice
     AdapterChoice -->|aws| AWS_Ad --> TF_Gen
-    AdapterChoice -->|gcp| GCP_Ad --> TF_Gen
     TF_Gen --> TF_Files --> TF_Fmt --> TF_Val --> Extra_Art --> Orch --> DB
 ```
 
@@ -133,9 +131,9 @@ Cada responsabilidad del Caso 1 está desacoplada en módulos específicos dentr
 | **3. Motor Caso 1 (`app_source`)** | [`backend/app/migration/app_migrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py) | `inspect_application_source()`, `scan_local_filesystem_tree()`, `discover_app_components_and_code()`, `_analyze_source_payload()`, `build_application_cmir()`, `evaluate_app_migration_viability()`, `build_app_migration_stages()`, `generate_app_migration_artifacts()` | Ejecuta el análisis estático multi-lenguaje, clasifica dependencias, construye el CMIR de la aplicación, evalúa viabilidad cloud y genera artefactos operativos. |
 | **4. Modelo Semántico CMIR v2.1** | [`backend/app/cmir/models.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/cmir/models.py) y [`backend/app/cmir/builder.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/cmir/builder.py) | `CMIR`, `CMIRNode`, `CMIRRelationship`, `CMIREvidence`, `build_hierarchical_cmir()`, `build_cmir_hierarchy()`, `TYPE_LEVEL_MAP` | Define los esquemas Pydantic v2.1, normaliza evidencias epistémicas, asigna niveles jerárquicos (0-8) y enlaza padres con hijos. |
 | **5. Grafo y Dependencias** | [`backend/app/graph/builder.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/graph/builder.py) y [`backend/app/dependencies/resolver.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/dependencies/resolver.py) | `build_graph()`, `resolve_dependencies()` | Convierte el CMIR en un `networkx.DiGraph` y ejecuta búsqueda en anchura (BFS) separando dependencias confirmadas, inferidas, desconocidas y compartidas. |
-| **6. Adaptadores Cloud** | [`backend/app/adapters/base.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/base.py), [`aws_adapter.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/aws_adapter.py), [`gcp_adapter.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/gcp_adapter.py) | `BaseProviderAdapter`, `AWSAdapter`, `GCPAdapter`, `translate_cmir()`, `generate_iac()`, `validate_artifacts()` | Traduce cada nodo abstracto `CMIRNode` a su tipo específico en Terraform (`aws_*` o `google_*`), sanitiza identificadores y valida el HCL generado. |
-| **7. Generador Terraform HCL** | [`backend/app/generators/terraform.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/generators/terraform.py) | `generate_aws_terraform_files()`, `generate_gcp_terraform_files()`, `format_terraform_code()` | Construye los bloques sintácticos HCL en 4 archivos (`provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`) y ejecuta `terraform fmt`. |
-| **8. Generador de Guías Cloud** | [`backend/app/migration/deployment_guide_generator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/deployment_guide_generator.py) | `generate_deployment_guide()`, `_build_case_1_guide()` | Genera el manual interactivo `DEPLOYMENT_INSTRUCTIONS.md` adaptado al commit, puerto, runtime y proveedor (AWS ECS Fargate/RDS o GCP Cloud Run/Cloud SQL). |
+| **6. Adaptador AWS** | [`backend/app/adapters/base.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/base.py), [`aws_adapter.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/aws_adapter.py) | `BaseProviderAdapter`, `AWSAdapter`, `translate_cmir()`, `generate_iac()`, `validate_artifacts()` | Traduce cada nodo abstracto `CMIRNode` a su tipo específico en Terraform (`aws_*`), sanitiza identificadores y valida el HCL generado. |
+| **7. Generador Terraform HCL** | [`backend/app/generators/terraform.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/generators/terraform.py) | `generate_aws_terraform_files()`, `format_terraform_code()` | Construye los bloques sintácticos HCL en 4 archivos (`provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`) y ejecuta `terraform fmt`. |
+| **8. Generador de Guías AWS** | [`backend/app/migration/deployment_guide_generator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/deployment_guide_generator.py) | `generate_deployment_guide()`, `_build_case_1_guide()` | Genera el manual interactivo `DEPLOYMENT_INSTRUCTIONS.md` adaptado al commit, puerto, runtime y servicios destino en AWS (EC2/ALB+ASG/ECS/RDS). |
 | **9. Orquestador y API REST** | [`backend/app/migration/orchestrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/orchestrator.py) y [`backend/app/api/routers/migration.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/api/routers/migration.py) | `MigrationOrchestrator`, `/api/v1/migration/github/validate`, `/use-case-1/inspect`, `/use-case-1/migrate`, `/jobs/{id}/*` | Gestiona la máquina de estados, compuertas de aprobación (`APPROVED`), pruebas pre-cutover, empaquetado `.zip` y persistencia SQLite ACID. |
 | **10. Interfaz de Usuario (UI)** | [`frontend/src/components/migration/MigrationOrchestratorWorkspace.jsx`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/src/components/migration/MigrationOrchestratorWorkspace.jsx), [`RepositoryTreeViewer.jsx`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/src/components/migration/RepositoryTreeViewer.jsx), [`IaCViewer.jsx`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/src/components/migration/IaCViewer.jsx) | Componentes React 19 | Formulario de inspección GitHub/Local, explorador interactivo del árbol del repositorio, visor multi-pestaña de Terraform y panel de control de las 12 etapas. |
 
@@ -403,20 +401,17 @@ Con el objeto `CMIR` construido, [`evaluate_app_migration_viability()`](file:///
 CloudMove evalúa si el modo de despliegue solicitado (`deployment_mode = "vm_rehost"` o `"container"`) preserva el comportamiento de la aplicación en la nube destino (`aws` o `gcp`):
 
 1. **Regla Anti-Pérdida de Datos en Sistemas de Archivos Locales (`stateful_local_filesystem`)**:
-   Si se solicita `deployment_mode == "container"` (AWS ECS Fargate o Google Cloud Run) pero la aplicación monta volúmenes locales (`persistent_volumes` no vacío), registra una incompatibilidad explícita explicando que el sistema de archivos local en Fargate/Cloud Run es efímero, y recomienda usar `vm_rehost` (`Amazon EC2 + EBS` / `Google Compute Engine + Persistent Disk`) o adjuntar almacenamiento elástico compartido (`Amazon EFS` / `Cloud Filestore`).
-2. **Regla de Múltiples Puertos en Google Cloud Run (`multi_port_listener_on_cloud_run`)**:
-   Si el destino es `gcp`, el modo es `"container"` y la aplicación expone más de un puerto TCP (`len(exposed_ports) > 1`), detecta que Cloud Run solo permite exponer un único puerto HTTP/gRPC por servicio y cambia automáticamente `recommended_deployment_mode = "vm_rehost"` (Google Compute Engine o GKE) para preservar todos los puertos TCP sin modificar el código.
-3. **Generación de Advertencias Epistémicas (`warnings`)**:
+   Si se solicita `deployment_mode == "container"` (AWS ECS Fargate) pero la aplicación monta volúmenes locales (`persistent_volumes` no vacío), registra una incompatibilidad explícita explicando que el sistema de archivos local en Fargate es efímero, y recomienda usar `vm_rehost` (`Amazon EC2 + EBS`) o adjuntar almacenamiento elástico compartido (`Amazon EFS`).
+2. **Generación de Advertencias Epistémicas (`warnings`)**:
    - Emite una advertencia por cada dependencia inferida (`inferred_count > 0`) recordando al arquitecto que debe validar su uso antes del cutover.
    - Emite una advertencia por cada endpoint externo con alcanzabilidad desconocida (`unknown_count > 0`).
-4. **Síntesis de Arquitectura Objetivo (`target_architecture`)**:
-   Construye el mapa de servicios cloud recomendados para la aplicación:
-   - **En AWS**: `Amazon EC2` / `ECS Fargate` / `EKS`, `Amazon RDS for PostgreSQL (Multi-AZ) + AWS DMS / pg_dump`, `Amazon ElastiCache for Redis`, `Amazon MQ for RabbitMQ`, `Amazon EBS gp3 + Amazon S3`, `AWS Secrets Manager` y `Amazon VPC + Security Groups`.
-   - **En GCP**: `Google Compute Engine` / `Cloud Run v2` / `GKE`, `Cloud SQL for PostgreSQL (Regional HA)`, `Memorystore for Redis`, `Cloud Pub/Sub`, `Persistent Disk SSD + Cloud Storage (GCS)`, `Google Secret Manager` y `Google VPC Network + Firewall Rules`.
+3. **Síntesis de Arquitectura Objetivo (`target_architecture`)**:
+   Construye el mapa de servicios cloud recomendados para la aplicación en **AWS**:
+   `Amazon EC2` / `ECS Fargate` / `ALB + ASG`, `Amazon RDS for PostgreSQL (Multi-AZ) + AWS DMS / pg_dump`, `Amazon ElastiCache for Redis`, `Amazon MQ / SQS`, `Amazon EBS gp3 + Amazon S3`, `AWS Secrets Manager` y `Amazon VPC + Security Groups`.
 
 ---
 
-## 7. Fase 4: Cómo Traduce el CMIR a Recursos Nativos de AWS y GCP (`Adapters`)
+## 7. Fase 4: Cómo Traduce el CMIR a Recursos Nativos de AWS (`AWSAdapter`)
 
 ### 7.1. El Patrón `BaseProviderAdapter` y la Separación entre Traductor y Generador
 
@@ -427,18 +422,16 @@ Para evitar mezclar la lógica de negocio de mapeo cloud con la concatenación d
                  │
                  ▼
 ┌────────────────────────────────────────────────────────────────────┐
-│ CAPA 1: ADAPTADOR DE PROVEEDOR (backend/app/adapters/*.py)         │
+│ CAPA 1: ADAPTADOR EXCLUSIVO AWS (backend/app/adapters/aws_adapter.py)│
 │ - AWSAdapter.translate_cmir(cmir)                                  │
-│ - GCPAdapter.translate_cmir(cmir)                                  │
 │ Traduce cada CMIRNode neutro a un diccionario con el tipo de       │
-│ recurso de Terraform destino, regiones válidas e IDs sanitizados.  │
+│ recurso de Terraform AWS, regiones válidas e IDs sanitizados.      │
 └────────────────────────────────────────────────────────────────────┘
                  │  Lista de diccionarios traducidos (List[Dict])
                  ▼
 ┌────────────────────────────────────────────────────────────────────┐
 │ CAPA 2: GENERADOR SINTÁCTICO HCL (backend/app/generators/terraform.py)│
 │ - generate_aws_terraform_files(translated_resources)               │
-│ - generate_gcp_terraform_files(translated_resources)               │
 │ Emite los archivos provider.tf, variables.tf, main.tf y outputs.tf │
 │ y los formatea con /usr/bin/terraform fmt.                         │
 └────────────────────────────────────────────────────────────────────┘
@@ -446,31 +439,31 @@ Para evitar mezclar la lógica de negocio de mapeo cloud con la concatenación d
 
 ---
 
-### 7.2. Matriz Completa de Traducción Semántica (`CMIR` → `AWS` vs `GCP`)
+### 7.2. Matriz Completa de Traducción Semántica (`CMIR` → `AWS`)
 
-Cuando `generate_app_migration_artifacts()` invoca `adapter.generate_iac(cmir)`, el adaptador recorre cada `CMIRNode` en `cmir.resources` y consulta su tabla de traducción (`AWS_RESOURCE_MAP` en [`aws_adapter.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/aws_adapter.py#L9-L66) o `GCP_RESOURCE_MAP` en [`gcp_adapter.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/gcp_adapter.py#L9-L66)):
+Cuando `generate_app_migration_artifacts()` invoca `adapter.generate_iac(cmir)`, [`AWSAdapter`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/aws_adapter.py) recorre cada `CMIRNode` en `cmir.resources` y consulta su tabla de traducción `AWS_RESOURCE_MAP`:
 
-| Nodo en el Subgrafo CMIR del Caso 1 (`node.type`) | Qué Representa en la Aplicación Descubierta | Recurso Terraform en **AWS** (`AWS_RESOURCE_MAP`) | Recurso Terraform en **GCP** (`GCP_RESOURCE_MAP`) |
-| :--- | :--- | :--- | :--- |
-| **`virtual_machine`** / **`compute`** | Host de ejecución de la aplicación (`compute-{slug}-host`) en modo `vm_rehost` | `aws_instance` | `google_compute_instance` |
-| **`container`** / **`application_component`** | Contenedor de la aplicación o microservicio en modo `container` | `aws_ecs_task_definition` | `google_cloud_run_v2_service` |
-| **`application`** | Aplicación principal (`app-{slug}`) o sub-aplicaciones (`app-{slug}-{comp}`) | `aws_instance` | `google_compute_instance` |
-| **`port`** / **`listening_port`** | Puerto TCP expuesto por la aplicación (`port-{slug}-{p}`, ej. `80`, `8000`, `8080`) | `aws_security_group_rule` *(e inyectado como bloque `ingress` en `aws_security_group.app_sg`)* | `google_compute_firewall` |
-| **`volume`** / **`disk`** | Ruta de almacenamiento persistente montada (`vol-{slug}-{idx}`) | `aws_ebs_volume` (`gp3`, 50 GiB) | `google_compute_disk` (`pd-ssd`, 50 GiB) |
-| **`identity`** / **`role`** | Identidad de carga de trabajo de mínimo privilegio (`identity-{slug}-sa`) | `aws_iam_role` | `google_service_account` |
-| **`database_instance`** / **`database`** | Base de datos relacional confirmada o inferida (`dep-{slug}-postgresql`) | `aws_db_instance` (`postgres` / `mysql` + `aws_db_subnet_group`) | `google_sql_database_instance` (`POSTGRES_15` / `MYSQL_8_0` + `google_sql_user`) |
-| **`cache`** | Clúster de caché en memoria (`dep-{slug}-redis`) | `aws_elasticache_cluster` (`redis`, puerto `6379`) | `google_redis_instance` (`REDIS_7_0`, `BASIC`) |
-| **`storage`** / **`bucket`** | Bucket de almacenamiento de objetos (`dep-{slug}-object-storage`) | `aws_s3_bucket` | `google_storage_bucket` |
-| **`queue`** / **`topic`** | Cola de mensajería asíncrona (`dep-{slug}-rabbitmq`) | `aws_sqs_queue` *(o `aws_mq_broker` en discovery replatform)* | `google_pubsub_topic` |
-| **`network_connection`** | Endpoint HTTPS externo referenciado en `.env` (`dep-{slug}-ext-*`) | `aws_security_group_rule` | `google_compute_firewall` |
-| **`secret`** | Secreto parametrizado para gestor de secretos | `aws_secretsmanager_secret` | `google_secret_manager_secret` |
-| **`system_service`** / **`process`** | Demonio `systemd` o proceso en ejecución dentro del SO | `in_guest_service` / `in_guest_process` *(no crea VM extra; se genera como archivo `{slug}.service`)* | `in_guest_service` / `in_guest_process` *(se genera como archivo `{slug}.service`)* |
+| Nodo en el Subgrafo CMIR del Caso 1 (`node.type`) | Qué Representa en la Aplicación Descubierta | Recurso Terraform en **AWS** (`AWS_RESOURCE_MAP`) |
+| :--- | :--- | :--- |
+| **`virtual_machine`** / **`compute`** | Host de ejecución de la aplicación (`compute-{slug}-host`) en modo `vm_rehost` | `aws_instance` |
+| **`container`** / **`application_component`** | Contenedor de la aplicación o microservicio en modo `container` | `aws_ecs_task_definition` / `aws_autoscaling_group` + `aws_lb` |
+| **`application`** | Aplicación principal (`app-{slug}`) o sub-aplicaciones (`app-{slug}-{comp}`) | `aws_instance` |
+| **`port`** / **`listening_port`** | Puerto TCP expuesto por la aplicación (`port-{slug}-{p}`, ej. `80`, `8000`, `8080`) | `aws_security_group_rule` *(e inyectado como bloque `ingress` en `aws_security_group.app_sg`)* |
+| **`volume`** / **`disk`** | Ruta de almacenamiento persistente montada (`vol-{slug}-{idx}`) | `aws_ebs_volume` (`gp3`, 50 GiB) |
+| **`identity`** / **`role`** | Identidad de carga de trabajo de mínimo privilegio (`identity-{slug}-sa`) | `aws_iam_role` |
+| **`database_instance`** / **`database`** | Base de datos relacional confirmada o inferida (`dep-{slug}-postgresql`) | `aws_db_instance` (`postgres` / `mysql` + `aws_db_subnet_group`) |
+| **`cache`** | Clúster de caché en memoria (`dep-{slug}-redis`) | `aws_elasticache_cluster` (`redis`, puerto `6379`) |
+| **`storage`** / **`bucket`** | Bucket de almacenamiento de objetos (`dep-{slug}-object-storage`) | `aws_s3_bucket` |
+| **`queue`** / **`topic`** | Cola de mensajería asíncrona (`dep-{slug}-rabbitmq`) | `aws_sqs_queue` *(o `aws_mq_broker` en discovery replatform)* |
+| **`network_connection`** | Endpoint HTTPS externo referenciado en `.env` (`dep-{slug}-ext-*`) | `aws_security_group_rule` |
+| **`secret`** | Secreto parametrizado para gestor de secretos | `aws_secretsmanager_secret` |
+| **`system_service`** / **`process`** | Demonio `systemd` o proceso en ejecución dentro del SO | `in_guest_service` / `in_guest_process` *(no crea VM extra; se genera como archivo `{slug}.service`)* |
 
 ---
 
 ### 7.3. Sanitización Léxica (`safe_id` vs `safe_name`) y Estructura del Diccionario Traducido
 
-Terraform HCL exige que los identificadores de bloques (`resource "<tipo>" "<safe_id>"`) no contengan espacios, puntos ni dos puntos, y por convención utiliza `snake_case`, mientras que los nombres de recursos dentro de las APIs de AWS y GCP (como buckets S3, identificadores RDS o instancias Compute Engine) exigen `kebab-case` en minúsculas.
+Terraform HCL exige que los identificadores de bloques (`resource "<tipo>" "<safe_id>"`) no contengan espacios, puntos ni dos puntos, y por convención utiliza `snake_case`, mientras que los nombres de recursos dentro de las APIs de AWS (como buckets S3 o identificadores RDS) exigen `kebab-case` en minúsculas.
 
 Por ello, `translate_node(node: CMIRNode)` ejecuta dos transformaciones léxicas sobre cada nodo:
 
@@ -516,16 +509,16 @@ El módulo [`backend/app/generators/terraform.py`](file:///home/lacastrilp/Docum
 
 | Archivo HCL | Propósito y Contenido Generado |
 | :--- | :--- |
-| **`provider.tf`** | Define el bloque `terraform { required_version = ">= 1.5.0" }` y fija las versiones de los proveedores oficiales (`hashicorp/aws ~> 5.0` o `hashicorp/google ~> 5.0`, junto con `hashicorp/random ~> 3.5` para generación criptográfica de contraseñas). Configura el bloque `provider` consumiendo las variables de región/proyecto. |
-| **`variables.tf`** | Declara todas las variables parametrizables: `aws_region` (o `gcp_project_id`, `gcp_region`, `gcp_zone`), `environment`, `vpc_cidr` (o `subnet_cidr`), `ami_id` (o `custom_image_name`) y **`db_password`** marcada explícitamente con `sensitive = true` y `default = null` para evitar contraseñas en texto plano. |
-| **`main.tf`** | Contiene la infraestructura base (generador aleatorio de contraseñas, VPC, IGW, subredes públicas y privadas Multi-AZ, Security Groups / Firewalls dinámicos, Subnet Groups de base de datos, cuentas de servicio) seguida de todos los bloques `resource` emitidos para cada nodo del CMIR. |
-| **`outputs.tf`** | Exporta los identificadores de la red y subredes aprovisionadas (`vpc_id`, `public_subnet_id` en AWS; `gcp_vpc_id`, `gcp_primary_subnet_id` en GCP) para integración con pipelines CI/CD o módulos posteriores. |
+| **`provider.tf`** | Define el bloque `terraform { required_version = ">= 1.5.0" }` y fija las versiones de los proveedores oficiales (`hashicorp/aws ~> 5.0` junto con `hashicorp/random ~> 3.5` para generación criptográfica de contraseñas). Configura el bloque `provider "aws"` consumiendo `var.aws_region`. |
+| **`variables.tf`** | Declara todas las variables parametrizables: `aws_region`, `environment`, `vpc_cidr`, `ssh_ingress_cidr`, `db_ingress_cidr` (por defecto `10.0.0.0/16`), `ami_id` y **`db_password`** marcada explícitamente con `sensitive = true` y `default = null` para evitar contraseñas en texto plano. |
+| **`main.tf`** | Contiene la infraestructura base (generador aleatorio de contraseñas, VPC, IGW, subredes públicas y privadas Multi-AZ, Security Groups parametrizados, Subnet Groups de base de datos, roles IAM) seguida de todos los bloques `resource` emitidos para cada nodo del CMIR. |
+| **`outputs.tf`** | Exporta los identificadores de la red y subredes aprovisionadas (`vpc_id`, `public_subnet_id`, IP/DNS del balanceador o instancia y `database_connection_url` privado cuando aplica). |
 
 ---
 
 ### 8.2. Cómo Construye `main.tf` Internamente: Red, Seguridad Dinámica, Secretos y Recursos
 
-Analizando [`generate_aws_terraform_files()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/generators/terraform.py#L37-L449) y [`generate_gcp_terraform_files()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/generators/terraform.py#L456-L808), la construcción de `main.tf` sigue 5 pasos algorítmicos:
+Analizando [`generate_aws_terraform_files()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/generators/terraform.py), la construcción de `main.tf` sigue 5 pasos algorítmicos:
 
 #### Paso 1: Gestión de Credenciales Maestras con Cero Hardcoding (`random_password` + `locals`)
 Para garantizar que `terraform plan` y `terraform apply` funcionen de inmediato sin obligar a hardcodear una contraseña en `variables.tf`, el generador emite al inicio de `main.tf`:
@@ -577,16 +570,16 @@ Si `has_db` o `has_cache` es `True`, inyecta automáticamente:
 #### Paso 4: Emisión Polimórfica de Bloques `resource` por Tipo Traducido
 A continuación, itera sobre cada recurso `r` en `resources`:
 - **Filtro In-Guest**: Si `r_type in ("in_guest_service", "in_guest_process")` o `cmir_type in ("system_service", "process")`, hace `continue` (ya que un servicio `systemd` o proceso corre dentro del sistema operativo de la VM y no debe convertirse en una máquina virtual adicional).
-- **Si `r_type == "aws_instance"`** (o `google_compute_instance` en GCP):
-  Emite la instancia de cómputo conectada a la subred y al `aws_security_group.app_sg`, resolviendo dinámicamente la AMI (`var.ami_id != "" ? var.ami_id : "ami-0c55b159cbfafe1f0"`).
-- **Si `r_type == "aws_db_instance"`** (o `google_sql_database_instance` en GCP):
-  Detecta el motor (`postgres` o `mysql`), asigna `password = local.effective_db_password`, `publicly_accessible = false`, la ubica en `aws_db_subnet_group.db_subnets.name` y la protege con `[aws_security_group.data_sg.id]`. En GCP, crea tanto el `google_sql_database_instance` con alta disponibilidad regional (`availability_type = "REGIONAL"`, IP privada en `google_compute_network.target_vpc.id`) como el recurso `google_sql_user`.
-- **Si `r_type == "aws_elasticache_cluster"`** (o `google_redis_instance` en GCP):
-  Emite el clúster Redis 7 en el puerto `6379` protegido por `data_sg` (o conectado a `authorized_network = google_compute_network.target_vpc.id` en GCP).
-- **Si `r_type == "aws_s3_bucket"`** (o `google_storage_bucket` en GCP):
+- **Si `r_type == "aws_instance"`**:
+  Emite la instancia EC2 conectada a la subred y al `aws_security_group.app_sg` (o `aws_launch_template` + `aws_autoscaling_group` sin instancia huérfana cuando se activa el modo HA contenerizado), resolviendo dinámicamente la AMI oficial de Ubuntu LTS.
+- **Si `r_type == "aws_db_instance"`**:
+  Detecta el motor (`postgres` o `mysql`), asigna `password = local.effective_db_password`, `publicly_accessible = false`, la ubica en `aws_db_subnet_group.db_subnets.name` y la protege con `[aws_security_group.data_sg.id]`.
+- **Si `r_type == "aws_elasticache_cluster"`**:
+  Emite el clúster Redis 7 en el puerto `6379` protegido por `data_sg`.
+- **Si `r_type == "aws_s3_bucket"`**:
   Emite el bucket con prefijo `cloudmove-{r_name}` y control de acceso uniforme.
-- **Si `r_type == "aws_ebs_volume"`** (o `google_compute_disk` en GCP):
-  Emite el volumen de bloques SSD (`gp3` en AWS / `pd-ssd` en GCP) de 50 GiB para las rutas `VOLUME` detectadas en la aplicación.
+- **Si `r_type == "aws_ebs_volume"`**:
+  Emite el volumen de bloques SSD `gp3` de 50 GiB para las rutas `VOLUME` detectadas en la aplicación.
 - **Trazabilidad en Tags/Labels**: Cada recurso emitido incluye etiquetas de auditoría que vinculan el recurso cloud con su nodo CMIR original:
   ```hcl
   tags = {
@@ -667,7 +660,7 @@ stateDiagram-v2
 1. **Compuerta de Aprobación Obligatoria (`APPROVED`)**: Ninguna llamada a `advance_execution()` puede iniciar el aprovisionamiento (`PREPARING`), las pruebas (`TESTING`) ni el `CUTOVER` si el plan no ha sido aprobado previamente mediante `approve_migration()`, registrando `approved_by` y `approved_at`.
 2. **Control de Concurrencia Optimista y Bloqueo Atómico de Etapa**: Cada mutación verifica `expected_version` (devolviendo HTTP 409 Conflict ante escrituras concurrentes) y adquiere un cerrojo exclusivo en base de datos (`acquire_stage_lock`) para que dos operadores no puedan ejecutar la misma etapa simultáneamente.
 3. **Ejecución Idempotente (`idempotency_key`)**: Cada intento de ejecución de etapa se registra en la tabla `idempotent_stage_executions`. Si se reenvía una petición con la misma `idempotency_key`, devuelve el resultado previo sin duplicar recursos.
-4. **Honestidad Operativa (`simulated_dry_run` vs `live_cloud`)**: Si no hay credenciales reales activas o se ejecuta con `dry_run=True`, el orquestador marca explícitamente `execution_mode = "simulated_dry_run"` y `completed_in_real_cloud = False`, sin fingir jamás que se crearon recursos en una cuenta real de AWS o GCP.
+4. **Honestidad Operativa (`simulated_dry_run` vs `live_cloud`)**: Si no hay credenciales reales activas o se ejecuta con `dry_run=True`, el orquestador marca explícitamente `execution_mode = "simulated_dry_run"` y `completed_in_real_cloud = False`, sin fingir jamás que se crearon recursos en una cuenta real de AWS.
 5. **Preservación Estricta del Origen (`source_environment_destroyed = False`)**: CloudMove opera bajo la política `PRESERVED_READ_ONLY_STANDBY`, garantizando que el código y el entorno de origen permanezcan intactos para permitir un rollback inmediato revirtiendo el enrutamiento/DNS.
 
 ---
@@ -680,12 +673,12 @@ La función [`build_app_migration_stages()`](file:///home/lacastrilp/Documentos/
 | :---: | :--- | :---: | :--- |
 | **1** | `uc1-stage-01` | `DISCOVERING → ASSESSED` | Descubrimiento estático de código, manifiestos y runtime (sin ejecutar código arbitrario) y redacción de secretos. |
 | **2** | `uc1-stage-02` | `DISCOVERING → ASSESSED` | Construcción del subgrafo CMIR v2.1 y clasificación de dependencias (`confirmed`, `inferred`, `unknown`). |
-| **3** | `uc1-stage-03` | `DISCOVERING → ASSESSED` | Evaluación de viabilidad y arquitectura destino en AWS/GCP sin forzar refactorización de código. |
+| **3** | `uc1-stage-03` | `DISCOVERING → ASSESSED` | Evaluación de viabilidad y arquitectura destino en AWS sin forzar refactorización de código. |
 | **4** | `uc1-stage-04` | `ASSESSED → PLAN_READY` | Generación y validación de artefactos Terraform (`provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`), runbook de BD, unidad `systemd` y plantilla `.env`. |
-| **5** | `uc1-stage-05` | `PLAN_READY → APPROVED` | Aprobación del plan por el arquitecto y confirmación de prerrequisitos IAM/Service Account y políticas de recursos compartidos. |
-| **6** | `uc1-stage-06` | `APPROVED → PREPARING` | Aprovisionamiento de red VPC, subredes privadas, Security Groups / Firewalls para los puertos expuestos e identidad de carga. |
-| **7** | `uc1-stage-07` | `APPROVED → PREPARING` | Aprovisionamiento de instancias de bases de datos (RDS/Cloud SQL), caché y volúmenes; ejecución de volcado consistente (`pg_dump`) y verificación de integridad SHA-256. |
-| **8** | `uc1-stage-08` | `PREPARING → TESTING` | Empaquetado y despliegue de la aplicación en el entorno aislado de destino e inyección de secretos desde Secrets Manager / Secret Manager. |
+| **5** | `uc1-stage-05` | `PLAN_READY → APPROVED` | Aprobación del plan por el arquitecto y confirmación de prerrequisitos IAM y políticas de recursos compartidos. |
+| **6** | `uc1-stage-06` | `APPROVED → PREPARING` | Aprovisionamiento de red VPC, subredes privadas, Security Groups para los puertos expuestos e identidad de carga. |
+| **7** | `uc1-stage-07` | `APPROVED → PREPARING` | Aprovisionamiento de instancias de bases de datos (RDS), caché y volúmenes; ejecución de volcado consistente (`pg_dump`) y verificación de integridad SHA-256. |
+| **8** | `uc1-stage-08` | `PREPARING → TESTING` | Empaquetado y despliegue de la aplicación en el entorno aislado de destino e inyección de secretos en la instancia/contenedor. |
 | **9** | `uc1-stage-09` | `PREPARING → TESTING` | Pruebas de humo (`Smoke Tests`): verificación de arranque del proceso, escucha en puertos TCP y respuesta `200 OK` en el endpoint de salud. |
 | **10** | `uc1-stage-10` | `TESTING → READY_FOR_CUTOVER` | Pruebas funcionales de extremo a extremo (`verify_application_health_and_functional_tests`) e informe comparativo de comportamiento pre-cutover. |
 | **11** | `uc1-stage-11` | `READY_FOR_CUTOVER → COMPLETED` | Cutover controlado de tráfico hacia la nube: drenado de conexiones activas, sincronización delta final y conmutación de DNS/Balanceador. |
@@ -720,7 +713,7 @@ En la raíz del repositorio se encuentra el archivo [`ReportCocoApp.json`](file:
   - `runtime`: `"nginx:alpine"`, `start_commands`: `["[\"nginx\", \"-g\", \"daemon off;\"]"]`, `exposed_ports`: `[80]`, `health_endpoints`: `["/health"]`.
 - **Dependencias Clasificadas Epistémicamente**:
   1. `dep-cocoaapp-postgresql-inferred` (`type: "database_instance"`, `engine: "postgres"`, `epistemic_state: "inferred"`, `confidence: 0.65`): Inferida por la presencia de `psycopg2-binary==2.9.9` y `SQLAlchemy==2.0.29` en `requirements.txt` sin un servicio local de PostgreSQL en Compose.
-  2. `dep-cocoaapp-ext-vite-api-url` (`type: "network_connection"`, `engine: "https"`, `epistemic_state: "unknown"`, `confidence: 0.50`): Detectada en `.env` (`VITE_API_URL=http://54.227.24.240t:8000`).
+  2. `dep-cocoaapp-ext-vite-api-url` (`type: "network_connection"`, `engine: "https"`, `epistemic_state: "unknown"`, `confidence: 0.50`): Detectada en `.env` (ejemplo: `VITE_API_URL` apuntando al endpoint backend original en la fuente).
 
 ### 10.3. Subgrafo CMIR v2.1 Generado (`build_application_cmir`)
 El motor construyó **6 nodos `CMIRNode`** y **5 relaciones `CMIRRelationship`**:

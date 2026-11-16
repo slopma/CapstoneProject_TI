@@ -13,12 +13,13 @@ import os
 import re
 from typing import Any, Dict, Optional
 
+from app.core.text_utils import slugify
+
 DEFAULT_API_URL = os.getenv("CLOUDMOVE_API_URL", "http://localhost:8000").rstrip("/")
 
 
 def _slug(text: str) -> str:
-    cleaned = re.sub(r"[^a-zA-Z0-9_\-]+", "-", str(text).strip())
-    return re.sub(r"-+", "-", cleaned).strip("-").lower() or "workload"
+    return slugify(text, fallback="workload", allow_underscore=True)
 
 
 def _sanitize_job_name(job_name: str, src: Dict[str, Any]) -> str:

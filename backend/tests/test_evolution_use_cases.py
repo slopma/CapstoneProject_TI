@@ -376,64 +376,74 @@ def test_orchestrator_state_machine_approval_gate_failure_retry_and_rollback():
 
 
 def test_use_case_2_live_host_operating_system_capture_and_cloud_preparation():
-    # 0. Live device probe query (real hardware inspection without preloads)
-    dev_resp = client.get("/api/v1/migration/use-case-2/devices")
-    assert dev_resp.status_code == 200
-    dev_data = dev_resp.json()
-    assert dev_data["queried_live"] is True
-    assert "host" in dev_data
-    assert "hostname" in dev_data["host"]
-    assert len(dev_data["devices"]) >= 1
-    assert dev_data["primary_boot_device"] is not None
+    tok = client.post("/api/v1/agents/enrollment-tokens", json={"ttl_seconds": 300, "max_uses": 1}).json()["token"]
+    enr = client.post(
+        "/api/v1/agents/enroll",
+        json={"enrollment_token": tok, "hostname": "test-live-host-01", "version": "2.2.0"},
+    ).json()
+    agent_id = enr["agent_id"]
 
-    # 1. Capture live host operating system (files, /etc, fstab, services, packages, kernel)
-    cap_resp = client.post(
-        "/api/v1/migration/use-case-2/capture-live",
-        json={"target_provider": "aws", "output_format": "QCOW2"},
-    )
-    assert cap_resp.status_code == 200
-    data = cap_resp.json()
-    assert data["use_case"] == "vm_image"
-    manifest = data["manifest"]
-    assert manifest["is_live_capture"] is True
-    assert manifest["source_type"] == "live_server"
-    assert manifest["is_authentic_binary_image"] is True
-    assert manifest["snapshot_consistency"]["consistency_type"] == "application_quiesced_snapshot"
-    assert manifest["multi_disk_verification"]["all_volumes_accounted_for"] is True
-    assert Path(manifest["source_file"]).is_file()
-    assert Path(manifest["live_capture_details"]["config_archive"]).is_file()
-    assert len(manifest["disks"]) >= 1
+    try:
+        # 0. Live device probe query (requires an enrolled ONLINE agent)
+        dev_resp = client.get("/api/v1/migration/use-case-2/devices", params={"agent_id": agent_id})
+        assert dev_resp.status_code == 200
+        dev_data = dev_resp.json()
+        assert dev_data["queried_live"] is True
+        assert "host" in dev_data
+        assert "hostname" in dev_data["host"]
+        assert len(dev_data["devices"]) >= 1
+        assert dev_data["primary_boot_device"] is not None
 
-    # 2. Plan live OS migration into AWS orchestrator
-    mig_resp = client.post(
-        "/api/v1/migration/use-case-2/migrate",
-        json={"target_provider": "aws", "capture_live_host": True, "output_format": "RAW"},
-    )
-    assert mig_resp.status_code == 200
-    job = mig_resp.json()
-    assert job["use_case"] == "vm_image"
-    assert job["state"] == "PLAN_READY"
-    assert len(job["ordered_stages"]) == 13
-    assert job["source_environment"]["is_live_capture"] is True
-    assert "diff_report" in job["generated_artifacts"]
+        # 1. Capture live host operating system (files, /etc, fstab, services, packages, kernel)
+        cap_resp = client.post(
+            "/api/v1/migration/use-case-2/capture-live",
+            json={"target_provider": "aws", "output_format": "QCOW2", "agent_id": agent_id},
+        )
+        assert cap_resp.status_code == 200
+        data = cap_resp.json()
+        assert data["use_case"] == "vm_image"
+        manifest = data["manifest"]
+        assert manifest["is_live_capture"] is True
+        assert manifest["source_type"] == "live_server"
+        assert manifest["is_authentic_binary_image"] is True
+        assert manifest["snapshot_consistency"]["consistency_type"] == "application_quiesced_snapshot"
+        assert manifest["multi_disk_verification"]["all_volumes_accounted_for"] is True
+        assert Path(manifest["source_file"]).is_file()
+        assert Path(manifest["live_capture_details"]["config_archive"]).is_file()
+        assert len(manifest["disks"]) >= 1
 
-    # 3. Verify Download Endpoints (bundle.zip, system-image, disk-image, deployment-guide)
-    mid = job["migration_id"]
-    bundle_resp = client.get(f"/api/v1/migration/jobs/{mid}/bundle.zip")
-    assert bundle_resp.status_code == 200
-    assert bundle_resp.headers["content-type"] == "application/zip"
+        # 2. Plan live OS migration into AWS orchestrator
+        mig_resp = client.post(
+            "/api/v1/migration/use-case-2/migrate",
+            json={"target_provider": "aws", "capture_live_host": True, "output_format": "RAW", "agent_id": agent_id},
+        )
+        assert mig_resp.status_code == 200
+        job = mig_resp.json()
+        assert job["use_case"] == "vm_image"
+        assert job["state"] == "PLAN_READY"
+        assert len(job["ordered_stages"]) == 13
+        assert job["source_environment"]["is_live_capture"] is True
+        assert "diff_report" in job["generated_artifacts"]
 
-    guide_resp = client.get(f"/api/v1/migration/jobs/{mid}/deployment-guide")
-    assert guide_resp.status_code == 200
-    guide_md = guide_resp.json()["deployment_guide_markdown"]
-    assert "Paso 1: Descargar la Copia del SO" in guide_md
-    assert "Paso 6: Restauracion de Configuraciones" in guide_md
+        # 3. Verify Download Endpoints (bundle.zip, system-image, disk-image, deployment-guide)
+        mid = job["migration_id"]
+        bundle_resp = client.get(f"/api/v1/migration/jobs/{mid}/bundle.zip")
+        assert bundle_resp.status_code == 200
+        assert bundle_resp.headers["content-type"] == "application/zip"
 
-    sys_img_resp = client.get(f"/api/v1/migration/jobs/{mid}/system-image")
-    assert sys_img_resp.status_code == 200
-    assert "gzip" in sys_img_resp.headers["content-type"]
+        guide_resp = client.get(f"/api/v1/migration/jobs/{mid}/deployment-guide")
+        assert guide_resp.status_code == 200
+        guide_md = guide_resp.json()["deployment_guide_markdown"]
+        assert "Paso 1: Descargar la Copia del SO" in guide_md
+        assert "Paso 6: Restauracion de Configuraciones" in guide_md
 
-    disk_img_resp = client.get(f"/api/v1/migration/jobs/{mid}/disk-image")
-    assert disk_img_resp.status_code == 200
+        sys_img_resp = client.get(f"/api/v1/migration/jobs/{mid}/system-image")
+        assert sys_img_resp.status_code == 200
+        assert "gzip" in sys_img_resp.headers["content-type"]
+
+        disk_img_resp = client.get(f"/api/v1/migration/jobs/{mid}/disk-image")
+        assert disk_img_resp.status_code == 200
+    finally:
+        client.post(f"/api/v1/agents/{agent_id}/revoke", json={"reason": "test cleanup"})
 
 

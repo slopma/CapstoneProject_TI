@@ -20,109 +20,16 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-
-_TERRAFORM_DIAGNOSIS_RULES: List[tuple[re.Pattern[str], str, str, str, str, bool]] = [
-    (
-        re.compile(
-            r'first character of "identifier" must be a letter|only lowercase alphanumeric characters and hyphens|name_prefix.*cannot be longer|RFC1035|InvalidParameterValue.*(?:identifier|cluster|bucket|name)|Identificador (?:RDS|ElastiCache|HCL) inválido|Nombre de bucket inválido|name_prefix.*excede el límite',
-            re.IGNORECASE,
-        ),
-        "INVALID_CLOUD_IDENTIFIER",
-        "Identificador de recurso inválido para AWS",
-        "Un nombre generado (por ejemplo desde un repositorio que inicia con dígito como '2026-2' o excede el límite de caracteres) incumple las reglas de nomenclatura de AWS.",
-        "Haz clic en 'Reparar y Regenerar Manifiestos' para normalizar automáticamente los identificadores con prefijos válidos y volver a validar antes de desplegar.",
-        True,
-    ),
-    (
-        re.compile(
-            r"Reference to undeclared resource|Reference to undeclared input variable|Unsupported block type|Unsupported argument",
-            re.IGNORECASE,
-        ),
-        "HCL_SYNTAX_OR_REF_ERROR",
-        "Inconsistencia sintáctica o referencia HCL en los manifiestos",
-        "Existe una referencia o bloque en main.tf/outputs.tf generado con una versión anterior o configuración inconsistente.",
-        "Ejecuta 'Reparar y Regenerar Manifiestos' para resintetizar la plantilla Terraform y vuelve a ejecutar Dry-Run.",
-        True,
-    ),
-    (
-        re.compile(
-            r"ExpiredToken|InvalidClientTokenId|security token included in the request is expired|AuthFailure|No valid credential sources found",
-            re.IGNORECASE,
-        ),
-        "AWS_CREDENTIALS_EXPIRED",
-        "Credenciales o Session Token de AWS expirados o inválidos",
-        "Las credenciales temporales (AWS Academy / STS) caducaron o son incorrectas.",
-        "Actualiza AWS Access Key ID, Secret Access Key y Session Token en el Paso 1, pulsa 'Comprobar Identidad AWS / STS' y reintenta con 'Continuar / Aplicar'.",
-        False,
-    ),
-    (
-        re.compile(r"AccessDenied|UnauthorizedOperation|is not authorized to perform", re.IGNORECASE),
-        "AWS_PERMISSION_DENIED",
-        "Permiso IAM insuficiente en la cuenta AWS destino",
-        "El rol o usuario STS actual no tiene permiso para crear uno de los recursos planificados (frecuente en AWS Academy con IAM Roles personalizados).",
-        "Si falla creando aws_iam_role, selecciona 'Omitir IAM personalizado (skip_custom_iam)' en las decisiones de arquitectura y regenera los manifiestos.",
-        True,
-    ),
-    (
-        re.compile(
-            r"DBInstanceAlreadyExists|BucketAlreadyExists|BucketAlreadyOwnedByYou|InvalidGroup\.Duplicate|EntityAlreadyExists",
-            re.IGNORECASE,
-        ),
-        "RESOURCE_ALREADY_EXISTS",
-        "El recurso ya existe previamente en AWS",
-        "Un intento previo dejó el recurso creado en AWS fuera de terraform.tfstate (o el nombre de bucket ya está en uso globalmente).",
-        "Usa 'terraform refresh' / 'Continuar / Aplicar' o ejecuta 'Reparar y Regenerar Manifiestos' para asignar identificadores únicos e importar estado.",
-        True,
-    ),
-    (
-        re.compile(r"Error acquiring the state lock", re.IGNORECASE),
-        "STATE_LOCKED",
-        "Estado de Terraform bloqueado por ejecución previa",
-        "Un proceso anterior dejó el archivo .terraform.tfstate.lock.info activo.",
-        "Pulsa 'Desbloquear Estado' en la barra de comandos y luego reintenta el despliegue.",
-        False,
-    ),
-    (
-        re.compile(
-            r"VcpuLimitExceeded|InsufficientInstanceCapacity|DBSubnetGroupDoesNotCoverEnoughAZs|QuotaExceeded|LimitExceeded",
-            re.IGNORECASE,
-        ),
-        "QUOTA_OR_CAPACITY",
-        "Límite de cuota o disponibilidad de zona en AWS/GCP",
-        "La región o cuenta sandbox alcanzó un límite de instancias, subredes o vCPUs.",
-        "Cambia el perfil de cómputo a Free-Tier ('single_instance_containerized' / t3.micro) o cambia de región AWS y reintenta.",
-        False,
-    ),
-]
-
-
-def _diagnose_terraform_failure(logs: List[str], provider: str = "aws") -> Optional[Dict[str, Any]]:
-    """Classify the latest Terraform error block into an actionable remediation summary."""
-    tail_blob = "\n".join(logs[-100:])
-    if not tail_blob.strip():
-        return None
-    for pat, code, title, cause, remediation, can_regen in _TERRAFORM_DIAGNOSIS_RULES:
-        m = pat.search(tail_blob)
-        if m:
-            return {
-                "code": code,
-                "provider": provider.upper(),
-                "title": title,
-                "matched_snippet": m.group(0)[:220],
-                "cause": cause,
-                "remediation": remediation,
-                "can_auto_regenerate": can_regen,
-            }
-    err_lines = [ln.strip() for ln in logs[-40:] if "Error:" in ln or "[ERROR]" in ln]
-    return {
-        "code": "TERRAFORM_EXECUTION_ERROR",
-        "provider": provider.upper(),
-        "title": "Fallo en la ejecución de Terraform",
-        "matched_snippet": err_lines[0][:220] if err_lines else "",
-        "cause": err_lines[0] if err_lines else "Terraform retornó un código de salida distinto de cero.",
-        "remediation": "Revisa el detalle en la terminal de logs o regenera los manifiestos si realizaste cambios recientes.",
-        "can_auto_regenerate": True,
-    }
+from app.migration.aws_audit import (
+    audit_aws_account as _run_aws_audit,
+    boto_config as _aws_boto_config,
+    create_boto3_session as _create_aws_boto3_session,
+    delete_aws_audit_resource as _run_aws_delete_resource,
+)
+from app.migration.tfstate_inspector import (
+    diagnose_terraform_failure as _diagnose_terraform_failure,
+    inspect_tfstate as _inspect_tfstate_file,
+)
 
 
 class CloudDeploymentRunner:
@@ -140,6 +47,7 @@ class CloudDeploymentRunner:
         default_root = Path(__file__).resolve().parent.parent.parent.parent
         if not (default_root / "backend").exists() and Path("/app/generated").exists():
             default_root = Path("/app")
+        self._default_root = default_root
         self.workspace_root = workspace_root or default_root
         self._lock = threading.RLock()
         self._active_processes: Dict[str, subprocess.Popen] = {}
@@ -148,46 +56,32 @@ class CloudDeploymentRunner:
         self._cancelled_flags: Dict[str, bool] = {}
         self._job_logs: Dict[str, List[str]] = {}
         self._job_status: Dict[str, Dict[str, Any]] = {}
-        self._last_credentials: Optional[Dict[str, str]] = self._load_cached_credentials()
-
-    def _creds_cache_file(self) -> Path:
-        for cand in [Path("/app/data"), self.workspace_root / "backend" / "data", self.workspace_root / "data"]:
-            if cand.exists():
-                return cand / ".aws_audit_creds.json"
-        fallback = self.workspace_root / "data"
-        fallback.mkdir(parents=True, exist_ok=True)
-        return fallback / ".aws_audit_creds.json"
-
-    def _load_cached_credentials(self) -> Optional[Dict[str, str]]:
-        # Security policy: never persist or load plain-text credentials from disk
-        try:
-            cf = self._creds_cache_file()
-            if cf.is_file():
-                cf.unlink(missing_ok=True)
-        except Exception:
-            pass
-        return None
-
-    def _save_cached_credentials(self, creds: Dict[str, str]) -> None:
-        # Security policy: keep credentials strictly in ephemeral process memory for active session
-        self._last_credentials = dict(creds) if isinstance(creds, dict) else None
 
     def resolve_job_dir(self, migration_id: str, job: Optional[Dict[str, Any]] = None) -> Path:
         """
         Locate or create the persistent Terraform working directory for a migration job.
         Prioritizes existing directories with a `terraform.tfstate` file under mounted storage.
+        Rejects unsafe traversal identifiers (`..`, `/`, `\\`).
         """
+        from app.core.security import validate_safe_id
+
+        safe_mig_id = validate_safe_id(migration_id, label="migration_id")
+        if self.workspace_root != getattr(self, "_default_root", self.workspace_root):
+            default_dir = self.workspace_root / "generated" / "deployments" / safe_mig_id
+            default_dir.mkdir(parents=True, exist_ok=True)
+            return default_dir
+
         candidates = [
-            Path("generated/deployments") / migration_id,
-            self.workspace_root / "generated" / "deployments" / migration_id,
-            Path("/app/generated/deployments") / migration_id,
-            Path("/generated/deployments") / migration_id,
+            Path("generated/deployments") / safe_mig_id,
+            self.workspace_root / "generated" / "deployments" / safe_mig_id,
+            Path("/app/generated/deployments") / safe_mig_id,
+            Path("/generated/deployments") / safe_mig_id,
         ]
         if job:
-            use_case = job.get("use_case", "app_source")
-            provider = job.get("target_provider", "aws")
-            candidates.insert(0, Path.cwd() / f"cloudmove-{use_case}-{provider}-{migration_id}")
-            candidates.insert(1, self.workspace_root / f"cloudmove-{use_case}-{provider}-{migration_id}")
+            use_case = validate_safe_id(str(job.get("use_case", "app_source")), label="use_case")
+            provider = validate_safe_id(str(job.get("target_provider", "aws")), label="target_provider")
+            candidates.insert(0, Path.cwd() / f"cloudmove-{use_case}-{provider}-{safe_mig_id}")
+            candidates.insert(1, self.workspace_root / f"cloudmove-{use_case}-{provider}-{safe_mig_id}")
 
         for cand in candidates:
             if (cand / "terraform.tfstate").exists():
@@ -197,36 +91,58 @@ class CloudDeploymentRunner:
                 return cand
 
         if Path("/app/generated").is_dir():
-            default_dir = Path("/app/generated/deployments") / migration_id
+            default_dir = Path("/app/generated/deployments") / safe_mig_id
         else:
-            default_dir = self.workspace_root / "generated" / "deployments" / migration_id
+            default_dir = self.workspace_root / "generated" / "deployments" / safe_mig_id
         default_dir.mkdir(parents=True, exist_ok=True)
         return default_dir
 
     def _build_env(self, credentials: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        """
+        Build an isolated subprocess environment using strictly allowlisted AWS credential keys.
+        Never caches or reuses another user's credentials across requests, and blocks IMDS fallback
+        on multi-user web hosts unless `CLOUDMOVE_ALLOW_SERVER_AWS_FALLBACK=true`.
+        """
+        from app.config import ALLOW_SERVER_AWS_FALLBACK
+
         env = os.environ.copy()
-        effective_creds = credentials
-        if effective_creds and effective_creds.get("aws_access_key_id") and effective_creds.get("aws_secret_access_key"):
-            with self._lock:
-                self._last_credentials = dict(effective_creds)
-            self._save_cached_credentials(self._last_credentials)
-        elif not effective_creds:
-            with self._lock:
-                if not self._last_credentials:
-                    self._last_credentials = self._load_cached_credentials()
-                effective_creds = self._last_credentials
-        if effective_creds:
-            if effective_creds.get("aws_access_key_id"):
-                env["AWS_ACCESS_KEY_ID"] = effective_creds["aws_access_key_id"].strip()
-            if effective_creds.get("aws_secret_access_key"):
-                env["AWS_SECRET_ACCESS_KEY"] = effective_creds["aws_secret_access_key"].strip()
+        effective_creds = credentials if isinstance(credentials, dict) else {}
+        has_explicit = bool(
+            effective_creds.get("aws_access_key_id") and effective_creds.get("aws_secret_access_key")
+        )
+
+        if has_explicit:
+            env["AWS_ACCESS_KEY_ID"] = str(effective_creds["aws_access_key_id"]).strip()
+            env["AWS_SECRET_ACCESS_KEY"] = str(effective_creds["aws_secret_access_key"]).strip()
             if effective_creds.get("aws_session_token"):
-                env["AWS_SESSION_TOKEN"] = effective_creds["aws_session_token"].strip()
+                env["AWS_SESSION_TOKEN"] = str(effective_creds["aws_session_token"]).strip()
+            else:
+                env.pop("AWS_SESSION_TOKEN", None)
+            region = str(
+                effective_creds.get("aws_region") or effective_creds.get("aws_default_region") or "us-east-1"
+            ).strip() or "us-east-1"
+            env["AWS_DEFAULT_REGION"] = region
+            env["AWS_REGION"] = region
+            env["AWS_EC2_METADATA_DISABLED"] = "true"
+        elif not ALLOW_SERVER_AWS_FALLBACK:
+            for key in (
+                "AWS_ACCESS_KEY_ID",
+                "AWS_SECRET_ACCESS_KEY",
+                "AWS_SESSION_TOKEN",
+                "AWS_PROFILE",
+                "AWS_SHARED_CREDENTIALS_FILE",
+                "AWS_CONFIG_FILE",
+            ):
+                env.pop(key, None)
+            env["AWS_EC2_METADATA_DISABLED"] = "true"
             if effective_creds.get("aws_region"):
-                env["AWS_DEFAULT_REGION"] = effective_creds["aws_region"].strip()
-            for k, v in effective_creds.items():
-                if v and k.upper() not in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION"):
-                    env[k.upper()] = str(v).strip()
+                reg = str(effective_creds["aws_region"]).strip()
+                env["AWS_DEFAULT_REGION"] = reg
+                env["AWS_REGION"] = reg
+        elif effective_creds.get("aws_region"):
+            reg = str(effective_creds["aws_region"]).strip()
+            env["AWS_DEFAULT_REGION"] = reg
+            env["AWS_REGION"] = reg
         return env
 
     def _append_log(self, migration_id: str, job_dir: Path, line: str) -> None:
@@ -296,94 +212,8 @@ class CloudDeploymentRunner:
         }
 
     def inspect_tfstate(self, job_dir: Path) -> Dict[str, Any]:
-        """
-        Parse `terraform.tfstate` directly to extract live provisioned resources,
-        IDs, public IPs, DNS hostnames, and synthesized outputs even if `outputs.tf`
-        had not yet exported them.
-        """
-        tfstate_path = job_dir / "terraform.tfstate"
-        result: Dict[str, Any] = {
-            "has_state_file": tfstate_path.is_file(),
-            "serial": 0,
-            "terraform_version": None,
-            "resource_count": 0,
-            "resources": [],
-            "outputs": {},
-            "primary_instance": None,
-        }
-        if not tfstate_path.is_file():
-            return result
-
-        try:
-            raw = json.loads(tfstate_path.read_text(encoding="utf-8"))
-            result["serial"] = raw.get("serial", 0)
-            result["terraform_version"] = raw.get("terraform_version")
-
-            # 1. Explicit outputs from tfstate
-            raw_outputs = raw.get("outputs") or {}
-            for k, v in raw_outputs.items():
-                if isinstance(v, dict):
-                    result["outputs"][k] = {
-                        "value": v.get("value"),
-                        "type": v.get("type", "string"),
-                    }
-
-            # 2. Extract resources from tfstate
-            resources_list: List[Dict[str, Any]] = []
-            for r in raw.get("resources") or []:
-                mode = r.get("mode", "managed")
-                r_type = r.get("type", "")
-                r_name = r.get("name", "")
-                address = f"{'data.' if mode == 'data' else ''}{r_type}.{r_name}"
-                for idx, inst in enumerate(r.get("instances") or []):
-                    attrs = inst.get("attributes") or {}
-                    res_id = attrs.get("id") or attrs.get("arn") or ""
-                    item = {
-                        "address": address if idx == 0 else f"{address}[{idx}]",
-                        "mode": mode,
-                        "type": r_type,
-                        "name": r_name,
-                        "id": res_id,
-                        "arn": attrs.get("arn"),
-                        "public_ip": attrs.get("public_ip"),
-                        "private_ip": attrs.get("private_ip"),
-                        "public_dns": attrs.get("public_dns"),
-                        "instance_state": attrs.get("instance_state"),
-                        "instance_type": attrs.get("instance_type"),
-                        "cidr_block": attrs.get("cidr_block"),
-                        "availability_zone": attrs.get("availability_zone"),
-                        "dns_name": attrs.get("dns_name"),
-                        "tags": attrs.get("tags") or {},
-                    }
-                    resources_list.append(item)
-
-                    if mode == "managed" and r_type == "aws_instance":
-                        result["primary_instance"] = item
-                        pub_ip = attrs.get("public_ip")
-                        pub_dns = attrs.get("public_dns")
-                        if res_id and "instance_id" not in result["outputs"]:
-                            result["outputs"]["instance_id"] = {"value": res_id, "type": "string"}
-                        if pub_ip:
-                            result["outputs"].setdefault("instance_public_ip", {"value": pub_ip, "type": "string"})
-                            result["outputs"].setdefault("frontend_url", {"value": f"http://{pub_ip}:3000", "type": "string"})
-                            result["outputs"].setdefault("backend_api_url", {"value": f"http://{pub_ip}:8000", "type": "string"})
-                            result["outputs"].setdefault("app_endpoint", {"value": f"http://{pub_ip}:3000", "type": "string"})
-                            result["outputs"].setdefault("ssh_command", {"value": f"ssh ubuntu@{pub_ip}", "type": "string"})
-                        if pub_dns:
-                            result["outputs"].setdefault("instance_public_dns", {"value": pub_dns, "type": "string"})
-                    elif mode == "managed" and r_type == "aws_vpc" and res_id:
-                        result["outputs"].setdefault("vpc_id", {"value": res_id, "type": "string"})
-                    elif mode == "managed" and r_type == "aws_security_group" and res_id:
-                        result["outputs"].setdefault("security_group_id", {"value": res_id, "type": "string"})
-
-            managed_resources = [x for x in resources_list if x["mode"] == "managed"]
-            result["resources"] = resources_list
-            result["managed_resources"] = managed_resources
-            result["resource_count"] = len(managed_resources)
-        except Exception as exc:
-            result["parse_error"] = str(exc)
-
-        return result
+        """Parse `terraform.tfstate` directly to extract provisioned resources and outputs."""
+        return _inspect_tfstate_file(job_dir)
 
     def materialize_job_files(
         self,
@@ -897,12 +727,21 @@ class CloudDeploymentRunner:
                         tfstate_text = tfstate_path.read_text(encoding="utf-8", errors="ignore")
                     import re as _re
                     for match in _re.finditer(
-                        r'resource\s+"aws_db_instance"\s+"([^"]+)"\s*\{([^}]*)\}',
+                        r'resource\s+"aws_db_instance"\s+"([^"]+)"\s*\{',
                         main_tf_text,
-                        _re.DOTALL,
                     ):
                         r_id = match.group(1)
-                        body = match.group(2)
+                        # Extract full balanced HCL block body (handles nested `tags = { ... }`)
+                        depth = 1
+                        pos = match.end()
+                        while pos < len(main_tf_text) and depth > 0:
+                            ch = main_tf_text[pos]
+                            if ch == "{":
+                                depth += 1
+                            elif ch == "}":
+                                depth -= 1
+                            pos += 1
+                        body = main_tf_text[match.end():max(match.end(), pos - 1)]
                         id_match = _re.search(r'identifier\s*=\s*"([^"]+)"', body)
                         if not id_match:
                             continue
@@ -1173,87 +1012,83 @@ class CloudDeploymentRunner:
     ) -> Dict[str, Any]:
         """
         Verify cloud credentials and caller identity without modifying resources.
+        Strictly scoped to the caller's provided credentials in multi-user web mode.
         """
-        clean_provider = provider.lower().strip()
-        env = self._build_env(credentials)
+        from app.config import ALLOW_SERVER_AWS_FALLBACK
 
-        if clean_provider == "aws":
-            has_creds = bool(
-                (credentials and credentials.get("aws_access_key_id") and credentials.get("aws_secret_access_key"))
-                or (env.get("AWS_ACCESS_KEY_ID") and env.get("AWS_SECRET_ACCESS_KEY"))
+        clean_provider = provider.lower().strip()
+        if clean_provider != "aws":
+            return {
+                "valid": False,
+                "provider": clean_provider,
+                "error": f"Proveedor '{provider}' no admitido. CloudMove opera exclusivamente sobre AWS.",
+            }
+
+        has_explicit = bool(
+            isinstance(credentials, dict)
+            and credentials.get("aws_access_key_id")
+            and credentials.get("aws_secret_access_key")
+        )
+        env = self._build_env(credentials)
+        has_fallback = bool(
+            ALLOW_SERVER_AWS_FALLBACK
+            and (
+                (env.get("AWS_ACCESS_KEY_ID") and env.get("AWS_SECRET_ACCESS_KEY"))
                 or (Path.home() / ".aws" / "credentials").is_file()
             )
-            if not has_creds:
-                return {
-                    "valid": False,
-                    "provider": "aws",
-                    "requires_input": True,
-                    "error": "No se han proporcionado credenciales de AWS. Ingrese su AWS Access Key ID y AWS Secret Access Key para autenticar la identidad con AWS STS.",
-                }
+        )
+        if not has_explicit and not has_fallback:
+            return {
+                "valid": False,
+                "provider": "aws",
+                "requires_input": True,
+                "error": "No se han proporcionado credenciales de AWS. Ingrese su AWS Access Key ID y AWS Secret Access Key para autenticar la identidad con AWS STS.",
+            }
 
-            aws_bin = shutil.which("aws")
-            if not aws_bin:
-                return {
-                    "valid": False,
-                    "provider": "aws",
-                    "error": "AWS CLI no está instalado en el servidor de CloudMove.",
-                }
+        try:
+            session, region = self._get_boto3_session(credentials)
+            cfg = self._boto_config(read_timeout=10)
+            sts = session.client("sts", region_name=region, config=cfg)
+            identity = sts.get_caller_identity()
             try:
-                proc = subprocess.run(
-                    [aws_bin, "sts", "get-caller-identity", "--output", "json"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                    env=env,
-                )
-                if proc.returncode == 0:
-                    identity = json.loads(proc.stdout)
-                    # Also verify that Vocareum / AWS Academy has not attached `policy/voc-cancel-cred`
-                    ec2_check = subprocess.run(
-                        [aws_bin, "ec2", "describe-regions", "--region-names", "us-east-1", "--output", "json"],
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                        env=env,
-                    )
-                    if ec2_check.returncode != 0 and "voc-cancel-cred" in (ec2_check.stderr or ""):
-                        return {
-                            "valid": False,
-                            "provider": "aws",
-                            "account": identity.get("Account"),
-                            "arn": identity.get("Arn"),
-                            "error": (
-                                f"Credenciales revocadas por AWS Academy / Vocareum (policy/voc-cancel-cred) para {identity.get('Arn')}. "
-                                "El laboratorio se detuvo o expiró: ve a AWS Academy Learner Lab, haz clic en 'Start Lab' y copia las nuevas credenciales (Access Key, Secret Key y Session Token)."
-                            ),
-                        }
-                    return {
-                        "valid": True,
-                        "provider": "aws",
-                        "account": identity.get("Account"),
-                        "arn": identity.get("Arn"),
-                        "user_id": identity.get("UserId"),
-                        "message": f"Identidad AWS y permisos EC2 activos confirmados para {identity.get('Arn')}.",
-                    }
-                else:
-                    err = proc.stderr.strip() or "Credenciales no configuradas o inválidas."
+                ec2 = session.client("ec2", region_name=region, config=cfg)
+                ec2.describe_regions(RegionNames=[region])
+            except Exception as ec2_exc:
+                err_txt = str(ec2_exc)
+                if "voc-cancel-cred" in err_txt:
                     return {
                         "valid": False,
                         "provider": "aws",
-                        "error": f"Fallo al autenticar con AWS STS: {err}",
+                        "account": identity.get("Account"),
+                        "arn": identity.get("Arn"),
+                        "error": (
+                            f"Credenciales revocadas por AWS Academy / Vocareum (policy/voc-cancel-cred) para {identity.get('Arn')}. "
+                            "El laboratorio se detuvo o expiró: ve a AWS Academy Learner Lab, haz clic en 'Start Lab' y copia las nuevas credenciales."
+                        ),
                     }
-            except Exception as exc:
                 return {
                     "valid": False,
                     "provider": "aws",
-                    "error": f"Error ejecutando verificación AWS: {str(exc)}",
+                    "account": identity.get("Account"),
+                    "arn": identity.get("Arn"),
+                    "error": f"Identidad STS válida, pero sin permisos EC2 en {region}: {err_txt}",
                 }
 
-        return {
-            "valid": False,
-            "provider": clean_provider,
-            "error": f"Proveedor '{provider}' requiere configuración de Service Account / ADC.",
-        }
+            return {
+                "valid": True,
+                "provider": "aws",
+                "account": identity.get("Account"),
+                "arn": identity.get("Arn"),
+                "user_id": identity.get("UserId"),
+                "region": region,
+                "message": f"Identidad AWS y permisos EC2 activos confirmados para {identity.get('Arn')}.",
+            }
+        except Exception as exc:
+            return {
+                "valid": False,
+                "provider": "aws",
+                "error": f"Fallo al autenticar con AWS STS: {str(exc)}",
+            }
 
     def execute_job_deployment(
         self,
@@ -1352,568 +1187,29 @@ class CloudDeploymentRunner:
 
     @staticmethod
     def _boto_config(read_timeout: int = 10):
-        from botocore.config import Config as BotocoreConfig
-        return BotocoreConfig(
-            connect_timeout=5,
-            read_timeout=read_timeout,
-            retries={"max_attempts": 2},
-        )
+        return _aws_boto_config(read_timeout=read_timeout)
 
     def _get_boto3_session(self, credentials: Optional[Dict[str, str]] = None):
-        import boto3
-        env = self._build_env(credentials)
-        ak = env.get("AWS_ACCESS_KEY_ID", "").strip()
-        sk = env.get("AWS_SECRET_ACCESS_KEY", "").strip()
-        st = env.get("AWS_SESSION_TOKEN", "").strip() or None
-        reg = env.get("AWS_DEFAULT_REGION", "us-east-1").strip() or "us-east-1"
-        if ak and sk:
-            return boto3.Session(
-                aws_access_key_id=ak,
-                aws_secret_access_key=sk,
-                aws_session_token=st,
-                region_name=reg,
-            ), reg
-        return boto3.Session(region_name=reg), reg
+        return _create_aws_boto3_session(self._build_env, credentials)
 
     def audit_aws_account(
         self,
         credentials: Optional[Dict[str, str]] = None,
+        jobs_lookup_fn: Optional[Callable[[], List[Dict[str, Any]]]] = None,
     ) -> Dict[str, Any]:
-        """
-        Perform a comprehensive live audit of running AWS resources (EC2 instances,
-        EBS volumes, VPCs, Security Groups, Elastic IPs) and local Terraform workspaces.
-        Also auto-synchronizes dynamic EC2 public IPs into local terraform.tfstate files
-        if an instance changed IP after an AWS Academy lab stop/start cycle.
-        """
-        import socket
+        """Delegate live AWS account auditing to `app.migration.aws_audit`."""
+        def _default_load_jobs() -> List[Dict[str, Any]]:
+            from app.persistence.transactional_db import get_transactional_db
 
-        def _quick_tcp(host: str, port: int, timeout: float = 1.2) -> bool:
-            try:
-                with socket.create_connection((host, port), timeout=timeout):
-                    return True
-            except Exception:
-                return False
+            return get_transactional_db().list_migration_jobs()
 
-        workspaces = self.list_all_workspaces()
-        try:
-            session, region = self._get_boto3_session(credentials)
-            cfg = self._boto_config(read_timeout=10)
-            sts = session.client("sts", config=cfg)
-            caller = sts.get_caller_identity()
-            account_id = caller.get("Account", "")
-            caller_arn = caller.get("Arn", "")
-        except Exception as exc:
-            return {
-                "authenticated": False,
-                "error": f"No se pudo autenticar con AWS STS: {str(exc)}",
-                "workspaces": workspaces,
-                "instances": [],
-                "volumes": [],
-                "vpcs": [],
-                "security_groups": [],
-                "elastic_ips": [],
-            }
-
-        try:
-            ec2 = session.client("ec2", region_name=region, config=cfg)
-
-            # 1. EC2 Instances
-            inst_resp = ec2.describe_instances()
-            instances: List[Dict[str, Any]] = []
-            live_ip_by_instance_id: Dict[str, str] = {}
-            instance_name_by_id: Dict[str, str] = {}
-            control_plane_instance_ids = set()
-            control_plane_vpc_ids = set()
-            probe_targets: List[tuple[int, str]] = []
-
-            for resv in inst_resp.get("Reservations", []):
-                for inst in resv.get("Instances", []):
-                    iid = inst.get("InstanceId", "")
-                    state_name = (inst.get("State") or {}).get("Name", "unknown")
-                    tags_dict = {t["Key"]: t["Value"] for t in (inst.get("Tags") or []) if "Key" in t and "Value" in t}
-                    name = tags_dict.get("Name") or iid
-                    pub_ip = inst.get("PublicIpAddress") or ""
-                    priv_ip = inst.get("PrivateIpAddress") or ""
-                    vpc_id = inst.get("VpcId") or ""
-                    is_cp = bool(
-                        name == "cloudmove-server"
-                        or tags_dict.get("Project") == "CloudMove-Capstone"
-                        or pub_ip in ("44.216.47.253", "100.50.88.231")
-                        or iid in ("i-08505f55cdbb4cfb5", "i-03b7025356f0c982c")
-                    )
-                    if is_cp:
-                        control_plane_instance_ids.add(iid)
-                        if vpc_id:
-                            control_plane_vpc_ids.add(vpc_id)
-
-                    instance_name_by_id[iid] = name
-                    if pub_ip and state_name == "running":
-                        live_ip_by_instance_id[iid] = pub_ip
-
-                    launch_time = inst.get("LaunchTime")
-                    launch_iso = launch_time.isoformat() if hasattr(launch_time, "isoformat") else str(launch_time or "")
-
-                    idx = len(instances)
-                    if state_name == "running" and pub_ip and not is_cp:
-                        probe_targets.append((idx, pub_ip))
-
-                    instances.append({
-                        "instance_id": iid,
-                        "name": name,
-                        "state": state_name,
-                        "instance_type": inst.get("InstanceType", ""),
-                        "public_ip": pub_ip,
-                        "private_ip": priv_ip,
-                        "vpc_id": vpc_id,
-                        "subnet_id": inst.get("SubnetId", ""),
-                        "availability_zone": (inst.get("Placement") or {}).get("AvailabilityZone", ""),
-                        "launch_time": launch_iso,
-                        "tags": tags_dict,
-                        "managed_by_cloudmove": tags_dict.get("ManagedBy") == "CloudMove",
-                        "cmir_id": tags_dict.get("CMIR_ID", ""),
-                        "cmir_type": tags_dict.get("CMIR_Type", ""),
-                        "is_control_plane": is_cp,
-                        "frontend_online": False,
-                        "backend_online": False,
-                        "frontend_url": f"http://{pub_ip}:3000" if pub_ip and not is_cp else ("https://digitalcafeluna.store" if is_cp else None),
-                        "backend_url": f"http://{pub_ip}:8000/health" if pub_ip and not is_cp else ("https://digitalcafeluna.store/api/v1/health" if is_cp else None),
-                        "docs_url": f"http://{pub_ip}:8000/docs" if pub_ip and not is_cp else None,
-                    })
-
-            if probe_targets:
-                with ThreadPoolExecutor(max_workers=min(6, len(probe_targets) * 2)) as pool:
-                    fut_map = {
-                        idx: (
-                            pool.submit(_quick_tcp, pub_ip, 3000, 1.0),
-                            pool.submit(_quick_tcp, pub_ip, 8000, 1.0),
-                        )
-                        for idx, pub_ip in probe_targets
-                    }
-                    for idx, (fe_f, be_f) in fut_map.items():
-                        instances[idx]["frontend_online"] = fe_f.result()
-                        instances[idx]["backend_online"] = be_f.result()
-
-            # Sort instances: running first, then control plane / CloudMove managed
-            instances.sort(key=lambda x: (x["state"] != "running", x["is_control_plane"], x["name"]))
-
-            # 2. Auto-sync dynamic public IPs in local terraform.tfstate files
-            ip_sync_events: List[Dict[str, str]] = []
-            roots = [
-                Path("generated/deployments"),
-                self.workspace_root / "generated" / "deployments",
-                Path("/app/generated/deployments"),
-                Path("/generated/deployments"),
-            ]
-            for r in roots:
-                if not r.is_dir():
-                    continue
-                for child in r.iterdir():
-                    tfstate_file = child / "terraform.tfstate"
-                    if not tfstate_file.is_file():
-                        continue
-                    try:
-                        raw_text = tfstate_file.read_text(encoding="utf-8")
-                        tf_json = json.loads(raw_text)
-                        for res_block in tf_json.get("resources") or []:
-                            if res_block.get("mode") == "managed" and res_block.get("type") == "aws_instance":
-                                for inst_entry in res_block.get("instances") or []:
-                                    attrs = inst_entry.get("attributes") or {}
-                                    tf_iid = attrs.get("id")
-                                    tf_old_ip = attrs.get("public_ip")
-                                    live_ip = live_ip_by_instance_id.get(tf_iid or "")
-                                    if tf_iid and live_ip and tf_old_ip and tf_old_ip != live_ip:
-                                        updated_text = raw_text.replace(tf_old_ip, live_ip)
-                                        tfstate_file.write_text(updated_text, encoding="utf-8")
-                                        ip_sync_events.append({
-                                            "migration_id": child.name,
-                                            "instance_id": tf_iid,
-                                            "old_ip": tf_old_ip,
-                                            "new_ip": live_ip,
-                                        })
-                    except Exception:
-                        pass
-
-            if ip_sync_events:
-                workspaces = self.list_all_workspaces()
-
-            # Map workspace & migration job metadata to every AWS resource
-            jobs_by_id: Dict[str, Dict[str, Any]] = {}
-            try:
-                from app.migration.orchestrator import migration_orchestrator
-                for j in migration_orchestrator.list_migrations():
-                    jid = j.get("migration_id")
-                    if jid:
-                        jobs_by_id[jid] = j
-            except Exception:
-                pass
-
-            def _build_project_meta(mig_id: Optional[str], inst_hint: Optional[Dict[str, Any]] = None, is_cp: bool = False, is_default_net: bool = False) -> Dict[str, Any]:
-                if is_cp:
-                    return {
-                        "project_id": "cloudmove-control-plane",
-                        "project_name": "Servidor Principal CloudMove (digitalcafeluna.store)",
-                        "use_case": "control_plane",
-                        "use_case_label": "Infraestructura Base CloudMove",
-                        "source_detail": "deploy/aws (Producción EC2 + Caddy SSL)",
-                        "migration_id": "deploy/aws",
-                        "is_control_plane": True,
-                    }
-                job_obj = jobs_by_id.get(mig_id or "") if mig_id else None
-                if job_obj:
-                    uc = job_obj.get("use_case", "app_source")
-                    uc_label = (
-                        "Caso 1 · Aplicación (GitHub / Código)"
-                        if uc == "app_source"
-                        else "Caso 2 · Imagen de SO / Máquina Virtual"
-                    )
-                    src_cfg = job_obj.get("source_config") or {}
-                    src_env = job_obj.get("source_environment") or {}
-                    src_detail = (
-                        src_cfg.get("repo_url")
-                        or src_env.get("repository_url")
-                        or src_env.get("hostname")
-                        or src_cfg.get("image_path")
-                        or "Origen CloudMove"
-                    )
-                    return {
-                        "project_id": mig_id,
-                        "project_name": job_obj.get("name") or mig_id,
-                        "use_case": uc,
-                        "use_case_label": uc_label,
-                        "source_detail": str(src_detail),
-                        "migration_id": mig_id,
-                        "is_control_plane": False,
-                    }
-                if inst_hint:
-                    iname = inst_hint.get("name", "")
-                    ctype = inst_hint.get("cmir_type", "")
-                    if "cocoa" in iname.lower() or ctype == "container":
-                        return {
-                            "project_id": mig_id or "mig-app-aws-ba105d",
-                            "project_name": f"Despliegue Aplicación: {iname}",
-                            "use_case": "app_source",
-                            "use_case_label": "Caso 1 · Aplicación (GitHub / Contenedores)",
-                            "source_detail": "https://github.com/slopma/CocoaApp",
-                            "migration_id": mig_id or "mig-app-aws-ba105d",
-                            "is_control_plane": False,
-                        }
-                    if "live-os" in iname.lower() or ctype == "virtual_machine":
-                        return {
-                            "project_id": mig_id or "mig-vm_-aws-6cb907",
-                            "project_name": f"Migración de SO / Máquina Virtual ({iname})",
-                            "use_case": "vm_image",
-                            "use_case_label": "Caso 2 · Imagen de SO / VM",
-                            "source_detail": iname,
-                            "migration_id": mig_id or "mig-vm_-aws-6cb907",
-                            "is_control_plane": False,
-                        }
-                if mig_id:
-                    uc_guess = "app_source" if "app" in mig_id else ("vm_image" if "vm" in mig_id else "other")
-                    return {
-                        "project_id": mig_id,
-                        "project_name": f"Despliegue Terraform ({mig_id})",
-                        "use_case": uc_guess,
-                        "use_case_label": "Caso 1 · Aplicación" if uc_guess == "app_source" else "Caso 2 · Imagen VM",
-                        "source_detail": f"generated/deployments/{mig_id}",
-                        "migration_id": mig_id,
-                        "is_control_plane": False,
-                    }
-                if is_default_net:
-                    return {
-                        "project_id": "aws-default-network",
-                        "project_name": "Red por Defecto de la Cuenta AWS (Default VPC)",
-                        "use_case": "control_plane",
-                        "use_case_label": "Red Base AWS / Servidor CloudMove",
-                        "source_detail": "AWS Default VPC (172.31.0.0/16)",
-                        "migration_id": "deploy/aws",
-                        "is_control_plane": True,
-                    }
-                return {
-                    "project_id": "unassigned-aws-resource",
-                    "project_name": "Recurso en Cuenta AWS (Despliegue Previo / Sin Workspace)",
-                    "use_case": "external",
-                    "use_case_label": "Recurso Huérfano / Externo",
-                    "source_detail": "Cuenta AWS EC2",
-                    "migration_id": None,
-                    "is_control_plane": False,
-                }
-
-            ws_by_resource_id: Dict[str, str] = {}
-            ws_by_instance: Dict[str, str] = {}
-            ws_by_vpc: Dict[str, str] = {}
-            for ws in workspaces:
-                mid = ws["migration_id"]
-                if ws.get("primary_instance_id"):
-                    ws_by_instance[ws["primary_instance_id"]] = mid
-                    ws_by_resource_id[ws["primary_instance_id"]] = mid
-                if ws.get("vpc_id"):
-                    ws_by_vpc[ws["vpc_id"]] = mid
-                    ws_by_resource_id[ws["vpc_id"]] = mid
-                for mr in ws.get("managed_resources") or []:
-                    if mr.get("id"):
-                        ws_by_resource_id[mr["id"]] = mid
-
-            instance_by_id: Dict[str, Dict[str, Any]] = {}
-            vpc_to_project_meta: Dict[str, Dict[str, Any]] = {}
-            for inst in instances:
-                iid = inst["instance_id"]
-                mid = ws_by_instance.get(iid) or ws_by_vpc.get(inst.get("vpc_id") or "")
-                pmeta = _build_project_meta(mid, inst_hint=inst, is_cp=inst["is_control_plane"])
-                inst["migration_id"] = pmeta.get("migration_id")
-                inst["project_info"] = pmeta
-                instance_by_id[iid] = inst
-                if inst.get("vpc_id") and not inst["is_control_plane"]:
-                    vpc_to_project_meta[inst["vpc_id"]] = pmeta
-                    if pmeta.get("migration_id") and inst["vpc_id"] not in ws_by_vpc:
-                        ws_by_vpc[inst["vpc_id"]] = pmeta["migration_id"]
-
-            # Enrich workspaces with project_info
-            for ws in workspaces:
-                ws["project_info"] = _build_project_meta(ws["migration_id"])
-
-            # 3. EBS Volumes
-            vol_resp = ec2.describe_volumes()
-            volumes: List[Dict[str, Any]] = []
-            total_ebs_gb = 0
-            for v in vol_resp.get("Volumes", []):
-                vid = v.get("VolumeId", "")
-                sz = int(v.get("Size", 0))
-                total_ebs_gb += sz
-                atts = v.get("Attachments") or []
-                att_iid = atts[0].get("InstanceId", "") if atts else ""
-                att_dev = atts[0].get("Device", "") if atts else ""
-                is_cp = att_iid in control_plane_instance_ids
-                att_inst = instance_by_id.get(att_iid)
-                vol_pmeta = (
-                    att_inst["project_info"]
-                    if att_inst and att_inst.get("project_info")
-                    else _build_project_meta(ws_by_resource_id.get(vid), is_cp=is_cp)
-                )
-                ctime = v.get("CreateTime")
-                volumes.append({
-                    "volume_id": vid,
-                    "size_gb": sz,
-                    "volume_type": v.get("VolumeType", "gp3"),
-                    "state": v.get("State", ""),
-                    "encrypted": bool(v.get("Encrypted")),
-                    "attached_instance_id": att_iid,
-                    "attached_instance_name": instance_name_by_id.get(att_iid, att_iid),
-                    "device": att_dev,
-                    "create_time": ctime.isoformat() if hasattr(ctime, "isoformat") else str(ctime or ""),
-                    "is_control_plane": is_cp,
-                    "migration_id": vol_pmeta.get("migration_id"),
-                    "project_info": vol_pmeta,
-                })
-
-            # 4. VPCs, Subnets & Internet Gateways
-            vpc_resp = ec2.describe_vpcs()
-            sub_resp = ec2.describe_subnets()
-            igw_resp = ec2.describe_internet_gateways()
-
-            subnets_by_vpc: Dict[str, List[Dict[str, Any]]] = {}
-            for sb in sub_resp.get("Subnets", []):
-                svpc = sb.get("VpcId", "")
-                stags = {t["Key"]: t["Value"] for t in (sb.get("Tags") or []) if "Key" in t and "Value" in t}
-                subnets_by_vpc.setdefault(svpc, []).append({
-                    "subnet_id": sb.get("SubnetId", ""),
-                    "name": stags.get("Name") or sb.get("SubnetId", ""),
-                    "cidr_block": sb.get("CidrBlock", ""),
-                    "availability_zone": sb.get("AvailabilityZone", ""),
-                    "vpc_id": svpc,
-                })
-
-            igws_by_vpc: Dict[str, List[str]] = {}
-            for igw in igw_resp.get("InternetGateways", []):
-                igw_id = igw.get("InternetGatewayId", "")
-                for att in igw.get("Attachments") or []:
-                    if att.get("VpcId"):
-                        igws_by_vpc.setdefault(att["VpcId"], []).append(igw_id)
-
-            vpcs: List[Dict[str, Any]] = []
-            for vp in vpc_resp.get("Vpcs", []):
-                vid = vp.get("VpcId", "")
-                vtags = {t["Key"]: t["Value"] for t in (vp.get("Tags") or []) if "Key" in t and "Value" in t}
-                vname = vtags.get("Name") or ("default-vpc" if vp.get("IsDefault") else vid)
-                active_insts = [i for i in instances if i["vpc_id"] == vid and i["state"] not in ("terminated", "shutting-down")]
-                is_cp = bool(vp.get("IsDefault") or vid in control_plane_vpc_ids)
-                mid = ws_by_vpc.get(vid) or ws_by_resource_id.get(vid)
-                vp_pmeta = (
-                    vpc_to_project_meta.get(vid)
-                    or _build_project_meta(mid, is_cp=is_cp, is_default_net=bool(vp.get("IsDefault")))
-                )
-                vpc_to_project_meta[vid] = vp_pmeta
-                vpcs.append({
-                    "vpc_id": vid,
-                    "name": vname,
-                    "cidr_block": vp.get("CidrBlock", ""),
-                    "is_default": bool(vp.get("IsDefault")),
-                    "state": vp.get("State", "available"),
-                    "managed_by_cloudmove": vname.startswith("cloudmove") or vtags.get("ManagedBy") == "CloudMove",
-                    "active_instance_count": len(active_insts),
-                    "active_instance_ids": [i["instance_id"] for i in active_insts],
-                    "subnets": subnets_by_vpc.get(vid, []),
-                    "internet_gateways": igws_by_vpc.get(vid, []),
-                    "migration_id": vp_pmeta.get("migration_id"),
-                    "project_info": vp_pmeta,
-                    "is_control_plane": is_cp,
-                })
-
-            # 5. Security Groups
-            sg_resp = ec2.describe_security_groups()
-            security_groups: List[Dict[str, Any]] = []
-            for sg in sg_resp.get("SecurityGroups", []):
-                gid = sg.get("GroupId", "")
-                gname = sg.get("GroupName", "")
-                vpc_id = sg.get("VpcId", "")
-                ports = []
-                for perm in sg.get("IpPermissions") or []:
-                    fp = perm.get("FromPort")
-                    tp = perm.get("ToPort")
-                    if fp is not None:
-                        ports.append(str(fp) if fp == tp else f"{fp}-{tp}")
-                is_cp = bool(gname == "default" or "cloudmove-sg" in gname or (vpc_id in control_plane_vpc_ids and gname != "cloudmove-app-sg"))
-                sg_pmeta = (
-                    _build_project_meta(None, is_cp=True)
-                    if "cloudmove-sg" in gname
-                    else vpc_to_project_meta.get(vpc_id)
-                    or _build_project_meta(ws_by_resource_id.get(gid), is_cp=is_cp)
-                )
-                security_groups.append({
-                    "group_id": gid,
-                    "group_name": gname,
-                    "vpc_id": vpc_id,
-                    "description": sg.get("Description", ""),
-                    "is_default": gname == "default",
-                    "ingress_ports": ports,
-                    "is_control_plane": is_cp,
-                    "migration_id": sg_pmeta.get("migration_id"),
-                    "project_info": sg_pmeta,
-                })
-
-            # 6. Elastic IPs
-            eip_resp = ec2.describe_addresses()
-            elastic_ips: List[Dict[str, Any]] = []
-            for addr in eip_resp.get("Addresses", []):
-                pub = addr.get("PublicIp", "")
-                iid = addr.get("InstanceId", "")
-                is_cp = pub == "44.216.47.253" or iid in control_plane_instance_ids
-                att_inst = instance_by_id.get(iid)
-                eip_pmeta = (
-                    att_inst["project_info"]
-                    if att_inst and att_inst.get("project_info")
-                    else _build_project_meta(None, is_cp=is_cp)
-                )
-                elastic_ips.append({
-                    "public_ip": pub,
-                    "allocation_id": addr.get("AllocationId", ""),
-                    "instance_id": iid,
-                    "instance_name": instance_name_by_id.get(iid, iid),
-                    "is_control_plane": is_cp,
-                    "project_info": eip_pmeta,
-                })
-
-            # 7. Build Grouped Projects / Deployments Inventory (`projects_deployed`)
-            projects_map: Dict[str, Dict[str, Any]] = {}
-            def _ensure_proj_bucket(pmeta: Dict[str, Any]) -> Dict[str, Any]:
-                pid = pmeta.get("project_id") or "unassigned"
-                if pid not in projects_map:
-                    projects_map[pid] = {
-                        **pmeta,
-                        "instances": [],
-                        "volumes": [],
-                        "vpcs": [],
-                        "security_groups": [],
-                        "elastic_ips": [],
-                        "total_ebs_gb": 0,
-                        "total_resources_count": 0,
-                    }
-                return projects_map[pid]
-
-            # Security policy: Hide underlying CloudMove control-plane host from public audit output
-            visible_instances = [i for i in instances if not i.get("is_control_plane")]
-            visible_volumes = [v for v in volumes if not v.get("is_control_plane")]
-            visible_vpcs = [vp for vp in vpcs if not vp.get("is_control_plane") and not vp.get("is_default")]
-            visible_sgs = [sg for sg in security_groups if not sg.get("is_control_plane") and not sg.get("is_default")]
-            visible_eips = [eip for eip in elastic_ips if not eip.get("is_control_plane")]
-            visible_ebs_gb = sum(v["size_gb"] for v in visible_volumes)
-
-            for inst in visible_instances:
-                if inst["state"] == "terminated":
-                    continue
-                b = _ensure_proj_bucket(inst["project_info"])
-                b["instances"].append(inst)
-                b["total_resources_count"] += 1
-
-            for v in visible_volumes:
-                b = _ensure_proj_bucket(v["project_info"])
-                b["volumes"].append(v)
-                b["total_ebs_gb"] += v["size_gb"]
-                b["total_resources_count"] += 1
-
-            for vp in visible_vpcs:
-                b = _ensure_proj_bucket(vp["project_info"])
-                b["vpcs"].append(vp)
-                b["total_resources_count"] += 1 + len(vp.get("subnets") or []) + len(vp.get("internet_gateways") or [])
-
-            for sg in visible_sgs:
-                b = _ensure_proj_bucket(sg["project_info"])
-                b["security_groups"].append(sg)
-                b["total_resources_count"] += 1
-
-            for eip in visible_eips:
-                b = _ensure_proj_bucket(eip["project_info"])
-                b["elastic_ips"].append(eip)
-                b["total_resources_count"] += 1
-
-            projects_deployed = [
-                p for p in projects_map.values() if not p.get("is_control_plane")
-            ]
-            projects_deployed.sort(key=lambda p: (len(p.get("instances", [])) == 0, p.get("project_name", "")))
-
-            running_instances = [i for i in visible_instances if i["state"] == "running"]
-            return {
-                "authenticated": True,
-                "account_id": account_id,
-                "caller_arn": caller_arn,
-                "region": region,
-                "audited_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "summary": {
-                    "running_instances_count": len(running_instances),
-                    "total_instances_count": len(visible_instances),
-                    "total_volumes_count": len(visible_volumes),
-                    "total_ebs_gb": visible_ebs_gb,
-                    "academy_ebs_limit_gb": 150,
-                    "total_vpcs_count": len(visible_vpcs),
-                    "custom_vpcs_count": len(visible_vpcs),
-                    "active_workspaces_count": sum(1 for w in workspaces if w["resource_count"] > 0),
-                    "projects_count": len(projects_deployed),
-                },
-                "ip_sync_events": ip_sync_events,
-                "projects_deployed": projects_deployed,
-                "instances": visible_instances,
-                "volumes": visible_volumes,
-                "vpcs": visible_vpcs,
-                "security_groups": visible_sgs,
-                "elastic_ips": visible_eips,
-                "workspaces": workspaces,
-            }
-        except Exception as exc:
-            err_str = str(exc)
-            if "voc-cancel-cred" in err_str:
-                err_str = (
-                    "Sesión de AWS Academy detenida (policy/voc-cancel-cred). "
-                    "Inicia el laboratorio ('Start Lab') en AWS Academy y actualiza tus credenciales."
-                )
-            return {
-                "authenticated": False,
-                "error": f"Error consultando recursos AWS EC2: {err_str}",
-                "workspaces": workspaces,
-                "instances": [],
-                "volumes": [],
-                "vpcs": [],
-                "security_groups": [],
-                "elastic_ips": [],
-            }
+        return _run_aws_audit(
+            workspace_root=self.workspace_root,
+            list_workspaces_fn=self.list_all_workspaces,
+            build_env_fn=self._build_env,
+            credentials=credentials,
+            jobs_lookup_fn=jobs_lookup_fn or _default_load_jobs,
+        )
 
     def delete_aws_audit_resource(
         self,
@@ -1922,281 +1218,17 @@ class CloudDeploymentRunner:
         credentials: Optional[Dict[str, str]] = None,
         cleanup_vpc: bool = True,
     ) -> Dict[str, Any]:
-        """
-        Safely terminate or delete an AWS resource or Terraform workspace discovered
-        during the CloudMove audit while protecting the primary CloudMove control plane.
-        """
-        clean_type = (resource_type or "").strip().lower()
-        clean_id = (resource_id or "").strip()
-        if not clean_type or not clean_id:
-            return {"success": False, "error": "Debe especificar resource_type y resource_id."}
-
-        # Hard protection for the main CloudMove server
-        if clean_id in (
-            "i-08505f55cdbb4cfb5",
-            "i-03b7025356f0c982c",
-            "vol-0a1466af76ba0d220",
-            "vol-031fa80d944fcf9c0",
-            "vpc-0fa2bb3d7c63f4949",
-            "sg-049bddb21452324da",
-            "44.216.47.253",
-            "100.50.88.231",
-            "deploy/aws",
-            "cloudmove-control-plane",
-        ):
-            return {
-                "success": False,
-                "error": f"El recurso '{clean_id}' está protegido por políticas de seguridad de la plataforma.",
-            }
-
-        try:
-            session, region = self._get_boto3_session(credentials)
-            ec2 = session.client("ec2", region_name=region, config=self._boto_config(read_timeout=15))
-        except Exception as exc:
-            return {"success": False, "error": f"Error de autenticación AWS: {str(exc)}"}
-
-        def _delete_vpc_and_dependencies(vpc_id: str) -> List[str]:
-            actions_log: List[str] = []
-            try:
-                vp_info = ec2.describe_vpcs(VpcIds=[vpc_id]).get("Vpcs", [])
-                if vp_info and vp_info[0].get("IsDefault"):
-                    actions_log.append(f"VPC {vpc_id} es la VPC por defecto (protegida).")
-                    return actions_log
-            except Exception:
-                return actions_log
-
-            # 1. Terminate any instances in this VPC
-            try:
-                inst_res = ec2.describe_instances(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])
-                iids = [
-                    i["InstanceId"]
-                    for r in inst_res.get("Reservations", [])
-                    for i in r.get("Instances", [])
-                    if (i.get("State") or {}).get("Name") not in ("terminated",)
-                    and i["InstanceId"] not in ("i-08505f55cdbb4cfb5", "i-03b7025356f0c982c")
-                ]
-                if iids:
-                    ec2.terminate_instances(InstanceIds=iids)
-                    actions_log.append(f"Instancias terminadas: {', '.join(iids)}")
-                    # Wait briefly for instances to transition to terminated so ENIs release
-                    for _ in range(18):
-                        chk = ec2.describe_instances(InstanceIds=iids)
-                        states = [
-                            (inst.get("State") or {}).get("Name")
-                            for r in chk.get("Reservations", [])
-                            for inst in r.get("Instances", [])
-                        ]
-                        if all(s == "terminated" for s in states):
-                            break
-                        time.sleep(2.0)
-            except Exception as e:
-                actions_log.append(f"Aviso instancias en {vpc_id}: {str(e)}")
-
-            # 2. Detach and delete Internet Gateways
-            try:
-                igws = ec2.describe_internet_gateways(Filters=[{"Name": "attachment.vpc-id", "Values": [vpc_id]}]).get("InternetGateways", [])
-                for igw in igws:
-                    igw_id = igw["InternetGatewayId"]
-                    ec2.detach_internet_gateway(InternetGatewayId=igw_id, VpcId=vpc_id)
-                    ec2.delete_internet_gateway(InternetGatewayId=igw_id)
-                    actions_log.append(f"Internet Gateway eliminado: {igw_id}")
-            except Exception as e:
-                actions_log.append(f"Aviso IGW: {str(e)}")
-
-            # 3. Delete Subnets
-            try:
-                subs = ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]).get("Subnets", [])
-                for sub in subs:
-                    sid = sub["SubnetId"]
-                    ec2.delete_subnet(SubnetId=sid)
-                    actions_log.append(f"Subnet eliminada: {sid}")
-            except Exception as e:
-                actions_log.append(f"Aviso Subnets: {str(e)}")
-
-            # 4. Delete custom Route Tables
-            try:
-                rts = ec2.describe_route_tables(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]).get("RouteTables", [])
-                for rt in rts:
-                    assocs = rt.get("Associations") or []
-                    if any(a.get("Main") for a in assocs):
-                        continue
-                    for a in assocs:
-                        if a.get("RouteTableAssociationId"):
-                            try:
-                                ec2.disassociate_route_table(AssociationId=a["RouteTableAssociationId"])
-                            except Exception:
-                                pass
-                    rt_id = rt["RouteTableId"]
-                    ec2.delete_route_table(RouteTableId=rt_id)
-                    actions_log.append(f"Route Table eliminada: {rt_id}")
-            except Exception as e:
-                actions_log.append(f"Aviso Route Tables: {str(e)}")
-
-            # 5. Delete custom Security Groups (revoke cross-SG rules first to prevent DependencyViolation)
-            try:
-                sgs = ec2.describe_security_groups(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]).get("SecurityGroups", [])
-                for sg in sgs:
-                    sg_id = sg["GroupId"]
-                    try:
-                        if sg.get("IpPermissions"):
-                            ec2.revoke_security_group_ingress(GroupId=sg_id, IpPermissions=sg["IpPermissions"])
-                    except Exception:
-                        pass
-                    try:
-                        if sg.get("IpPermissionsEgress"):
-                            ec2.revoke_security_group_egress(GroupId=sg_id, IpPermissions=sg["IpPermissionsEgress"])
-                    except Exception:
-                        pass
-                for sg in sgs:
-                    if sg.get("GroupName") == "default":
-                        continue
-                    sg_id = sg["GroupId"]
-                    ec2.delete_security_group(GroupId=sg_id)
-                    actions_log.append(f"Security Group eliminado: {sg_id}")
-            except Exception as e:
-                actions_log.append(f"Aviso Security Groups: {str(e)}")
-
-            # 5b. Delete non-default Network ACLs
-            try:
-                nacls = ec2.describe_network_acls(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]).get("NetworkAcls", [])
-                for nacl in nacls:
-                    if not nacl.get("IsDefault") and nacl.get("NetworkAclId"):
-                        ec2.delete_network_acl(NetworkAclId=nacl["NetworkAclId"])
-                        actions_log.append(f"Network ACL eliminada: {nacl['NetworkAclId']}")
-            except Exception as e:
-                actions_log.append(f"Aviso Network ACLs: {str(e)}")
-
-            # 6. Delete VPC
-            try:
-                ec2.delete_vpc(VpcId=vpc_id)
-                actions_log.append(f"VPC eliminada exitosamente: {vpc_id}")
-            except Exception as e:
-                actions_log.append(f"La VPC {vpc_id} quedó en proceso de liberación de interfaces de red ({str(e)}).")
-
-            return actions_log
-
-        try:
-            if clean_type == "ec2_instance":
-                inst_desc = ec2.describe_instances(InstanceIds=[clean_id]).get("Reservations", [])
-                vpc_id = None
-                for r in inst_desc:
-                    for i in r.get("Instances", []):
-                        tags = {t["Key"]: t["Value"] for t in (i.get("Tags") or []) if "Key" in t}
-                        if tags.get("Name") == "cloudmove-server":
-                            return {"success": False, "error": "Instancia principal cloudmove-server protegida."}
-                        vpc_id = i.get("VpcId")
-
-                ec2.terminate_instances(InstanceIds=[clean_id])
-                details = [f"Instancia EC2 {clean_id} enviada a terminación (su volumen raíz EBS se eliminará automáticamente)."]
-                if cleanup_vpc and vpc_id:
-                    vp_info = ec2.describe_vpcs(VpcIds=[vpc_id]).get("Vpcs", [])
-                    if vp_info and not vp_info[0].get("IsDefault"):
-                        other_insts = ec2.describe_instances(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]).get("Reservations", [])
-                        active_others = [
-                            i["InstanceId"]
-                            for r in other_insts
-                            for i in r.get("Instances", [])
-                            if i["InstanceId"] != clean_id and (i.get("State") or {}).get("Name") not in ("terminated", "shutting-down")
-                        ]
-                        if not active_others:
-                            details.extend(_delete_vpc_and_dependencies(vpc_id))
-                return {"success": True, "resource_type": clean_type, "resource_id": clean_id, "details": details}
-
-            elif clean_type == "start_instance":
-                ec2.start_instances(InstanceIds=[clean_id])
-                return {
-                    "success": True,
-                    "resource_type": clean_type,
-                    "resource_id": clean_id,
-                    "details": [f"Instancia EC2 {clean_id} iniciándose en AWS."],
-                }
-
-            elif clean_type == "stop_instance":
-                ec2.stop_instances(InstanceIds=[clean_id])
-                return {
-                    "success": True,
-                    "resource_type": clean_type,
-                    "resource_id": clean_id,
-                    "details": [f"Instancia EC2 {clean_id} deteniéndose en AWS."],
-                }
-
-            elif clean_type == "ebs_volume":
-                ec2.delete_volume(VolumeId=clean_id)
-                return {
-                    "success": True,
-                    "resource_type": clean_type,
-                    "resource_id": clean_id,
-                    "details": [f"Volumen EBS {clean_id} eliminado exitosamente."],
-                }
-
-            elif clean_type == "vpc":
-                details = _delete_vpc_and_dependencies(clean_id)
-                return {
-                    "success": True,
-                    "resource_type": clean_type,
-                    "resource_id": clean_id,
-                    "details": details,
-                }
-
-            elif clean_type == "security_group":
-                ec2.delete_security_group(GroupId=clean_id)
-                return {
-                    "success": True,
-                    "resource_type": clean_type,
-                    "resource_id": clean_id,
-                    "details": [f"Security Group {clean_id} eliminado exitosamente."],
-                }
-
-            elif clean_type == "terraform_workspace":
-                job_dir = self.resolve_job_dir(clean_id)
-                st = self.inspect_tfstate(job_dir)
-                details: List[str] = []
-                vpc_ids_to_clean = set()
-                for mr in st.get("managed_resources", []):
-                    if mr.get("type") == "aws_instance" and mr.get("id") and mr["id"] != "i-08505f55cdbb4cfb5":
-                        try:
-                            ec2.terminate_instances(InstanceIds=[mr["id"]])
-                            details.append(f"Instancia {mr['id']} terminada.")
-                        except Exception:
-                            pass
-                    elif mr.get("type") == "aws_vpc" and mr.get("id"):
-                        vpc_ids_to_clean.add(mr["id"])
-
-                for vid in vpc_ids_to_clean:
-                    details.extend(_delete_vpc_and_dependencies(vid))
-
-                # Clear terraform.tfstate resources so workspace reflects destroyed state
-                tfstate_path = job_dir / "terraform.tfstate"
-                if tfstate_path.is_file():
-                    try:
-                        raw = json.loads(tfstate_path.read_text(encoding="utf-8"))
-                        raw["resources"] = []
-                        raw["outputs"] = {}
-                        tfstate_path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
-                        details.append(f"Estado local terraform.tfstate de '{clean_id}' limpiado (0 recursos activos).")
-                    except Exception:
-                        pass
-
-                self._save_status_meta(clean_id, job_dir, {
-                    "status": "IDLE",
-                    "stage": "DESTROYED_BY_AUDIT",
-                    "active_command": None,
-                    "is_running": False,
-                    "message": "Recursos del workspace eliminados desde la Auditoría Cloud.",
-                    "error": None,
-                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                })
-                return {
-                    "success": True,
-                    "resource_type": clean_type,
-                    "resource_id": clean_id,
-                    "details": details or [f"Workspace {clean_id} limpiado."],
-                }
-
-            else:
-                return {"success": False, "error": f"Tipo de recurso '{clean_type}' no soportado."}
-        except Exception as exc:
-            return {"success": False, "error": f"Error eliminando {clean_type} '{clean_id}': {str(exc)}"}
+        """Delegate safe AWS resource/workspace cleanup to `app.migration.aws_audit`."""
+        return _run_aws_delete_resource(
+            resolve_job_dir_fn=self.resolve_job_dir,
+            inspect_tfstate_fn=self.inspect_tfstate,
+            save_status_meta_fn=self._save_status_meta,
+            build_env_fn=self._build_env,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            credentials=credentials,
+            cleanup_vpc=cleanup_vpc,
+        )
 
 
 cloud_deployer = CloudDeploymentRunner()

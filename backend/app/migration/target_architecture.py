@@ -770,6 +770,13 @@ def build_target_cloud_cmir(
         ) or app_discovery.get("deep_insights", {}).get("supabase_detected")
 
         if has_supabase:
+            discovered_sb_url = ""
+            for ev in app_discovery.get("environment_variables") or []:
+                if "SUPABASE_URL" in str(ev.get("name", "")).upper():
+                    raw_val = str(ev.get("value") or ev.get("redacted_value") or "").strip()
+                    if raw_val.startswith("https://"):
+                        discovered_sb_url = raw_val
+                        break
             ext_sb_id = "target-ext-supabase-baas"
             resources.append(Resource(
                 id=ext_sb_id,
@@ -788,7 +795,7 @@ def build_target_cloud_cmir(
                     "is_external": True,
                     "managed_by_platform": False,
                     "badge": "SERVICIO EXTERNO (No administrado)",
-                    "endpoint": "https://zlkdxzfxkhohlpswdmap.supabase.co",
+                    "endpoint": discovered_sb_url or "Configurar VITE_SUPABASE_URL en entorno",
                     "engine": "PostgreSQL 15 (Supabase Cloud)",
                     "auth_provider": "Supabase GoTrue Auth",
                     "why_preserved": "Base de datos y autenticación preservadas en su proveedor externo sin costo de RDS.",

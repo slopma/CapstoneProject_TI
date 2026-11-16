@@ -33,13 +33,13 @@ resource "aws_security_group" "cloudmove_sg" {
   description = "Reglas de red para la plataforma CloudMove (SSH, HTTP, HTTPS, API)"
   vpc_id      = data.aws_vpc.default.id
 
-  # SSH
+  # SSH administrativo (parametrizable via var.allowed_ssh_cidrs)
   ingress {
     description = "Acceso SSH administrativo"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = var.allowed_ssh_cidrs
   }
 
   # HTTP (Frontend / Web)
@@ -60,13 +60,16 @@ resource "aws_security_group" "cloudmove_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Puerto directo Backend FastAPI (opcional para pruebas de API)
-  ingress {
-    description = "API FastAPI directa"
-    from_port   = 8000
-    to_port     = 8000
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+  # Puerto directo Backend FastAPI (opcional; Nginx ya proxea /api/* por :80/:443)
+  dynamic "ingress" {
+    for_each = var.expose_direct_api_port ? [1] : []
+    content {
+      description = "API FastAPI directa"
+      from_port   = 8000
+      to_port     = 8000
+      protocol    = "tcp"
+      cidr_blocks = var.allowed_ssh_cidrs
+    }
   }
 
   # Salida libre hacia internet
@@ -113,7 +116,9 @@ resource "aws_instance" "cloudmove_server" {
     }
   }
 
-  user_data = file("${path.module}/user_data.sh")
+  user_data = templatefile("${path.module}/user_data.sh", {
+    domain_name = var.domain_name
+  })
 
   tags = {
     Name    = "cloudmove-server"
