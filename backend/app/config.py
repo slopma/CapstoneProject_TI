@@ -36,18 +36,6 @@ AWS_OUTPUT_PATH = _path_from_env(
     "AWS_OUTPUT_PATH",
     PROJECT_ROOT / "generated" / "aws" / "main.tf",
 )
-GCP_OUTPUT_PATH = _path_from_env(
-    "GCP_OUTPUT_PATH",
-    PROJECT_ROOT / "generated" / "gcp" / "main.tf",
-)
-AZURE_OUTPUT_PATH = _path_from_env(
-    "AZURE_OUTPUT_PATH",
-    PROJECT_ROOT / "generated" / "azure" / "main.tf",
-)
-K8S_OUTPUT_PATH = _path_from_env(
-    "K8S_OUTPUT_PATH",
-    PROJECT_ROOT / "generated" / "k8s" / "manifests.yaml",
-)
 CORS_ORIGINS = _origins_from_env()
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 API_HOST = os.getenv("HOST", os.getenv("API_HOST", "0.0.0.0"))

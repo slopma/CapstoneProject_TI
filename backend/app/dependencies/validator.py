@@ -49,7 +49,7 @@ def validate_migration_subgraph(
 
     # Check for target provider compatibility
     for res in selected_cmir.resources:
-        if res.provider and res.provider != target_provider and target_provider not in ("aws", "azure", "gcp", "kubernetes"):
+        if res.provider and res.provider != target_provider and target_provider != "aws":
             warnings.append(f"El recurso '{res.name}' proveniente de '{res.provider}' será traducido hacia '{target_provider}'.")
 
     can_generate = len(errors) == 0

@@ -22,12 +22,8 @@ from app.graph.builder import build_graph
 from app.dependencies.resolver import resolve_dependencies
 from app.dependencies.validator import validate_migration_subgraph
 from app.adapters.aws_adapter import AWSAdapter
-from app.adapters.gcp_adapter import GCPAdapter
-from app.generators.terraform import (
-    generate_aws_terraform_files,
-    generate_gcp_terraform_files,
-)
-from app.config import INVENTORY_PATH, AWS_OUTPUT_PATH, GCP_OUTPUT_PATH
+from app.generators.terraform import generate_aws_terraform_files
+from app.config import INVENTORY_PATH, AWS_OUTPUT_PATH
 from app.migration.orchestrator import migration_orchestrator, SUPPORTED_TARGET_PROVIDERS
 from app.migration.app_migrator import (
     inspect_application_source,
@@ -61,8 +57,7 @@ def _validate_target_provider(provider: Optional[str]) -> str:
             status_code=400,
             detail=(
                 f"Proveedor destino '{provider}' no admitido. "
-                "Proveedores destino admitidos exclusivamente: 'aws' y 'gcp'. "
-                "Azure queda fuera del alcance funcional de esta versión."
+                "El único proveedor destino admitido en CloudMove es 'aws' (Amazon Web Services)."
             ),
         )
     return clean
@@ -70,7 +65,7 @@ def _validate_target_provider(provider: Optional[str]) -> str:
 
 class SelectionRequest(BaseModel):
     resources: List[str] = Field(..., description="IDs of nodes selected for migration")
-    target_provider: Optional[str] = Field("aws", description="Target cloud provider: aws | gcp")
+    target_provider: Optional[str] = Field("aws", description="Target cloud provider: aws")
     validated_shared_resources: Optional[List[str]] = Field(
         default=None,
         description="Shared dependency IDs explicitly validated for migration",
@@ -84,7 +79,7 @@ class SelectionRequest(BaseModel):
 class CreateMigrationJobRequest(BaseModel):
     name: Optional[str] = Field(None, description="Human-readable name for the migration")
     use_case: str = Field(..., description="app_source | vm_image")
-    target_provider: str = Field("aws", description="aws | gcp")
+    target_provider: str = Field("aws", description="aws")
     target_config: Optional[Dict[str, Any]] = Field(default_factory=dict)
     source_config: Optional[Dict[str, Any]] = Field(default_factory=dict)
     auto_assess_and_plan: bool = Field(True)
@@ -133,7 +128,7 @@ class AppInspectRequest(BaseModel):
     inline_files: Optional[Dict[str, str]] = Field(None, description="Optional map of filename -> content")
     runtime_metadata: Optional[Dict[str, Any]] = Field(None)
     app_name: Optional[str] = Field(None)
-    target_provider: str = Field("aws", description="aws | gcp")
+    target_provider: str = Field("aws", description="aws")
     deployment_mode: str = Field("vm_rehost", description="vm_rehost | container")
     github_url: Optional[str] = Field(None, description="Real GitHub repository URL e.g. https://github.com/owner/repo")
     github_ref: Optional[str] = Field(None, description="Branch, tag, or commit SHA to pin and analyze")
@@ -148,7 +143,7 @@ class UpdateArchitectureDecisionsRequest(BaseModel):
 class ImageInspectRequest(BaseModel):
     image_path: Optional[str] = Field(None, description="Path to VMDK, VHD, VHDX, QCOW2, RAW, OVA, OVF")
     manifest_override: Optional[Dict[str, Any]] = Field(None)
-    target_provider: str = Field("aws", description="aws | gcp")
+    target_provider: str = Field("aws", description="aws")
     require_live_memory_state: bool = Field(False)
     require_authentic_binary: bool = Field(False)
     source_type: str = Field("disk_image", description="disk_image | live_machine | live_server")
@@ -169,20 +164,15 @@ def _load_cmir():
 
 @router.get("/providers")
 def get_supported_providers():
-    """Return supported target providers (exclusively AWS and GCP) and their capabilities."""
+    """Return supported target provider (`aws` exclusively) and its capabilities."""
     aws = AWSAdapter()
-    gcp = GCPAdapter()
     return {
-        "supported_providers": ["aws", "gcp"],
-        "excluded_providers": ["azure"],
+        "supported_providers": ["aws"],
+        "excluded_providers": ["gcp", "azure", "kubernetes"],
         "providers": {
             "aws": {
                 "config": aws.validate_target_config({}),
                 "prerequisites": aws.check_permissions_and_prerequisites({}),
-            },
-            "gcp": {
-                "config": gcp.validate_target_config({}),
-                "prerequisites": gcp.check_permissions_and_prerequisites({}),
             },
         },
     }
@@ -280,20 +270,14 @@ def generate_migration_iac(request: SelectionRequest):
             }
         }
 
-    if target == "aws":
-        adapter = AWSAdapter()
-        translated_resources = adapter.translate_cmir(sub_cmir)
-        files_map = generate_aws_terraform_files(translated_resources)
-        output_path = AWS_OUTPUT_PATH
-        code = files_map["main.tf"]
-    elif target == "gcp":
-        adapter = GCPAdapter()
-        translated_resources = adapter.translate_cmir(sub_cmir)
-        files_map = generate_gcp_terraform_files(translated_resources)
-        output_path = GCP_OUTPUT_PATH
-        code = files_map["main.tf"]
-    else:
-        raise HTTPException(status_code=400, detail=f"Proveedor de destino '{target}' no soportado.")
+    if target != "aws":
+        raise HTTPException(status_code=400, detail=f"Proveedor de destino '{target}' no soportado (exclusivo AWS).")
+
+    adapter = AWSAdapter()
+    translated_resources = adapter.translate_cmir(sub_cmir)
+    files_map = generate_aws_terraform_files(translated_resources)
+    output_path = AWS_OUTPUT_PATH
+    code = files_map["main.tf"]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     for fname, fcontent in files_map.items():
@@ -331,7 +315,7 @@ def generate_migration_iac(request: SelectionRequest):
 @router.get("/jobs")
 def list_migration_jobs(
     use_case: Optional[str] = Query(None, description="app_source | vm_image"),
-    target_provider: Optional[str] = Query(None, description="aws | gcp"),
+    target_provider: Optional[str] = Query(None, description="aws"),
 ):
     """List orchestrated migration jobs across all 3 use cases."""
     if target_provider:
@@ -861,7 +845,7 @@ def get_transactional_persistence_status():
 
 @router.get("/compatibility-matrix")
 def get_machine_migration_compatibility_matrix(
-    target_provider: str = Query("aws", description="aws | gcp"),
+    target_provider: str = Query("aws", description="aws"),
     source_type: str = Query("standalone_offline_disk_image", description="standalone_offline_disk_image | live_server | hypervisor_vm"),
     disk_format: str = Query("VMDK"),
     os_family: str = Query("linux"),
@@ -869,7 +853,7 @@ def get_machine_migration_compatibility_matrix(
     total_size_gb: float = Query(60.0),
     prefer_continuous_replication: bool = Query(False),
 ):
-    """Return the official AWS MGN / VM Import and GCP Migrate to VMs / Image Import compatibility matrix and strategy selection."""
+    """Return the official AWS MGN and VM Import/Export compatibility matrix and strategy selection."""
     target = _validate_target_provider(target_provider)
     selection = select_machine_migration_strategy(
         manifest={
@@ -1067,7 +1051,7 @@ def inspect_use_case_1_application(request: Optional[AppInspectRequest] = None):
     """
     Use Case 1: Inspect an application repository (GitHub or local directory) or inline manifests,
     pin exact commit revision, detect runtime/ports/env keys (redacting secret values),
-    classify dependencies into confirmed vs inferred vs unknown, and evaluate AWS/GCP viability.
+    classify dependencies into confirmed vs inferred vs unknown, and evaluate AWS viability.
     """
     req = request or AppInspectRequest()
     target = _validate_target_provider(req.target_provider)
@@ -1163,7 +1147,7 @@ def inspect_use_case_2_vm_image(
     """
     Use Case 2: Inspect a VM/disk image (`VMDK`, `VHD`, `VHDX`, `QCOW2`, `RAW`, `OVA`, `OVF`)
     or capture the live operating system where CloudMove/agent runs.
-    Verifies authentic binary disk headers, partitions, SHA-256 integrity, and driver compatibility for AWS/GCP.
+    Verifies authentic binary disk headers, partitions, SHA-256 integrity, and driver compatibility for AWS.
     """
     req = request or ImageInspectRequest()
     target = _validate_target_provider(req.target_provider)

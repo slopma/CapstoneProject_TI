@@ -49,7 +49,6 @@ TYPE_LEVEL_MAP = {
     "port": 8,
     "network_connection": 8,
     "target_aws_resource": 8,
-    "target_gcp_resource": 8,
     # Discovery & Host-level semantic types (CMIR v2.0 / v2.1 compatible)
     "host": 1,
     "discovery_group": 2,

@@ -11,10 +11,9 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from app.config import AWS_OUTPUT_PATH, GCP_OUTPUT_PATH, PROJECT_ROOT
+from app.config import AWS_OUTPUT_PATH, PROJECT_ROOT
 from app.discovery.cloud_live_discovery import (
     AWSLiveDiscoveryConnector,
-    GCPLiveDiscoveryConnector,
     CloudInventoryReconciler,
 )
 from app.discovery.connectors import (
@@ -28,7 +27,6 @@ from app.discovery.osquery_parser import SUPPORTED_SCHEMAS
 from app.discovery.storage import DEFAULT_OSQUERY_JSON_PATH, discovery_store
 from app.discovery.terraform_bridge import (
     generate_discovery_aws_terraform,
-    generate_discovery_gcp_terraform,
     generate_discovery_terraform,
 )
 from app.persistence.transactional_db import get_transactional_db
@@ -155,12 +153,6 @@ def get_discovery_collectors():
             {
                 "id": "aws_live_discovery",
                 "name": "AWS Live Cloud Discovery Connector (boto3 STS/EC2/RDS/S3/IAM)",
-                "status": "active",
-                "supported_schemas": ["cmir-2.1"],
-            },
-            {
-                "id": "gcp_live_discovery",
-                "name": "GCP Live Cloud Discovery Connector (Cloud Asset API / Compute / SQL / GCS / IAM)",
                 "status": "active",
                 "supported_schemas": ["cmir-2.1"],
             },
@@ -461,7 +453,7 @@ def query_session_services(
 def export_discovery_session(
     session_id: str,
     format: str = Query("json", description="Export format: json | md | mmd | cmir | tf"),
-    target_provider: str = Query("aws", description="Target provider when format=tf: aws | gcp"),
+    target_provider: str = Query("aws", description="Target provider when format=tf: aws"),
 ):
     """Export the normalized discovery inventory, Markdown report, Mermaid diagram, or CMIR model."""
     session = discovery_store.get_session(session_id)
@@ -506,8 +498,8 @@ def export_discovery_session(
         )
     if fmt == "tf":
         provider_clean = target_provider.lower().strip()
-        if provider_clean not in ("aws", "gcp"):
-            raise HTTPException(status_code=400, detail="Proveedor no soportado. Use 'aws' o 'gcp'.")
+        if provider_clean != "aws":
+            raise HTTPException(status_code=400, detail="Proveedor no soportado. CloudMove admite exclusivamente 'aws'.")
         tf_context = {
             "session_id": session["session_id"],
             "filename": session["filename"],
@@ -517,12 +509,12 @@ def export_discovery_session(
             "sections": norm["sections"],
             "cmir": session.get("cmir"),
         }
-        tf_bundle = generate_discovery_terraform(tf_context, strategy="replatform", target_provider=provider_clean)
+        tf_bundle = generate_discovery_terraform(tf_context, strategy="replatform", target_provider="aws")
         return PlainTextResponse(
             content=tf_bundle["iac_code"],
             media_type="text/plain; charset=utf-8",
             headers={
-                "Content-Disposition": f'attachment; filename="cloudmove-{provider_clean}-{hostname}.tf"'
+                "Content-Disposition": f'attachment; filename="cloudmove-aws-{hostname}.tf"'
             },
         )
 
@@ -537,18 +529,18 @@ def export_discovery_session(
 def generate_session_terraform(
     session_id: str,
     strategy: str = Query("replatform", description="Migration strategy: replatform | rehost"),
-    target_provider: str = Query("aws", description="Target cloud provider: aws | gcp"),
-    write_files: bool = Query(False, description="Persist modular .tf files into generated/aws/ or generated/gcp/"),
+    target_provider: str = Query("aws", description="Target cloud provider: aws"),
+    write_files: bool = Query(False, description="Persist modular .tf files into generated/aws/"),
 ):
     """
-    Generate modular AWS or GCP Terraform (`provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`)
-    and step-by-step JSON->CMIR->Provider traceability for a discovery session.
+    Generate modular AWS Terraform (`provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`)
+    and step-by-step JSON->CMIR->AWS traceability for a discovery session.
     """
     provider_clean = target_provider.lower().strip()
-    if provider_clean not in ("aws", "gcp"):
+    if provider_clean != "aws":
         raise HTTPException(
             status_code=400,
-            detail=f"Proveedor '{target_provider}' no admitido. Proveedores destino admitidos: aws, gcp.",
+            detail=f"Proveedor '{target_provider}' no admitido. Proveedor destino exclusivo: aws.",
         )
 
     session = discovery_store.get_session(session_id)
@@ -566,10 +558,10 @@ def generate_session_terraform(
         "cmir": session.get("cmir"),
     }
 
-    result = generate_discovery_terraform(tf_context, strategy=strategy, target_provider=provider_clean)
+    result = generate_discovery_terraform(tf_context, strategy=strategy, target_provider="aws")
 
     if write_files:
-        out_dir = GCP_OUTPUT_PATH.parent if provider_clean == "gcp" else AWS_OUTPUT_PATH.parent
+        out_dir = AWS_OUTPUT_PATH.parent
         out_dir.mkdir(parents=True, exist_ok=True)
         for fname, fcontent in result["files"].items():
             (out_dir / fname).write_text(fcontent, encoding="utf-8")
@@ -705,7 +697,7 @@ def collect_live_device_inventory(
 
 
 # ==============================================================================
-# Live Cloud Infrastructure Discovery (AWS & GCP) with Reconciliation
+# Live Cloud Infrastructure Discovery (AWS) with Reconciliation
 # ==============================================================================
 
 
@@ -716,13 +708,6 @@ class AWSLiveDiscoveryRequest(BaseModel):
     aws_secret_access_key: Optional[str] = Field(None)
     aws_session_token: Optional[str] = Field(None)
     role_arn: Optional[str] = Field(None)
-
-
-class GCPLiveDiscoveryRequest(BaseModel):
-    project_id: Optional[str] = Field(None)
-    zone: str = Field("us-central1-a")
-    service_account_json: Optional[str] = Field(None)
-    access_token: Optional[str] = Field(None)
 
 
 @router.post("/cloud/aws")
@@ -772,55 +757,19 @@ def discover_live_aws_infrastructure(request: Optional[AWSLiveDiscoveryRequest] 
 
 
 @router.post("/cloud/gcp")
-def discover_live_gcp_infrastructure(request: Optional[GCPLiveDiscoveryRequest] = None):
-    """
-    Execute real GCP live cloud discovery via Google Cloud Asset API (`searchAllResources` with pagination),
-    normalize into CMIR v2.1, reconcile against any previous snapshot for the same project,
-    and persist in the ACID transactional database.
-    Never converts an API/auth error into an empty inventory.
-    """
-    req = request or GCPLiveDiscoveryRequest()
-    connector = GCPLiveDiscoveryConnector(
-        project_id=req.project_id,
-        region=req.zone,
-        credentials_path=req.service_account_json,
+def discover_live_gcp_infrastructure_disabled():
+    """GCP live discovery was retired; CloudMove targets AWS exclusively."""
+    raise HTTPException(
+        status_code=410,
+        detail="El conector de GCP fue retirado. CloudMove opera exclusivamente sobre Amazon Web Services ('aws').",
     )
-    try:
-        return connector.discover_live_project()
-    except ConnectorAuthError as exc:
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error_code": "GCP_AUTH_OR_PERMISSION_ERROR",
-                "provider": "gcp",
-                "message": str(exc),
-            },
-        ) from exc
-    except ConnectorTimeoutError as exc:
-        raise HTTPException(
-            status_code=504,
-            detail={
-                "error_code": "GCP_API_TIMEOUT",
-                "provider": "gcp",
-                "message": str(exc),
-            },
-        ) from exc
-    except ConnectorError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "error_code": "GCP_DISCOVERY_ERROR",
-                "provider": "gcp",
-                "message": str(exc),
-            },
-        ) from exc
 
 
 @router.get("/cloud/snapshots")
-def list_cloud_discovery_snapshots(provider: Optional[str] = Query(None, description="aws | gcp")):
-    """Return persisted live cloud discovery snapshots and reconciliation diffs."""
-    if provider and provider.lower().strip() not in ("aws", "gcp"):
-        raise HTTPException(status_code=400, detail="Proveedor no soportado. Use 'aws' o 'gcp'.")
+def list_cloud_discovery_snapshots(provider: Optional[str] = Query(None, description="aws")):
+    """Return persisted live AWS discovery snapshots and reconciliation diffs."""
+    if provider and provider.lower().strip() != "aws":
+        raise HTTPException(status_code=400, detail="Proveedor no soportado. CloudMove admite exclusivamente 'aws'.")
     snapshots = get_transactional_db().list_cloud_discovery_snapshots(
         provider=provider.lower().strip() if provider else None
     )

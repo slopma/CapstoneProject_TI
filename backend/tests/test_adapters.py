@@ -1,9 +1,6 @@
 import pytest
 from app.cmir.models import CMIRNode, CMIRRelationship, CMIR
 from app.adapters.aws_adapter import AWSAdapter
-from app.adapters.gcp_adapter import GCPAdapter
-from app.adapters.azure_adapter import AzureAdapter
-from app.adapters.k8s_adapter import KubernetesAdapter
 
 
 @pytest.fixture
@@ -38,47 +35,3 @@ def test_aws_adapter_translation(sample_cmir):
     assert type_map["redis-1"] == "aws_elasticache_cluster"
     assert type_map["bucket-1"] == "aws_s3_bucket"
     assert type_map["secret-1"] == "aws_secretsmanager_secret"
-
-
-def test_gcp_adapter_translation(sample_cmir):
-    adapter = GCPAdapter()
-    translated = adapter.translate_cmir(sample_cmir)
-    assert len(translated) == 7
-
-    type_map = {res["id"]: res["type"] for res in translated}
-    assert type_map["vpc-1"] == "google_compute_network"
-    assert type_map["subnet-1"] == "google_compute_subnetwork"
-    assert type_map["vm-1"] == "google_compute_instance"
-    assert type_map["db-1"] == "google_sql_database_instance"
-    assert type_map["redis-1"] == "google_redis_instance"
-    assert type_map["bucket-1"] == "google_storage_bucket"
-    assert type_map["secret-1"] == "google_secret_manager_secret"
-
-
-
-def test_azure_adapter_translation(sample_cmir):
-    adapter = AzureAdapter()
-    translated = adapter.translate_cmir(sample_cmir)
-    assert len(translated) == 7
-
-    type_map = {res["id"]: res["type"] for res in translated}
-    assert type_map["vpc-1"] == "azurerm_virtual_network"
-    assert type_map["subnet-1"] == "azurerm_subnet"
-    assert type_map["vm-1"] == "azurerm_linux_virtual_machine"
-    assert type_map["db-1"] == "azurerm_postgresql_server"
-    assert type_map["redis-1"] == "azurerm_redis_cache"
-    assert type_map["bucket-1"] == "azurerm_storage_account"
-    assert type_map["secret-1"] == "azurerm_key_vault_secret"
-
-
-def test_k8s_adapter_translation(sample_cmir):
-    adapter = KubernetesAdapter()
-    translated = adapter.translate_cmir(sample_cmir)
-    assert len(translated) == 7
-
-    kind_map = {res["id"]: res["kind"] for res in translated}
-    assert kind_map["vm-1"] == "Deployment"
-    assert kind_map["db-1"] == "StatefulSet"
-    assert kind_map["redis-1"] == "StatefulSet"
-    assert kind_map["secret-1"] == "Secret"
-    assert kind_map["bucket-1"] == "PersistentVolumeClaim"

@@ -1,17 +1,15 @@
 """
-Machine Migration Strategies: Continuous Block Replication (AWS MGN & GCP Migrate to VMs)
-and Image/Snapshot Import (AWS VM Import/Export & GCP Compute Image Import) (Section 5.3 & 7).
+Machine Migration Strategies: Continuous Block Replication (AWS MGN)
+and Image/Snapshot Import (AWS VM Import/Export) (Section 5.3 & 7).
 
 Provides:
-1. Official Provider Compatibility Matrix (OS, architecture, source type, disk format,
+1. Official AWS Provider Compatibility Matrix (OS, architecture, source type, disk format,
    boot firmware, network ports, IAM permissions, and supported regions).
 2. Strategy selector (`select_machine_migration_strategy`) that determines whether continuous
-   block-level replication (`aws_mgn` / `gcp_vmmigration`) or image import (`aws_vm_import` /
-   `gcp_image_import`) applies to the source, and documents limitations when continuous
-   replication is not supported (e.g., standalone offline disk files without a running source
-   OS or hypervisor connector).
-3. Real AWS SDK (`boto3` `mgn` & `ec2` & `s3`) and GCP API (`vmmigration.googleapis.com/v1` &
-   `compute.googleapis.com/compute/v1`) operation executors and status pollers.
+   block-level replication (`aws_mgn`) or image import (`aws_vm_import`) applies to the source,
+   and documents limitations when continuous replication is not supported (e.g., standalone
+   offline disk files without a running source OS or hypervisor connector).
+3. Real AWS SDK (`boto3` `mgn` & `ec2` & `s3`) operation executors and status pollers.
    Never fakes continuous replication with a file copy or artificial percentage.
 """
 
@@ -35,7 +33,7 @@ def _utc_now() -> str:
 
 
 # ==============================================================================
-# Official Compatibility Matrix for AWS & GCP Machine Migration Services
+# Official Compatibility Matrix for AWS Machine Migration Services
 # ==============================================================================
 
 MACHINE_MIGRATION_COMPATIBILITY_MATRIX: Dict[str, Any] = {
@@ -96,57 +94,6 @@ MACHINE_MIGRATION_COMPATIBILITY_MATRIX: Dict[str, Any] = {
             "cost_model": "Sin cargo adicional por el servicio VM Import/Export; se factura el almacenamiento del objeto en S3 y los snapshots EBS resultantes.",
         },
     },
-    "gcp": {
-        "gcp_vmmigration": {
-            "service_name": "Google Cloud Migrate to Virtual Machines (`vmmigration.googleapis.com/v1`)",
-            "official_docs": "https://cloud.google.com/migrate/virtual-machines/docs/5.0",
-            "mechanism": "continuous_block_replication",
-            "supported_source_types": ["vmware_vsphere_vm", "hypervisor_vm", "cloud_vm"],
-            "unsupported_source_types": ["standalone_offline_disk_image"],
-            "supported_os_families": ["linux", "windows"],
-            "supported_distros": ["debian", "ubuntu", "rhel", "rocky", "almalinux", "centos", "sles", "windows-server"],
-            "supported_architectures": ["x86_64", "arm64", "aarch64"],
-            "supported_boot_modes": ["BIOS", "UEFI"],
-            "network_requirements": [
-                "Conector Migrate Connector desplegado en el entorno de virtualización de origen",
-                "TCP 443 saliente hacia `vmmigration.googleapis.com` y Cloud Storage APIs",
-            ],
-            "required_iam_permissions": [
-                "vmmigration.sources.get",
-                "vmmigration.migratingVms.create",
-                "vmmigration.migratingVms.startMigration",
-                "vmmigration.cloneJobs.create",
-                "vmmigration.cutoverJobs.create",
-                "compute.instances.create",
-                "compute.disks.create",
-            ],
-            "cost_model": "Sin coste de licencia por el uso de Migrate to Virtual Machines; se facturan los Persistent Disks de replicación y las instancias de prueba/cutover.",
-        },
-        "gcp_image_import": {
-            "service_name": "Google Compute Engine Image & Virtual Disk Import (`compute.images.insert` / `gcloud compute images import`)",
-            "official_docs": "https://cloud.google.com/compute/docs/import/importing-virtual-disks",
-            "mechanism": "staged_image_import",
-            "supported_source_types": ["standalone_offline_disk_image", "exported_vm_appliance", "hypervisor_vm"],
-            "supported_image_formats": ["VMDK", "VHD", "VHDX", "QCOW2", "RAW", "OVA", "OVF"],
-            "formats_requiring_conversion": {},
-            "supported_os_families": ["linux", "windows"],
-            "supported_distros": ["debian", "ubuntu", "rhel", "rocky", "almalinux", "centos", "sles", "windows-server"],
-            "supported_architectures": ["x86_64", "arm64", "aarch64"],
-            "supported_boot_modes": ["BIOS", "UEFI"],
-            "network_requirements": [
-                "HTTPS (TCP 443) hacia Google Cloud Storage (`storage.googleapis.com`) para alojar el archivo de imagen en un bucket de staging",
-            ],
-            "required_iam_permissions": [
-                "storage.buckets.get",
-                "storage.objects.create",
-                "storage.objects.get",
-                "compute.images.create",
-                "compute.disks.create",
-                "compute.instances.create",
-            ],
-            "cost_model": "Se factura el almacenamiento temporal en Cloud Storage (GCS) y la imagen/discos persistentes en Compute Engine.",
-        },
-    },
 }
 
 
@@ -158,28 +105,27 @@ def select_machine_migration_strategy(
 ) -> Dict[str, Any]:
     """
     Determine the appropriate migration strategy for a machine or disk image based on
-    the official AWS & GCP compatibility matrix.
+    the official AWS compatibility matrix.
     - If `source_type` is a live server or hypervisor VM (`live_server`, `hypervisor_vm`,
       `vmware_vsphere_vm`) and the OS/architecture is supported, selects continuous
-      replication (`aws_mgn` or `gcp_vmmigration`) when requested or applicable.
+      replication (`aws_mgn`) when requested or applicable.
     - If `source_type` is `standalone_offline_disk_image` (a `.vmdk`, `.qcow2`, `.vhd`,
       `.raw`, `.ova` file on disk without a running source agent/hypervisor), continuous
-      replication is NOT applicable because AWS MGN requires an active agent/vCenter source
-      and GCP Migrate to VMs requires an active vSphere/Cloud source connector. In that case,
-      it selects `aws_vm_import` or `gcp_image_import` and explicitly documents why.
+      replication is NOT applicable because AWS MGN requires an active agent/vCenter source.
+      In that case, it selects `aws_vm_import` and explicitly documents why.
     """
     prov = target_provider.lower().strip()
-    if prov not in ("aws", "gcp"):
-        raise ValueError(f"Proveedor destino '{target_provider}' no admitido. Solo 'aws' o 'gcp'.")
+    if prov != "aws":
+        raise ValueError(f"Proveedor destino '{target_provider}' no admitido. CloudMove opera exclusivamente sobre AWS ('aws').")
 
     os_info = manifest.get("os") or {}
     os_family = str(os_info.get("family") or "linux").lower()
     arch = str(os_info.get("architecture") or "x86_64").lower()
     img_format = str(manifest.get("format") or "VMDK").upper()
 
-    prov_matrix = MACHINE_MIGRATION_COMPATIBILITY_MATRIX[prov]
-    repl_key = "aws_mgn" if prov == "aws" else "gcp_vmmigration"
-    imp_key = "aws_vm_import" if prov == "aws" else "gcp_image_import"
+    prov_matrix = MACHINE_MIGRATION_COMPATIBILITY_MATRIX["aws"]
+    repl_key = "aws_mgn"
+    imp_key = "aws_vm_import"
     repl_spec = prov_matrix[repl_key]
     imp_spec = prov_matrix[imp_key]
 
@@ -415,140 +361,3 @@ class AWSMachineMigrationClient:
             msg = (exc.response.get("Error") or {}).get("Message", str(exc))
             raise ConnectorError(f"AWS_MGN_{code}", f"Error ejecutando `{action}` en AWS MGN: {msg}") from exc
 
-
-class GCPMachineMigrationClient:
-    """
-    Executes and queries real Google Cloud Compute Engine Image Import and
-    Google Cloud Migrate to Virtual Machines (`vmmigration.googleapis.com/v1`) operations.
-    """
-
-    def __init__(
-        self,
-        project_id: str,
-        location: str = "us-central1",
-        http_transport: Optional[Callable[[str, str, Optional[Dict[str, Any]]], Dict[str, Any]]] = None,
-    ) -> None:
-        self.project_id = project_id
-        self.location = location
-        self.http_transport = http_transport
-
-    def _obtain_token(self) -> str:
-        if self.http_transport is not None:
-            return "injected-gcp-token"
-        if not self.project_id:
-            raise ConnectorAuthError("GCP_MISSING_PROJECT", "Debe especificar `project_id` para operaciones de migración en GCP.")
-        try:
-            import google.auth
-            from google.auth.transport.requests import Request as GoogleAuthRequest
-
-            creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
-            creds.refresh(GoogleAuthRequest())
-            return str(creds.token)
-        except Exception as exc:
-            raise ConnectorAuthError(
-                "GCP_MISSING_CREDENTIALS",
-                f"Credenciales GCP no disponibles para ejecutar operación de migración en vivo: {exc}",
-            ) from exc
-
-    def _request(self, method: str, url: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        token = self._obtain_token()
-        if self.http_transport is not None:
-            return self.http_transport(method, url, body)
-
-        data = json.dumps(body).encode("utf-8") if body is not None else None
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-            method=method,
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            if exc.code in (401, 403):
-                raise ConnectorAuthError(f"GCP_HTTP_{exc.code}", f"Autorización GCP rechazada ({exc.code}) en {url}.") from exc
-            raise ConnectorError(f"GCP_HTTP_{exc.code}", f"Error HTTP {exc.code} en API de migración GCP ({url}).") from exc
-        except (TimeoutError, urllib.error.URLError) as exc:
-            raise ConnectorTimeoutError(f"Error de red/timeout hacia GCP ({url}): {exc}") from exc
-
-    def start_compute_image_import(
-        self,
-        image_name: str,
-        gcs_source_uri: str,
-        guest_os_features: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
-        if not gcs_source_uri or not gcs_source_uri.startswith("gs://"):
-            raise ConnectorError(
-                "MISSING_STAGING_STORAGE",
-                "Debe proporcionar una URI válida en Google Cloud Storage (`gs://bucket/imagen`) para importar en GCP.",
-            )
-        url = f"https://compute.googleapis.com/compute/v1/projects/{self.project_id}/global/images"
-        features = [{"type": f} for f in (guest_os_features or ["UEFI_COMPATIBLE", "VIRTIO_SCSI_MULTIQUEUE", "GVNIC"])]
-        body = {
-            "name": image_name,
-            "rawDisk": {"source": gcs_source_uri},
-            "guestOsFeatures": features,
-        }
-        resp = self._request("POST", url, body)
-        return {
-            "provider": "gcp",
-            "service": "gcp_image_import",
-            "operation_id": resp.get("name") or resp.get("id"),
-            "status": resp.get("status", "RUNNING"),
-            "target_image": image_name,
-            "gcs_source_uri": gcs_source_uri,
-            "started_at": _utc_now(),
-        }
-
-    def query_migrating_vm_status(self, source_id: str, migrating_vm_id: str) -> Dict[str, Any]:
-        url = (
-            f"https://vmmigration.googleapis.com/v1/projects/{self.project_id}"
-            f"/locations/{self.location}/sources/{source_id}/migratingVms/{migrating_vm_id}"
-        )
-        resp = self._request("GET", url)
-        return {
-            "provider": "gcp",
-            "service": "gcp_vmmigration",
-            "migrating_vm_id": migrating_vm_id,
-            "state": resp.get("state", "ACTIVE"),
-            "current_sync_info": resp.get("currentSyncInfo", {}),
-            "last_sync": resp.get("lastSync", {}),
-            "checked_at": _utc_now(),
-        }
-
-    def trigger_vmmigration_action(
-        self,
-        action: str,
-        source_id: str,
-        migrating_vm_id: str,
-        job_id: str = "job-01",
-    ) -> Dict[str, Any]:
-        base = (
-            f"https://vmmigration.googleapis.com/v1/projects/{self.project_id}"
-            f"/locations/{self.location}/sources/{source_id}/migratingVms/{migrating_vm_id}"
-        )
-        if action == "start_migration":
-            url = f"{base}:startMigration"
-            body: Dict[str, Any] = {}
-        elif action == "create_clone_job":
-            url = f"{base}/cloneJobs?cloneJobId={job_id}"
-            body = {}
-        elif action == "create_cutover_job":
-            url = f"{base}/cutoverJobs?cutoverJobId={job_id}"
-            body = {}
-        else:
-            raise ValueError(f"Acción GCP Migrate to VMs '{action}' no soportada.")
-        resp = self._request("POST", url, body)
-        return {
-            "provider": "gcp",
-            "service": "gcp_vmmigration",
-            "action": action,
-            "operation_name": resp.get("name"),
-            "done": resp.get("done", False),
-            "triggered_at": _utc_now(),
-        }

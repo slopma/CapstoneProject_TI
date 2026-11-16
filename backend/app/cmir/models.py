@@ -82,7 +82,6 @@ SUPPORTED_ENTITY_TYPES = {
     "secret",
     "discovery_group",
     "target_aws_resource",
-    "target_gcp_resource",
 }
 
 SUPPORTED_RELATIONSHIP_TYPES = {
@@ -129,8 +128,8 @@ Evidence = CMIREvidence
 
 
 class CMIRTargetMapping(BaseModel):
-    provider: str = Field(..., description="Target cloud provider: aws | gcp")
-    target_resource_type: str = Field(..., description="Terraform resource type in AWS or GCP")
+    provider: str = Field(..., description="Target cloud provider: aws")
+    target_resource_type: str = Field(..., description="Terraform resource type in AWS")
     strategy: str = Field("rehost", description="Migration 6R strategy: rehost | replatform | retain | retire")
     configuration: Dict[str, Any] = Field(default_factory=dict)
     notes: List[str] = Field(default_factory=list)

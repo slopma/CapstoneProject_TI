@@ -41,9 +41,9 @@ from osquery_installer import (  # noqa: E402
 )
 
 COLLECTOR = PROJECT / "cloudmove_osquery_export.py"
-# Guardamos el inventario generado por el agente en docs/cloudmove-osquery-agent-inventory.json
-# para no sobrescribir nunca el archivo de muestra original del repositorio.
-INVENTORY = PROJECT / "docs" / "cloudmove-osquery-agent-inventory.json"
+# Guardamos el inventario generado por el agente en backend/data/cloudmove-osquery-agent-inventory.json
+# para mantener el repositorio limpio y no sobrescribir inventarios de muestra.
+INVENTORY = PROJECT / "backend" / "data" / "cloudmove-osquery-agent-inventory.json"
 
 app = FastAPI(
     title="CloudMove Local Discovery Agent",

@@ -105,7 +105,7 @@ class StageCommitRequest(BaseModel):
 class DispatchTaskRequest(BaseModel):
     action: str = Field(
         ...,
-        description="Authorized action: collect_inventory | inspect_disk | check_mgn_prerequisites | check_gcp_migrate_prerequisites | install_mgn_agent | quiesce_database | unquiesce_database | stage_selected_paths | self_update",
+        description="Authorized action: collect_inventory | inspect_disk | check_mgn_prerequisites | install_mgn_agent | quiesce_database | unquiesce_database | stage_selected_paths | self_update",
     )
     parameters: Optional[Dict[str, Any]] = Field(default_factory=dict)
     timeout_seconds: int = Field(300, ge=10, le=3600)

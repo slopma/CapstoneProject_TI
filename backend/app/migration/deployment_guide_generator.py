@@ -1,7 +1,7 @@
 """
 CloudMove Deployment Guide Generator.
 Generates comprehensive, step-by-step production runbooks (in Markdown)
-for deploying collected workloads to AWS and GCP across the two active use cases:
+for deploying collected workloads to AWS across the two active use cases:
 - Case 1: GitHub / Application Source Code (app_source)
 - Case 2: Live Operating System & VM Image (vm_image)
 """
@@ -45,49 +45,41 @@ def generate_deployment_guide(
 ) -> str:
     """
     Generate production-ready, step-by-step markdown deployment instructions tailored
-    to the specific use case and cloud target provider (AWS or GCP).
+    to the specific use case on Amazon Web Services (AWS).
     """
-    provider_clean = str(target_provider or "aws").lower().strip()
     uc_clean = str(use_case or "app_source").lower().strip()
     cfg = target_config or {}
     src = source_environment or {}
     safe_job_name = _sanitize_job_name(job_name, src)
     slug_name = _slug(safe_job_name)
 
-    default_region = "us-east-1" if provider_clean == "aws" else "us-central1"
-    region = cfg.get("region") or cfg.get("aws_region") or cfg.get("gcp_region") or default_region
-    gcp_project = cfg.get("gcp_project_id") or cfg.get("project_id") or "cloudmove-production"
+    default_region = "us-east-1"
+    region = cfg.get("region") or cfg.get("aws_region") or default_region
 
     if uc_clean == "vm_image":
         return _build_case_2_guide(
-            provider_clean=provider_clean,
             job_name=job_name,
             slug_name=slug_name,
             migration_id=migration_id,
             region=region,
-            gcp_project=gcp_project,
             src=src,
             files=artifacts_files,
         )
     return _build_case_1_guide(
-        provider_clean=provider_clean,
         job_name=safe_job_name,
         slug_name=slug_name,
         migration_id=migration_id,
         region=region,
-        gcp_project=gcp_project,
         src=src,
         files=artifacts_files,
     )
 
 
 def _build_case_1_guide(
-    provider_clean: str,
     job_name: str,
     slug_name: str,
     migration_id: str,
     region: str,
-    gcp_project: str,
     src: Dict[str, Any],
     files: Dict[str, str],
 ) -> str:
@@ -211,8 +203,7 @@ TARGET_DB_NAME="postgres" \\
 
     env_block = "\n".join(env_example_lines)
 
-    if provider_clean == "aws":
-        return f"""# Guia Paso a Paso: Despliegue y Configuracion de Aplicacion en AWS (ECS Fargate / RDS)
+    return f"""# Guia Paso a Paso: Despliegue y Configuracion de Aplicacion en AWS (ECS Fargate / RDS)
 **Carga de Trabajo:** {job_name} | **ID de Migracion:** {migration_id}
 **Repositorio GitHub:** `{repo_url}` (Rama: `{git_ref}`, Commit: `{short_sha}`)
 **Entorno de Ejecucion:** {runtime} ({framework}) | **Puerto:** `{detected_port}` | **Region Destino:** AWS `{region}`
@@ -352,145 +343,13 @@ curl -Iv "$APP_URL{primary_health_ep}" || curl -Iv "$APP_URL/"
 - Si expone una API REST (FastAPI/Express), accede a la documentacion interactiva en `$APP_URL/docs` o `$APP_URL/swagger`.
 - Realiza una peticion de prueba de login o consulta de registros de prueba contra la base de datos migrada.
 """
-    else:
-        return f"""# Guia Paso a Paso: Despliegue y Configuracion de Aplicacion en Google Cloud (Cloud Run / Cloud SQL)
-**Carga de Trabajo:** {job_name} | **ID de Migracion:** {migration_id}
-**Repositorio GitHub:** `{repo_url}` (Rama: `{git_ref}`, Commit: `{short_sha}`)
-**Entorno de Ejecucion:** {runtime} ({framework}) | **Puerto:** `{detected_port}` | **Region Destino:** GCP `{region}`
-**Proyecto GCP:** `{gcp_project}` | **Base de Datos:** Cloud SQL ({db_engine} {db_version})
-
----
-
-### Paso 1: Descargar el Paquete de Despliegue y Clonar el Repositorio
-Para desplegar el codigo analizado en Google Cloud:
-1. Clonar el repositorio y posicionarse en el commit analizado:
-```bash
-git clone {repo_url} {slug_name}
-cd {slug_name}
-git checkout {commit_sha}
-```
-2. Descargar los artefactos generados por CloudMove:
-```bash
-CLOUDMOVE_API_URL="${{CLOUDMOVE_API_URL:-{DEFAULT_API_URL}}}"
-curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/bundle.zip"
-unzip -o bundle.zip
-```
-
-### Paso 2: Instalacion de Dependencias y Validacion Local
-```bash
-{dep_install_cmd}
-```
-
-### Paso 3: Autenticacion y Seleccion de Proyecto en GCP
-```bash
-gcloud auth login
-gcloud config set project {gcp_project}
-gcloud services enable compute.googleapis.com artifactregistry.googleapis.com run.googleapis.com sqladmin.googleapis.com secretmanager.googleapis.com
-```
-
-### Paso 4: Compilacion y Registro en Google Artifact Registry
-1. Crear el repositorio de artefactos:
-```bash
-gcloud artifacts repositories create {slug_name}-repo \\
-    --repository-format=docker \\
-    --location={region} \\
-    --description="Repositorio de contenedores para {job_name}" || true
-```
-2. Autenticar Docker con Artifact Registry:
-```bash
-gcloud auth configure-docker {region}-docker.pkg.dev
-```
-3. Compilar y subir la imagen con tag del commit:
-```bash
-IMAGE_TAG="{region}-docker.pkg.dev/{gcp_project}/{slug_name}-repo/{slug_name}:{short_sha}"
-docker build -t "$IMAGE_TAG" .
-docker tag "$IMAGE_TAG" "{region}-docker.pkg.dev/{gcp_project}/{slug_name}-repo/{slug_name}:latest"
-docker push "$IMAGE_TAG"
-docker push "{region}-docker.pkg.dev/{gcp_project}/{slug_name}-repo/{slug_name}:latest"
-```
-
-### Paso 5: Aprovisionamiento de Infraestructura con Terraform
-```bash
-terraform init
-terraform plan
-terraform apply -auto-approve -var="gcp_project_id={gcp_project}" -var="gcp_region={region}"
-```
-
-### Paso 6: Despliegue Efectivo del Servicio en Google Cloud Run
-Despliega o actualiza el servicio con la imagen compilada y acceso publico:
-```bash
-IMAGE_TAG="{region}-docker.pkg.dev/{gcp_project}/{slug_name}-repo/{slug_name}:{short_sha}"
-
-gcloud run deploy {slug_name} \\
-    --image="$IMAGE_TAG" \\
-    --platform=managed \\
-    --region={region} \\
-    --allow-unauthenticated \\
-    --port={detected_port} \\
-    --set-env-vars="NODE_ENV=production,PORT={detected_port}"
-```
-
-### Paso 7: Configuraciones Necesarias para Usar la Aplicacion
-
-#### 7.1 Variables de Entorno y Secretos en Google Secret Manager
-Almacena las credenciales sensibles:
-```bash
-cat << 'EOF' > .env.production
-{env_block}
-EOF
-
-gcloud secrets create {slug_name}-env --data-file=.env.production || \\
-gcloud secrets versions add {slug_name}-env --data-file=.env.production
-```
-
-#### 7.2 Conexion a Cloud SQL e Inicializacion de Migraciones
-1. Otorga permisos a la cuenta de servicio de Cloud Run para conectar a Cloud SQL:
-```bash
-CLOUDRUN_SA=$(gcloud run services describe {slug_name} --region={region} --format="value(spec.template.spec.serviceAccountName)")
-gcloud projects add-iam-policy-binding {gcp_project} \\
-    --member="serviceAccount:$CLOUDRUN_SA" \\
-    --role="roles/cloudsql.client"
-```
-2. Ejecuta un Cloud Run Job para correr las migraciones de esquema:
-```bash
-gcloud run jobs create {slug_name}-migrate \\
-    --image="$IMAGE_TAG" \\
-    --region={region} \\
-    --command="{migrate_cmd}" || true
-gcloud run jobs execute {slug_name}-migrate --region={region} --wait
-```
-
-#### 7.3 Enlace Frontend <-> Backend
-Configura la URL de Cloud Run en tu aplicacion cliente:
-```bash
-SERVICE_URL=$(gcloud run services describe {slug_name} --region={region} --format="value(status.url)")
-echo "Configurar en cliente frontend: VITE_API_BASE_URL=$SERVICE_URL"
-```
-
-### Paso 8: Acceso Publico, Verificacion y Como Usar la Aplicacion
-1. **Consultar URL de Cloud Run:**
-```bash
-SERVICE_URL=$(gcloud run services describe {slug_name} --region={region} --format="value(status.url)")
-echo "Servicio disponible en: $SERVICE_URL"
-```
-2. **Prueba de Salud (Sonda en `{primary_health_ep}`):**
-```bash
-curl -Iv "$SERVICE_URL{primary_health_ep}" || curl -Iv "$SERVICE_URL"
-```
-3. **Uso de la Aplicacion:**
-- Abre la URL en el navegador web para verificar la interfaz de usuario.
-- Accede a la documentacion de endpoints (`$SERVICE_URL/docs`).
-- Asocia un dominio corporativo personalizado si lo requieres mediante `gcloud beta run domain-mappings create --service={slug_name} --domain=tu-dominio.com`.
-"""
 
 
 def _build_case_2_guide(
-    provider_clean: str,
     job_name: str,
     slug_name: str,
     migration_id: str,
     region: str,
-    gcp_project: str,
     src: Dict[str, Any],
     files: Dict[str, str],
 ) -> str:
@@ -515,8 +374,7 @@ def _build_case_2_guide(
     else:
         services_str = "ssh.service, systemd-journald.service"
 
-    if provider_clean == "aws":
-        return f"""# Guia Paso a Paso: Despliegue y Montaje de Sistema Operativo e Imagen de VM en AWS EC2
+    return f"""# Guia Paso a Paso: Despliegue y Montaje de Sistema Operativo e Imagen de VM en AWS EC2
 **Servidor Origen:** {job_name} | **ID de Migracion:** {migration_id}
 **Sistema Operativo:** {distro} (Kernel: `{kernel}`, `{arch}`)
 **Arranque / Particionado:** `{boot_mode}` (`{part_scheme}`) | **Disco Principal:** `{primary_disk}` ({disk_size} GiB prov, {used_gib} GiB usados)
@@ -711,115 +569,5 @@ Abre directamente la plantilla VMX con el disco VMDK:
 chmod +x launch_vmware.sh
 ./launch_vmware.sh
 # O importa el archivo '{slug_name}.vmx' directamente desde la interfaz de VMware.
-```
-"""
-    else:
-        return f"""# Guia Paso a Paso: Despliegue y Montaje de Sistema Operativo e Imagen de VM en Google Compute Engine
-**Servidor Origen:** {job_name} | **ID de Migracion:** {migration_id}
-**Sistema Operativo:** {distro} (Kernel: `{kernel}`, `{arch}`)
-**Arranque / Particionado:** `{boot_mode}` (`{part_scheme}`) | **Disco Principal:** `{primary_disk}` ({disk_size} GiB prov, {used_gib} GiB usados)
-**Usuarios Descubiertos:** {users} | **Paquetes Inventariados:** {pkgs_count}
-**Servicios Detectados:** {services_str}
-**Region Destino:** GCP `{region}` | **Proyecto:** `{gcp_project}`
-
----
-
-### Paso 1: Descargar la Copia del SO y los Artefactos de Migracion
-Descarga los artefactos desde la plataforma CloudMove listos para cualquier virtualizador o para GCP:
-1. **Descargar Paquete Completo de Despliegue (.ZIP):**
-   ```bash
-   CLOUDMOVE_API_URL="${{CLOUDMOVE_API_URL:-{DEFAULT_API_URL}}}"
-   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/bundle.zip"
-   unzip bundle.zip -d ./cloudmove_os_migration
-   cd ./cloudmove_os_migration
-   ```
-2. **Descargar Disco Listo para VirtualBox (.VDI):**
-   ```bash
-   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/disk-image?format=vdi"
-   ```
-3. **Descargar Disco Listo para VMware (.VMDK):**
-   ```bash
-   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/disk-image?format=vmdk"
-   ```
-4. **Descargar Disco para QEMU / KVM / Proxmox (.QCOW2):**
-   ```bash
-   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/disk-image?format=qcow2"
-   ```
-5. **Descargar Copia del Sistema Operativo (.tar.gz):**
-   ```bash
-   curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/system-image"
-   ```
-
-### Paso 2: Subida de la Imagen a Google Cloud Storage
-- **Opcion A: Streaming directo con el script adjunto:**
-  ```bash
-  sudo chmod +x create_full_raw_disk_clone.sh
-  sudo ./create_full_raw_disk_clone.sh gcs
-  ```
-- **Opcion B: Subir la imagen de disco QCOW2 generada:**
-  ```bash
-  GCS_BUCKET="cloudmove-vm-images-{gcp_project}"
-  gcloud storage buckets create "gs://$GCS_BUCKET" --project="{gcp_project}" || true
-  gcloud storage cp {slug_name}.qcow2 "gs://$GCS_BUCKET/{slug_name}.qcow2"
-  ```
-
-### Paso 3: Registro e Importacion de la Imagen en Google Compute Engine
-Importa la imagen en el catalogo de Compute Engine habilitando controladores VirtIO y compatibilidad UEFI:
-```bash
-gcloud compute images import {slug_name}-cloudmove \\
-    --project="{gcp_project}" \\
-    --source-file="gs://$GCS_BUCKET/{slug_name}.qcow2" \\
-    --guest-os-features=UEFI_COMPATIBLE,GVNIC,VIRTIO_SCSI_MULTIQUEUE
-```
-
-### Paso 4: Montaje y Aprovisionamiento de la VM con Terraform
-Ejecuta Terraform pasando el nombre de la imagen importada:
-```bash
-terraform init
-terraform plan -var="custom_image_name={slug_name}-cloudmove"
-terraform apply -auto-approve -var="custom_image_name={slug_name}-cloudmove"
-```
-
-### Paso 5: Conexion Remota y Verificacion del Disco Montado
-1. Conectate a la maquina virtual mediante Google Cloud IAP o SSH:
-```bash
-gcloud compute ssh {slug_name}-vm --zone={region}-a --project={gcp_project}
-```
-2. Inspecciona el disco y expande el sistema de archivos:
-```bash
-lsblk
-sudo growpart /dev/sda 1 || true
-sudo resize2fs /dev/sda1 2>/dev/null || sudo xfs_growfs / 2>/dev/null || true
-```
-
-### Paso 6: Restauracion de Configuraciones del SO In-Guest (Usuarios y Servicios)
-Transfiere y ejecuta el paquete de restauracion:
-```bash
-# Copiar paquete al servidor
-gcloud compute scp system_image_snapshot_*.tar.gz {slug_name}-vm:~/ --zone={region}-a
-
-# En el servidor Compute Engine:
-tar -xzf system_image_snapshot_*.tar.gz
-sudo chmod +x restore_system_image.sh
-sudo ./restore_system_image.sh
-```
-
-### Paso 7: Validacion Operativa en la Nube
-Comprueba el estado de salud de la maquina virtual y servicios en escucha:
-```bash
-systemctl list-units --type=service --state=running
-sudo ss -tulpn
-```
-
-### Paso 8: Automatizacion y Prueba Local en Hipervisores (VirtualBox / VMware)
-Ejecuta la maquina virtual localmente para pruebas previas o entornos de contingencia:
-```bash
-# VirtualBox
-chmod +x launch_virtualbox.sh
-./launch_virtualbox.sh
-
-# VMware
-chmod +x launch_vmware.sh
-./launch_vmware.sh
 ```
 """

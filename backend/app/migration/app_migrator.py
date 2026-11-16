@@ -30,7 +30,6 @@ import zlib
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.adapters.aws_adapter import AWSAdapter
-from app.adapters.gcp_adapter import GCPAdapter
 from app.cmir.builder import build_cmir_hierarchy
 from app.cmir.models import CMIR
 from app.config import PROJECT_ROOT
@@ -1040,7 +1039,7 @@ def discover_database_backups_and_seeds(
     JSON data seed exports (`*output.json`, `feed.json`, `*seed*.json`), database loader scripts
     (`import_*.py`, `upload_*.py`), and ER schema diagrams (`modelo.dot`).
     Extracts exact schemas, extensions (e.g. PostGIS), RPC functions, tables, and row counts
-    so CloudMove can recreate the database and restore all its data in AWS/GCP.
+    so CloudMove can recreate the database and restore all its data in AWS.
     """
     backups: List[Dict[str, Any]] = []
     seed_files: List[Dict[str, Any]] = []
@@ -1936,8 +1935,6 @@ def build_github_to_cloud_transformation_catalog(
     why it transforms, and the selectable options the user can choose from.
     """
     provider_clean = (target_provider or "aws").lower().strip()
-    is_gcp = provider_clean == "gcp"
-    p_upper = "GCP" if is_gcp else "AWS"
     decisions_in = dict(user_decisions or app_discovery.get("user_decisions") or {})
 
     app_name = app_discovery.get("app_name", "app")
@@ -1959,58 +1956,36 @@ def build_github_to_cloud_transformation_catalog(
     comp_options = [
         {
             "id": "ha_asg_alb_containerized",
-            "label": (
-                "Alta Disponibilidad Multi-AZ (Balanceador ALB + Auto Scaling Group + Contenedores Docker)"
-                if not is_gcp
-                else "Alta Disponibilidad Regional (Managed Instance Group + Compute Engine + Contenedores Docker)"
-            ),
+            "label": "Alta Disponibilidad Multi-AZ (Balanceador ALB + Auto Scaling Group + Contenedores Docker)",
             "badge": "Recomendado · Resiliente a Fallos",
-            "cost_estimate": "~$16–22 USD/mes (ALB) + Instancias EC2 Free-Tier" if not is_gcp else "~$15–20 USD/mes (Compute Engine)",
+            "cost_estimate": "~$16–22 USD/mes (ALB) + Instancias EC2 Free-Tier",
             "description": (
                 f"Despliega el repositorio contenerizado con Docker Compose (`user_data.sh` + 2GB Swap) detrás de un "
-                f"{'Application Load Balancer Multi-AZ (`aws_lb`) y un Auto Scaling Group (`aws_autoscaling_group`)' if not is_gcp else 'grupo de instancias en Compute Engine'} "
+                "Application Load Balancer Multi-AZ (`aws_lb`) y un Auto Scaling Group (`aws_autoscaling_group`) "
                 f"con chequeos de salud automáticos en `{health_ep}`."
             ),
-            "cloud_resources_created": (
-                [
-                    "aws_lb.app_alb (Application Load Balancer Multi-AZ)",
-                    "aws_lb_target_group.app_tg (Health Check HTTP " + health_ep + ")",
-                    "aws_lb_listener.http_listener (Puerto 80 -> Target Group)",
-                    f"aws_launch_template.compute_{safe_slug}_host_lt",
-                    f"aws_autoscaling_group.compute_{safe_slug}_host_asg (Min 1 / Desired 2 / Max 3)",
-                    f"aws_instance.compute_{safe_slug}_host (Ubuntu 22.04 LTS + Docker Compose + 2GB Swap)",
-                ]
-                if not is_gcp
-                else [
-                    f"google_compute_instance.compute_{safe_slug}_host (Debian 12 + Docker Compose)",
-                    "google_compute_firewall.allow_internal_and_web",
-                ]
-            ),
+            "cloud_resources_created": [
+                "aws_lb.app_alb (Application Load Balancer Multi-AZ)",
+                "aws_lb_target_group.app_tg (Health Check HTTP " + health_ep + ")",
+                "aws_lb_listener.http_listener (Puerto 80 -> Target Group)",
+                f"aws_launch_template.compute_{safe_slug}_host_lt",
+                f"aws_autoscaling_group.compute_{safe_slug}_host_asg (Min 1 / Desired 2 / Max 3)",
+                f"aws_instance.compute_{safe_slug}_host (Ubuntu 22.04 LTS + Docker Compose + 2GB Swap)",
+            ],
         },
         {
             "id": "single_instance_containerized",
-            "label": (
-                "Instancia Única Económica 100% Free-Tier (1 EC2 t3.micro + Docker Compose, sin Balanceador ni ASG)"
-                if not is_gcp
-                else "Instancia Única Económica (1 VM Compute Engine e2-micro + Docker Compose)"
-            ),
+            "label": "Instancia Única Económica 100% Free-Tier (1 EC2 t3.micro + Docker Compose, sin Balanceador ni ASG)",
             "badge": "Costo Mínimo · $0 Free Tier",
-            "cost_estimate": "$0 USD/mes (Elegible en Capa Gratuita AWS/GCP)",
+            "cost_estimate": "$0 USD/mes (Elegible en Capa Gratuita AWS)",
             "description": (
                 "Omite el Application Load Balancer y el Auto Scaling Group. Levanta una única máquina virtual con IP pública directa "
                 "que clona el repositorio, configura 2GB de Swap y ejecuta todos los contenedores con `docker compose up -d`."
             ),
-            "cloud_resources_created": (
-                [
-                    f"aws_instance.compute_{safe_slug}_host (1x t3.micro con IP Pública + Docker Compose + 2GB Swap)",
-                    "aws_security_group.app_sg (Puertos " + ", ".join(map(str, ports)) + ")",
-                ]
-                if not is_gcp
-                else [
-                    f"google_compute_instance.compute_{safe_slug}_host (1x e2-micro + Docker Compose)",
-                    "google_compute_firewall.allow_internal_and_web",
-                ]
-            ),
+            "cloud_resources_created": [
+                f"aws_instance.compute_{safe_slug}_host (1x t3.micro con IP Pública + Docker Compose + 2GB Swap)",
+                "aws_security_group.app_sg (Puertos " + ", ".join(map(str, ports)) + ")",
+            ],
         },
     ]
     if len(components) > 1:
@@ -2021,10 +1996,10 @@ def build_github_to_cloud_transformation_catalog(
             "cost_estimate": f"~${len(components) * 8}–{len(components) * 15} USD/mes ({len(components)} instancias dedicadas)",
             "description": (
                 "En lugar de consolidar los contenedores en un mismo host con Docker Compose, aprovisiona una instancia "
-                f"{'EC2' if not is_gcp else 'Compute Engine'} independiente para cada componente ({', '.join(c['name'] for c in components)})."
+                f"EC2 independiente para cada componente ({', '.join(c['name'] for c in components)})."
             ),
             "cloud_resources_created": [
-                f"{'aws_instance' if not is_gcp else 'google_compute_instance'}.compute_{safe_slug}_{_slug(c['name']).replace('-', '_')} (Dedicada para {c['name']})"
+                f"aws_instance.compute_{safe_slug}_{_slug(c['name']).replace('-', '_')} (Dedicada para {c['name']})"
                 for c in components
             ],
         })
@@ -2047,7 +2022,7 @@ def build_github_to_cloud_transformation_catalog(
             "badge": "Cómputo y Contenedores",
         },
         "why_transformed": (
-            f"El código fuente y sus manifiestos de contenedores deben alojarse en {p_upper} con acceso de red, "
+            "El código fuente y sus manifiestos de contenedores deben alojarse en AWS con acceso de red, "
             "inicialización desatendida (`user_data.sh`) y tolerancia a fallos."
         ),
         "default_option_id": comp_default,
@@ -2082,39 +2057,29 @@ def build_github_to_cloud_transformation_catalog(
         if is_frontend:
             c_options.append({
                 "id": "cloud_static_storage",
-                "label": (
-                    f"Transformar Frontend '{c_name}' a Bucket S3 Static Website Hosting (`aws_s3_bucket`)"
-                    if not is_gcp
-                    else f"Transformar Frontend '{c_name}' a Bucket de Cloud Storage (`google_storage_bucket`)"
-                ),
-                "badge": f"Nativo {p_upper} Serverless",
-                "cost_estimate": "~$0.02 USD/GB al mes (S3 / GCS Static Hosting)",
+                "label": f"Transformar Frontend '{c_name}' a Bucket S3 Static Website Hosting (`aws_s3_bucket`)",
+                "badge": "Nativo AWS Serverless",
+                "cost_estimate": "~$0.02 USD/GB al mes (S3 Static Hosting)",
                 "description": (
-                    f"Como `{c_name}` es un SPA ({comp.get('framework')}), la nube puede alojar sus archivos estáticos (HTML/JS/CSS) "
-                    f"directamente en un bucket {'Amazon S3 con Website Configuration' if not is_gcp else 'Google Cloud Storage'} sin consumir RAM de servidor."
+                    f"Como `{c_name}` es un SPA ({comp.get('framework')}), AWS puede alojar sus archivos estáticos (HTML/JS/CSS) "
+                    "directamente en un bucket Amazon S3 con Website Configuration sin consumir RAM de servidor."
                 ),
-                "cloud_resources_created": (
-                    [
-                        f"aws_s3_bucket.storage_{safe_slug}_{c_slug}_static",
-                        f"aws_s3_bucket_website_configuration.storage_{safe_slug}_{c_slug}_static_website",
-                    ]
-                    if not is_gcp
-                    else [
-                        f"google_storage_bucket.storage_{safe_slug}_{c_slug}_static",
-                    ]
-                ),
+                "cloud_resources_created": [
+                    f"aws_s3_bucket.storage_{safe_slug}_{c_slug}_static",
+                    f"aws_s3_bucket_website_configuration.storage_{safe_slug}_{c_slug}_static_website",
+                ],
             })
         c_options.append({
             "id": "dedicated_compute_instance",
-            "label": f"Aprovisionar Servidor {'EC2' if not is_gcp else 'Compute Engine'} Dedicado para '{c_name}'",
+            "label": f"Aprovisionar Servidor EC2 Dedicado para '{c_name}'",
             "badge": "VM Independiente",
-            "cost_estimate": "~$8.50 USD/mes (1 instancia t3.micro/e2-micro adicional)",
+            "cost_estimate": "~$8.50 USD/mes (1 instancia t3.micro adicional)",
             "description": (
                 f"Crea una máquina virtual exclusiva en Terraform para ejecutar únicamente el componente `{c_name}` "
                 f"(puertos {comp.get('container_ports', [])})."
             ),
             "cloud_resources_created": [
-                f"{'aws_instance' if not is_gcp else 'google_compute_instance'}.compute_{safe_slug}_{c_slug}"
+                f"aws_instance.compute_{safe_slug}_{c_slug}"
             ],
         })
 
@@ -2170,7 +2135,7 @@ def build_github_to_cloud_transformation_catalog(
                         "el Security Group `app_sg`, sin crear servidores adicionales por error."
                     ),
                     "cloud_resources_created": [
-                        f"Regla TCP puerto {dep.get('port', 8000)} en `aws_security_group.app_sg`" if not is_gcp else f"Regla TCP puerto {dep.get('port', 8000)} en `google_compute_firewall.allow_internal_and_web`"
+                        f"Regla TCP puerto {dep.get('port', 8000)} en `aws_security_group.app_sg`"
                     ],
                 },
             ]
@@ -2292,7 +2257,7 @@ def build_github_to_cloud_transformation_catalog(
                         f"({pub_tables_n} tablas públicas con {pub_rows_n} filas de dominio, {tot_tables_n} tablas totales con {all_rows_n} filas y {len(bkp_rpcs)} funciones RPC) "
                         "antes de levantar el Backend, y expone el puerto TCP 5432."
                         if has_bkp
-                        else f"Levanta un contenedor `{pg_img}` con volumen local persistente dentro de la misma instancia de cómputo en la nube, sin contratar {'Amazon RDS' if not is_gcp else 'Cloud SQL'}."
+                        else f"Levanta un contenedor `{pg_img}` con volumen local persistente dentro de la misma instancia de cómputo en la nube, sin contratar Amazon RDS."
                     ),
                     "cloud_resources_created": [
                         f"Contenedor `{pg_img}` (puerto 5432:5432) + Volumen persistente `pgdata` en `docker-compose.cloudmove.yml`",
@@ -2311,15 +2276,12 @@ def build_github_to_cloud_transformation_catalog(
                     "label": (
                         f"Transformar y Migrar a Amazon RDS for PostgreSQL{' + PostGIS' if needs_postgis else ''} (Multi-AZ)"
                         + (f" + Restaurar Backup `{bkp_file}` ({all_rows_n} filas)" if has_bkp else "")
-                        if not is_gcp
-                        else f"Transformar y Migrar a Google Cloud SQL for PostgreSQL{' + PostGIS' if needs_postgis else ''} (HA)"
-                        + (f" + Restaurar Backup `{bkp_file}` ({all_rows_n} filas)" if has_bkp else "")
                     ),
-                    "badge": f"Servicio Administrado {p_upper}" + (" + Restore Backup" if has_bkp else (" (Recomendado)" if not is_ext_baas else "")),
-                    "cost_estimate": "~$15–28 USD/mes (db.t3.micro Multi-AZ + 20GB SSD)" if not is_gcp else "~$25–35 USD/mes (Cloud SQL Regional)",
+                    "badge": "Servicio Administrado AWS" + (" + Restore Backup" if has_bkp else (" (Recomendado)" if not is_ext_baas else "")),
+                    "cost_estimate": "~$15–28 USD/mes (db.t3.micro Multi-AZ + 20GB SSD)",
                     "description": (
-                        f"Aprovisiona una instancia dedicada `{'aws_db_instance' if not is_gcp else 'google_sql_database_instance'}` en subredes privadas aisladas "
-                        f"con contraseña maestra dinámica (`random_password`)"
+                        "Aprovisiona una instancia dedicada `aws_db_instance` en subredes privadas aisladas "
+                        "con contraseña maestra dinámica (`random_password`)"
                         + (
                             f", adapta los esquemas/roles del backup, habilita las extensiones (`{', '.join(bkp_exts[:4])}`) "
                             f"y restaura automáticamente el backup `{bkp_file}` ({pub_tables_n} tablas públicas, {all_rows_n} filas totales) hacia el endpoint de RDS mediante `migrate_database_data.sh`."
@@ -2327,39 +2289,28 @@ def build_github_to_cloud_transformation_catalog(
                             else " y genera el runbook `migrate_database_data.sh` (`pg_dump`/`pg_restore`)."
                         )
                     ),
-                    "cloud_resources_created": (
-                        [
-                            f"aws_db_instance.{dep_safe_id} (PostgreSQL db.t3.micro Multi-AZ Cifrada)",
-                            "aws_db_subnet_group.db_subnets (Subredes Privadas A y B)",
-                            "aws_security_group.data_sg (Puerto 5432 exclusivo desde app_sg)",
-                            "random_password.db_master_password",
-                            f"Transformación y restauración de `{bkp_file}` ({pub_tables_n} tablas, {all_rows_n} filas) hacia RDS vía migrate_database_data.sh"
-                            if has_bkp
-                            else "Script de migración de datos: migrate_database_data.sh",
-                        ]
-                        if not is_gcp
-                        else [
-                            f"google_sql_database_instance.{dep_safe_id} (POSTGRES_15 Regional)",
-                            f"google_sql_user.{dep_safe_id}_admin_user",
-                            "random_password.db_master_password",
-                            f"Restauración automática de `{bkp_file}` ({pub_tables_n} tablas, {all_rows_n} filas) vía migrate_database_data.sh"
-                            if has_bkp
-                            else "Script de migración de datos: migrate_database_data.sh",
-                        ]
-                    ),
+                    "cloud_resources_created": [
+                        f"aws_db_instance.{dep_safe_id} (PostgreSQL db.t3.micro Multi-AZ Cifrada)",
+                        "aws_db_subnet_group.db_subnets (Subredes Privadas A y B)",
+                        "aws_security_group.data_sg (Puerto 5432 exclusivo desde app_sg)",
+                        "random_password.db_master_password",
+                        f"Transformación y restauración de `{bkp_file}` ({pub_tables_n} tablas, {all_rows_n} filas) hacia RDS vía migrate_database_data.sh"
+                        if has_bkp
+                        else "Script de migración de datos: migrate_database_data.sh",
+                    ],
                 },
                 {
                     "id": "keep_external",
                     "label": (
-                        f"Conservar el Servicio Externo Original ({dep['name']} / Supabase BaaS) — No crear BD en {p_upper}"
+                        f"Conservar el Servicio Externo Original ({dep['name']} / Supabase BaaS) — No crear BD en AWS"
                         if is_ext_baas
-                        else f"Conectar a Base de Datos Externa Existente — No aprovisionar {'RDS' if not is_gcp else 'Cloud SQL'}"
+                        else "Conectar a Base de Datos Externa Existente — No aprovisionar RDS"
                     ),
                     "badge": ("Recomendado · $0 en Nube" if (is_ext_baas and not has_bkp) else "Opción Externa · $0 en Nube"),
-                    "cost_estimate": "$0 USD/mes en " + p_upper + " (Se mantiene en proveedor externo)",
+                    "cost_estimate": "$0 USD/mes en AWS (Se mantiene en proveedor externo)",
                     "description": (
                         f"La aplicación seguirá conectándose al servicio externo (`{dep_engine}`) a través de sus variables de entorno (`.env`). "
-                        f"No se creará ninguna instancia {'Amazon RDS' if not is_gcp else 'Google Cloud SQL'} ni contenedor PostGIS en AWS."
+                        "No se creará ninguna instancia Amazon RDS ni contenedor PostGIS en AWS."
                     ),
                     "cloud_resources_created": [
                         f"0 recursos de Base de Datos en Terraform (Conexión externa preservada en `.env` y `user_data.sh`)"
@@ -2399,12 +2350,12 @@ def build_github_to_cloud_transformation_catalog(
                     "database_analysis": database_analysis_payload,
                 },
                 "why_transformed": (
-                    f"CloudMove analizó la estructura interna de `{bkp_file}` y determinó que requiere transformar los esquemas/roles propietarios de Supabase ({', '.join(bkp_roles[:4])}) y las extensiones (`{', '.join(bkp_exts[:4])}`) para recrear una base de datos PostgreSQL + PostGIS 100% funcional en {p_upper} con sus {all_rows_n} registros intactos."
+                    f"CloudMove analizó la estructura interna de `{bkp_file}` y determinó que requiere transformar los esquemas/roles propietarios de Supabase ({', '.join(bkp_roles[:4])}) y las extensiones (`{', '.join(bkp_exts[:4])}`) para recrear una base de datos PostgreSQL + PostGIS 100% funcional en AWS con sus {all_rows_n} registros intactos."
                     if has_bkp
                     else (
-                        f"Se detectó `{dep['name']}` ({dep_engine}) en GitHub. Como {p_upper} ofrece su propio servicio administrado "
-                        f"({'Amazon RDS' if not is_gcp else 'Google Cloud SQL'}), puedes elegir entre seguir usando el servicio externo gratuito, "
-                        f"transformarlo al servicio nativo de {p_upper}, o alojarlo como contenedor propio."
+                        f"Se detectó `{dep['name']}` ({dep_engine}) en GitHub. Como AWS ofrece su propio servicio administrado "
+                        "(Amazon RDS), puedes elegir entre seguir usando el servicio externo gratuito, "
+                        "transformarlo al servicio nativo de AWS, o alojarlo como contenedor propio."
                     )
                 ),
                 "default_option_id": d_default,
@@ -2419,36 +2370,28 @@ def build_github_to_cloud_transformation_catalog(
             d_options = [
                 {
                     "id": "transform_to_cloud_managed",
-                    "label": (
-                        "Transformar a Caché Administrado de la Nube: Amazon ElastiCache for Redis"
-                        if not is_gcp
-                        else "Transformar a Caché Administrado de la Nube: Google Cloud Memorystore for Redis"
-                    ),
-                    "badge": f"Servicio Nativo {p_upper}",
+                    "label": "Transformar a Caché Administrado de la Nube: Amazon ElastiCache for Redis",
+                    "badge": "Servicio Nativo AWS",
                     "cost_estimate": "~$12–15 USD/mes (cache.t3.micro)",
-                    "description": f"Crea un clúster Redis administrado por {p_upper} protegido por el Security Group de datos.",
-                    "cloud_resources_created": (
-                        [
-                            f"aws_elasticache_cluster.{dep_safe_id} (Redis 7 cache.t3.micro)",
-                            "aws_security_group.data_sg (Puerto TCP 6379)",
-                        ]
-                        if not is_gcp
-                        else [f"google_redis_instance.{dep_safe_id} (Redis 7 BASIC 1GB)"]
-                    ),
+                    "description": "Crea un clúster Redis administrado por AWS protegido por el Security Group de datos.",
+                    "cloud_resources_created": [
+                        f"aws_elasticache_cluster.{dep_safe_id} (Redis 7 cache.t3.micro)",
+                        "aws_security_group.data_sg (Puerto TCP 6379)",
+                    ],
                 },
                 {
                     "id": "self_hosted_container",
                     "label": "Ejecutar Contenedor `redis:7-alpine` dentro del Docker Compose de la VM ($0 extra)",
                     "badge": "Económico · $0 ElastiCache",
                     "cost_estimate": "$0 USD extra (Corre en el mismo host Docker)",
-                    "description": "Ejecuta Redis como contenedor ligero dentro de la instancia EC2/GCE sin costo adicional.",
+                    "description": "Ejecuta Redis como contenedor ligero dentro de la instancia EC2 sin costo adicional.",
                     "cloud_resources_created": ["Contenedor `redis:7-alpine` en Docker Compose (0 clústeres ElastiCache)"],
                 },
                 {
                     "id": "keep_external",
                     "label": "Usar Servicio Redis Externo (Ej. Upstash / Redis Cloud) — No crear en Terraform",
                     "badge": "Servicio Externo · $0 en Nube",
-                    "cost_estimate": "$0 USD en " + p_upper,
+                    "cost_estimate": "$0 USD en AWS",
                     "description": "Mantiene la conexión hacia un proveedor Redis externo mediante `REDIS_URL`.",
                     "cloud_resources_created": ["0 recursos de caché en Terraform (Conexión externa por `.env`)"],
                 },
@@ -2466,7 +2409,7 @@ def build_github_to_cloud_transformation_catalog(
                     "evidence_detail": ev_detail,
                     "badge": "Caché / Redis",
                 },
-                "why_transformed": f"El repositorio utiliza Redis; puedes transformarlo en {'ElastiCache' if not is_gcp else 'Memorystore'}, contenedor local o servicio externo.",
+                "why_transformed": "El repositorio utiliza Redis; puedes transformarlo en ElastiCache, contenedor local o servicio externo.",
                 "default_option_id": d_default,
                 "selected_option_id": d_selected,
                 "options": d_options,
@@ -2479,21 +2422,21 @@ def build_github_to_cloud_transformation_catalog(
         d_options = [
             {
                 "id": "transform_to_cloud_managed",
-                "label": f"Transformar a Servicio Administrado de {p_upper} ({'S3 Bucket' if dep_type == 'storage' else 'Cola / Servicio Cloud'})",
-                "badge": f"Nativo {p_upper}",
+                "label": f"Transformar a Servicio Administrado de AWS ({'S3 Bucket' if dep_type == 'storage' else 'Cola / Servicio Cloud'})",
+                "badge": "Nativo AWS",
                 "cost_estimate": "Pago por uso (Capa Gratuita elegible)",
                 "description": f"Aprovisiona el recurso nativo equivalente en Terraform para `{dep['name']}`.",
                 "cloud_resources_created": [
-                    f"{'aws_s3_bucket' if not is_gcp else 'google_storage_bucket'}.{dep_safe_id}"
+                    f"aws_s3_bucket.{dep_safe_id}"
                     if dep_type == "storage"
-                    else f"Recurso administrado `{dep['name']}` en {p_upper}"
+                    else f"Recurso administrado `{dep['name']}` en AWS"
                 ],
             },
             {
                 "id": "keep_external",
-                "label": f"Mantener `{dep['name']}` como Servicio Externo — No aprovisionar en {p_upper}",
+                "label": f"Mantener `{dep['name']}` como Servicio Externo — No aprovisionar en AWS",
                 "badge": "Externo · $0 en Nube",
-                "cost_estimate": "$0 USD en " + p_upper,
+                "cost_estimate": "$0 USD en AWS",
                 "description": "Conserva la referencia externa por variables de entorno sin crear el recurso en Terraform.",
                 "cloud_resources_created": ["0 recursos adicionales en Terraform (Conexión externa)"],
             },
@@ -2511,7 +2454,7 @@ def build_github_to_cloud_transformation_catalog(
                 "evidence_detail": ev_detail,
                 "badge": dep_type.upper(),
             },
-            "why_transformed": f"Dependencia detectada en el repositorio que puede aprovisionarse en {p_upper} o mantenerse externa.",
+            "why_transformed": "Dependencia detectada en el repositorio que puede aprovisionarse en AWS o mantenerse externa.",
             "default_option_id": d_default,
             "selected_option_id": d_selected,
             "options": d_options,
@@ -2537,19 +2480,15 @@ def build_github_to_cloud_transformation_catalog(
         },
         {
             "id": "cloud_secrets_manager",
-            "label": (
-                f"Transformar a Bóveda Administrada: AWS Secrets Manager ({max(1, len(secret_vars))} secreto(s))"
-                if not is_gcp
-                else f"Transformar a Bóveda Administrada: Google Secret Manager ({max(1, len(secret_vars))} secreto(s))"
-            ),
-            "badge": f"Seguridad Enterprise {p_upper}",
+            "label": f"Transformar a Bóveda Administrada: AWS Secrets Manager ({max(1, len(secret_vars))} secreto(s))",
+            "badge": "Seguridad Enterprise AWS",
             "cost_estimate": f"~${max(1, len(secret_vars)) * 0.40:.2f} USD/mes ($0.40 por secreto)",
             "description": (
-                f"Crea recursos nativos `{'aws_secretsmanager_secret' if not is_gcp else 'google_secret_manager_secret'}` en Terraform "
+                "Crea recursos nativos `aws_secretsmanager_secret` en Terraform "
                 "para almacenar y rotar las credenciales detectadas con cifrado KMS."
             ),
             "cloud_resources_created": [
-                f"{'aws_secretsmanager_secret' if not is_gcp else 'google_secret_manager_secret'}.secret_{safe_slug}_{_slug(s['name']).replace('-', '_')}"
+                f"aws_secretsmanager_secret.secret_{safe_slug}_{_slug(s['name']).replace('-', '_')}"
                 for s in (secret_vars or [{"name": "app_secrets"}])
             ],
         },
@@ -2571,38 +2510,30 @@ def build_github_to_cloud_transformation_catalog(
             "badge": "Variables y Secretos",
         },
         "why_transformed": (
-            f"Los contenedores necesitan estas variables al arrancar en {p_upper}; puedes inyectarlas gratis en `user_data.sh` "
-            f"o crear secretos administrados en {'AWS Secrets Manager' if not is_gcp else 'Google Secret Manager'}."
+            "Los contenedores necesitan estas variables al arrancar en AWS; puedes inyectarlas gratis en `user_data.sh` "
+            "o crear secretos administrados en AWS Secrets Manager."
         ),
         "default_option_id": sec_default,
         "selected_option_id": sec_selected,
         "options": sec_options,
     })
 
-    # 5. Workload Identity (IAM Role / Service Account)
+    # 5. Workload Identity (IAM Role)
     iam_default = "iam_instance_profile"
     iam_selected = decisions_in.get("workload_identity", iam_default)
     iam_options = [
         {
             "id": "iam_instance_profile",
-            "label": (
-                f"Crear Rol IAM Nativo + Instance Profile (`aws_iam_role.identity_{safe_slug}_sa`)"
-                if not is_gcp
-                else "Crear Service Account Nativa (`google_service_account.workload_sa`)"
-            ),
+            "label": f"Crear Rol IAM Nativo + Instance Profile (`aws_iam_role.identity_{safe_slug}_sa`)",
             "badge": "Recomendado · $0",
-            "cost_estimate": "$0 USD/mes (Sin costo en AWS/GCP)",
+            "cost_estimate": "$0 USD/mes (Sin costo en AWS)",
             "description": (
                 "Crea un Rol IAM de mínimo privilegio y un Instance Profile para la instancia EC2, evitando incrustar llaves estáticas."
             ),
-            "cloud_resources_created": (
-                [
-                    f"aws_iam_role.identity_{safe_slug}_sa",
-                    f"aws_iam_instance_profile.identity_{safe_slug}_sa_profile",
-                ]
-                if not is_gcp
-                else ["google_service_account.workload_sa"]
-            ),
+            "cloud_resources_created": [
+                f"aws_iam_role.identity_{safe_slug}_sa",
+                f"aws_iam_instance_profile.identity_{safe_slug}_sa_profile",
+            ],
         },
         {
             "id": "skip_custom_iam",
@@ -2633,7 +2564,7 @@ def build_github_to_cloud_transformation_catalog(
             "badge": "Seguridad IAM",
         },
         "why_transformed": (
-            f"Traduce la identidad del servicio en un {'Rol IAM (`aws_iam_role`)' if not is_gcp else 'Service Account'} "
+            "Traduce la identidad del servicio en un Rol IAM (`aws_iam_role`) "
             "(no en un servidor EC2), o permite omitirlo si tu cuenta académica restringe IAM."
         ),
         "default_option_id": iam_default,
@@ -2647,11 +2578,7 @@ def build_github_to_cloud_transformation_catalog(
     disk_options = [
         {
             "id": "ebs_30gb_gp3_swap",
-            "label": (
-                "Volumen Raíz EBS gp3 de 30 GB + 2 GB Swap + Limpieza de Caché Docker (AWS Free Tier)"
-                if not is_gcp
-                else "Persistent Disk Balanceado de 30 GB + 2 GB Swap + Limpieza Docker"
-            ),
+            "label": "Volumen Raíz EBS gp3 de 30 GB + 2 GB Swap + Limpieza de Caché Docker (AWS Free Tier)",
             "badge": "Recomendado · Previene 'No Space Left on Device' · $0 Free Tier",
             "cost_estimate": "$0 USD/mes (Incluido en los 30 GB gratuitos de AWS Free Tier)",
             "description": (
@@ -2666,11 +2593,7 @@ def build_github_to_cloud_transformation_catalog(
         },
         {
             "id": "ebs_50gb_gp3_swap",
-            "label": (
-                "Volumen Raíz EBS gp3 de 50 GB + 2 GB Swap (Cargas Intensivas de Datos y Modelos ML)"
-                if not is_gcp
-                else "Persistent Disk SSD de 50 GB + 2 GB Swap"
-            ),
+            "label": "Volumen Raíz EBS gp3 de 50 GB + 2 GB Swap (Cargas Intensivas de Datos y Modelos ML)",
             "badge": "Alta Capacidad · 50 GB",
             "cost_estimate": "~$1.60 USD/mes adicionales sobre la capa gratuita (20 GB extra gp3)",
             "description": (
@@ -2831,9 +2754,9 @@ def build_github_to_cloud_transformation_catalog(
     # Build consolidated preview of all cloud resources that will be created
     planned_resources_summary: List[Dict[str, str]] = [
         {
-            "terraform_resource": "aws_vpc.target_vpc + 4x aws_subnet (Multi-AZ) + aws_internet_gateway.igw" if not is_gcp else "google_compute_network.target_vpc + google_compute_subnetwork.primary_subnet",
+            "terraform_resource": "aws_vpc.target_vpc + 4x aws_subnet (Multi-AZ) + aws_internet_gateway.igw",
             "github_origin": f"Red base y puertos expuestos ({', '.join(map(str, ports))})",
-            "reason": f"Aislamiento de red virtual y subredes en {p_upper} para alojar la aplicación de forma segura.",
+            "reason": "Aislamiento de red virtual y subredes en AWS para alojar la aplicación de forma segura.",
             "decision_label": "Red Base VPC Multi-AZ (Automático)",
         }
     ]
@@ -3189,7 +3112,7 @@ def build_application_cmir(
             "confidence": 0.95,
             "source_connector": "app_source_scanner",
             "discovered_at": now,
-            "metadata": {"role_type": "IAM Role" if provider_clean == "aws" else "GCP Service Account"},
+            "metadata": {"role_type": "IAM Role"},
         })
         relationships.append({
             "source": app_id,
@@ -3314,10 +3237,10 @@ def evaluate_app_migration_viability(
     deployment_mode: str = "vm_rehost",
 ) -> Dict[str, Any]:
     """
-    Evaluate migration viability to AWS or GCP while preserving application behavior.
-    Never forces a migration to stateless containers (Cloud Run / ECS Fargate) if the
+    Evaluate migration viability to AWS while preserving application behavior.
+    Never forces a migration to stateless containers (ECS Fargate) if the
     application relies on local disk persistence or lacks container support without
-    offering the compatible VM rehost alternative (`AWS EC2` / `Google Compute Engine`).
+    offering the compatible VM rehost alternative (`AWS EC2`).
     """
     provider_clean = target_provider.lower().strip()
     graph = build_graph(cmir)
@@ -3347,50 +3270,26 @@ def evaluate_app_migration_viability(
                 "type": "stateful_local_filesystem",
                 "detail": (
                     f"La aplicación monta rutas persistentes locales ({', '.join(app_discovery['persistent_volumes'])}). "
-                    f"En {'Google Cloud Run' if provider_clean == 'gcp' else 'AWS ECS Fargate'} el sistema de archivos local es efímero."
+                    "En AWS ECS Fargate el sistema de archivos local es efímero."
                 ),
-                "recommended_alternative": (
-                    f"Usar `vm_rehost` ({'Google Compute Engine + Persistent Disk' if provider_clean == 'gcp' else 'Amazon EC2 + EBS'}) "
-                    f"o montar {'Cloud Filestore/GCS' if provider_clean == 'gcp' else 'Amazon EFS'}."
-                ),
+                "recommended_alternative": "Usar `vm_rehost` (Amazon EC2 + EBS) o montar Amazon EFS.",
             })
             warnings.append(
                 f"Advertencia de compatibilidad: La aplicación utiliza almacenamiento persistente en disco ({app_discovery['persistent_volumes']}). "
-                f"Para preservar el comportamiento sin refactorizar se recomienda `vm_rehost` en {'Compute Engine' if provider_clean == 'gcp' else 'EC2'} "
-                f"o adjuntar {'Filestore' if provider_clean == 'gcp' else 'Amazon EFS'}."
+                "Para preservar el comportamiento sin refactorizar se recomienda `vm_rehost` en EC2 o adjuntar Amazon EFS."
             )
-        if len(app_discovery.get("exposed_ports", [])) > 1 and provider_clean == "gcp":
-            incompatibilities.append({
-                "type": "multi_port_listener_on_cloud_run",
-                "detail": f"La aplicación escucha en múltiples puertos ({app_discovery['exposed_ports']}); Cloud Run expone un único puerto HTTP/gRPC por servicio.",
-                "recommended_alternative": "Usar Google Compute Engine (`vm_rehost`) o GKE para preservar todos los puertos TCP.",
-            })
-            recommended_mode = "vm_rehost"
 
-    if provider_clean == "aws":
-        target_architecture = {
-            "compute_service": "Amazon EC2 (Ubuntu/Debian con Docker/systemd)" if deployment_mode == "vm_rehost" else "Amazon ECS Fargate",
-            "recommended_compute_option": "Amazon EC2 (`vm_rehost`)" if recommended_mode == "vm_rehost" else "Amazon ECS Fargate (`container`)",
-            "supported_options": ["Amazon EC2 (Rehost sin refactorización)", "Amazon ECS Fargate", "Amazon EKS"],
-            "database_service": "Amazon RDS for PostgreSQL (Multi-AZ) + AWS DMS / pg_dump data sync",
-            "cache_service": "Amazon ElastiCache for Redis",
-            "queue_service": "Amazon MQ for RabbitMQ",
-            "storage_service": "Amazon EBS gp3 + Amazon S3",
-            "secret_management": "AWS Secrets Manager / SSM Parameter Store",
-            "network_boundary": "Amazon VPC + Security Groups (puertos " + ", ".join(map(str, app_discovery["exposed_ports"])) + ")",
-        }
-    else:
-        target_architecture = {
-            "compute_service": "Google Compute Engine (VM con Docker/systemd)" if deployment_mode == "vm_rehost" else "Google Cloud Run v2",
-            "recommended_compute_option": "Google Compute Engine (`vm_rehost`)" if recommended_mode == "vm_rehost" else "Google Cloud Run v2 (`container`)",
-            "supported_options": ["Google Compute Engine (Rehost sin refactorización)", "Google Cloud Run v2", "Google Kubernetes Engine (GKE)"],
-            "database_service": "Cloud SQL for PostgreSQL (Regional HA) + Database Migration Service / pg_dump data sync",
-            "cache_service": "Memorystore for Redis",
-            "queue_service": "Compute Engine RabbitMQ / Cloud Pub/Sub",
-            "storage_service": "Persistent Disk SSD + Cloud Storage (GCS)",
-            "secret_management": "Google Secret Manager",
-            "network_boundary": "Google VPC Network + Firewall Rules (puertos " + ", ".join(map(str, app_discovery["exposed_ports"])) + ")",
-        }
+    target_architecture = {
+        "compute_service": "Amazon EC2 (Ubuntu/Debian con Docker/systemd)" if deployment_mode == "vm_rehost" else "Amazon ECS Fargate",
+        "recommended_compute_option": "Amazon EC2 (`vm_rehost`)" if recommended_mode == "vm_rehost" else "Amazon ECS Fargate (`container`)",
+        "supported_options": ["Amazon EC2 (Rehost sin refactorización)", "Amazon ECS Fargate", "Amazon EKS"],
+        "database_service": "Amazon RDS for PostgreSQL (Multi-AZ) + AWS DMS / pg_dump data sync",
+        "cache_service": "Amazon ElastiCache for Redis",
+        "queue_service": "Amazon MQ for RabbitMQ",
+        "storage_service": "Amazon EBS gp3 + Amazon S3",
+        "secret_management": "AWS Secrets Manager / SSM Parameter Store",
+        "network_boundary": "Amazon VPC + Security Groups (puertos " + ", ".join(map(str, app_discovery["exposed_ports"])) + ")",
+    }
 
     return {
         "viable": len(blockers) == 0,
@@ -3529,9 +3428,9 @@ def build_app_migration_stages(
         ("uc1-stage-02", "2. Construcción del subgrafo CMIR v2.1 y resolución de dependencias", "Clasificar dependencias confirmadas, inferidas y desconocidas sin promover inferencias a hechos confirmados."),
         ("uc1-stage-03", f"3. Evaluación de viabilidad y arquitectura destino en {p_upper}", f"Validar compatibilidad de runtime (`{app_discovery['runtime']}`, `{app_discovery.get('runtime_constraints')}`) y almacenamiento persistente sin forzar refactorización de código."),
         ("uc1-stage-04", f"4. Generación y validación de artefactos Terraform ({p_upper}) y traslado de datos", "Generar `provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`, runbook de sincronización de base de datos, unidad `systemd` y plantilla `.env` saneada."),
-        ("uc1-stage-05", f"5. Aprobación del plan y verificación de prerrequisitos {p_upper}", "Confirmar permisos IAM/Service Account, cuotas de red y decisión sobre dependencias compartidas o inferidas."),
-        ("uc1-stage-06", f"6. Aprovisionamiento de red, seguridad e identidad en {p_upper}", f"Crear VPC, subredes privadas, reglas de firewall/Security Groups para puertos {app_discovery['exposed_ports']} e identidad de carga."),
-        ("uc1-stage-07", f"7. Aprovisionamiento y transferencia de datos de bases de datos y almacenamiento en {p_upper}", "Aprovisionar instancia RDS/Cloud SQL, caché y volúmenes; ejecutar volcado consistente (`pg_dump`/`DMS`) y verificar integridad de filas y esquemas."),
+        ("uc1-stage-05", f"5. Aprobación del plan y verificación de prerrequisitos {p_upper}", "Confirmar permisos IAM, cuotas de red y decisión sobre dependencias compartidas o inferidas."),
+        ("uc1-stage-06", f"6. Aprovisionamiento de red, seguridad e identidad en {p_upper}", f"Crear VPC, subredes privadas, reglas de Security Groups para puertos {app_discovery['exposed_ports']} e identidad de carga."),
+        ("uc1-stage-07", f"7. Aprovisionamiento y transferencia de datos de bases de datos y almacenamiento en {p_upper}", "Aprovisionar instancia RDS, caché y volúmenes; ejecutar volcado consistente (`pg_dump`/`DMS`) y verificar integridad de filas y esquemas."),
         ("uc1-stage-08", f"8. Empaquetado y despliegue de '{app_name}' en entorno aislado de {p_upper}", f"Desplegar artefacto de aplicación e inyectar secretos desde el gestor de secretos de {p_upper}."),
         ("uc1-stage-09", "9. Pruebas de humo (Smoke Tests) y verificación de salud en destino", f"Verificar arranque del servicio, escucha en puertos {app_discovery['exposed_ports']}, respuesta 200 OK en `{app_discovery.get('health_endpoints', ['/health'])[0]}` y logs limpios."),
         ("uc1-stage-10", "10. Pruebas funcionales e informe comparativo de comportamiento", "Validar transacciones de extremo a extremo en el entorno de pruebas aislado y contrastar con el comportamiento esperado."),
@@ -3766,7 +3665,7 @@ def generate_app_migration_artifacts(
     smoke test script, and behavioral comparison report.
     """
     provider_clean = target_provider.lower().strip()
-    adapter = GCPAdapter() if provider_clean == "gcp" else AWSAdapter()
+    adapter = AWSAdapter()
     iac_bundle = adapter.generate_iac(cmir)
 
     app_name = app_discovery["app_name"]

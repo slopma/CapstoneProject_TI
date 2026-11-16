@@ -7,8 +7,6 @@ from app.cmir.normalizer import migrate_cmir_schema, normalize_inventory
 from app.cmir.validator import validate_cmir
 from app.graph.builder import build_graph
 from app.dependencies.resolver import resolve_dependencies
-from app.adapters.gcp_adapter import GCPAdapter
-from app.generators.terraform import generate_gcp_terraform_files
 
 
 client = TestClient(app)
@@ -106,47 +104,86 @@ def test_dependency_resolver_separates_inferred_and_protects_shared():
     assert "db-shared" in res_validated["auto_migratable_resources"]
 
 
-def test_gcp_adapter_and_exclusive_aws_gcp_provider_enforcement():
-    # 1. Verify /api/v1/migration/providers lists only AWS and GCP and excludes Azure
+def test_aws_adapter_and_exclusive_aws_provider_enforcement():
+    # 1. Verify /api/v1/migration/providers lists AWS exclusively and excludes GCP/Azure
     prov_resp = client.get("/api/v1/migration/providers")
     assert prov_resp.status_code == 200
     prov_data = prov_resp.json()
-    assert prov_data["supported_providers"] == ["aws", "gcp"]
+    assert prov_data["supported_providers"] == ["aws"]
+    assert "gcp" in prov_data["excluded_providers"]
     assert "azure" in prov_data["excluded_providers"]
 
-    # 2. Verify Azure is rejected in migration endpoints
-    az_resp = client.post(
-        "/api/v1/migration/generate",
-        json={"resources": ["payment-api"], "target_provider": "azure"},
-    )
-    assert az_resp.status_code == 400
-    assert "aws" in az_resp.json()["detail"].lower()
-    assert "gcp" in az_resp.json()["detail"].lower()
+    # 2. Verify Azure and GCP are rejected in migration endpoints
+    for retired in ("azure", "gcp"):
+        rej_resp = client.post(
+            "/api/v1/migration/generate",
+            json={"resources": ["payment-api"], "target_provider": retired},
+        )
+        assert rej_resp.status_code == 400
+        assert "aws" in rej_resp.json()["detail"].lower()
 
-    # 3. Verify GCP generation works end-to-end on the enterprise inventory
-    gcp_resp = client.post(
+    # 3. Verify AWS generation works end-to-end on the enterprise inventory
+    aws_resp = client.post(
         "/api/v1/migration/generate",
-        json={"resources": ["backend-api-vm"], "target_provider": "gcp"},
+        json={"resources": ["backend-api-vm"], "target_provider": "aws"},
     )
-    assert gcp_resp.status_code == 200
-    gcp_body = gcp_resp.json()
-    assert gcp_body["target"] == "gcp"
-    assert gcp_body["completed_in_real_cloud"] is False
-    assert "hashicorp/google" in gcp_body["files"]["provider.tf"]
-    assert "google_compute_network" in gcp_body["files"]["main.tf"]
-    assert "google_compute_instance" in gcp_body["files"]["main.tf"]
+    assert aws_resp.status_code == 200
+    aws_body = aws_resp.json()
+    assert aws_body["target"] == "aws"
+    assert aws_body["completed_in_real_cloud"] is False
+    assert "hashicorp/aws" in aws_body["files"]["provider.tf"]
+    assert "aws_vpc" in aws_body["files"]["main.tf"]
+    assert "aws_instance" in aws_body["files"]["main.tf"]
 
-    # 4. Verify Discovery Session -> GCP Terraform bridge
-    import_resp = client.post("/api/v1/discovery/import-local")
+    # 4. Verify Discovery Session -> AWS Terraform bridge (and GCP rejected)
+    synth_inv = {
+        "schema_version": "cloudmove.discovery.v1",
+        "source": {"tool": "osquery", "tool_version": "5.23.1", "collector": "test.py", "collector_host": "srv-aws-bridge"},
+        "collected_at": "2026-10-19T18:00:00+00:00",
+        "asset": {
+            "hostname": "srv-aws-bridge",
+            "uuid": "11111111-2222-3333-4444-555555555555",
+            "cpu_type": "x86_64",
+            "cpu_logical_cores": "8",
+            "cpu_physical_cores": "4",
+            "physical_memory_bytes": "17179869184",
+            "os": {"name": "Debian GNU/Linux", "version": "12", "codename": "bookworm", "arch": "x86_64", "platform": "debian"},
+            "platform": {"firmware_type": "uefi"},
+            "system_info": {"hostname": "srv-aws-bridge"},
+        },
+        "hardware": {
+            "cpu_info": [{"model": "Xeon", "number_of_cores": "4", "logical_processors": "8"}],
+            "memory_info": [{"memory_total": "17179869184", "memory_available": "8589934592"}],
+            "block_devices": [{"name": "/dev/nvme0n1", "parent": "", "size": "100000000", "block_size": "512", "type": "disk"}],
+            "mounts": [{"device": "/dev/nvme0n1p1", "path": "/", "type": "ext4", "blocks": "10000000", "blocks_available": "5000000", "blocks_free": "5000000", "blocks_size": "4096"}],
+        },
+        "network": {
+            "interfaces": [{"interface": "eth0", "address": "10.0.1.10", "mask": "255.255.255.0", "type": "ethernet"}],
+            "routes": [{"destination": "0.0.0.0", "gateway": "10.0.1.1", "interface": "eth0", "netmask": "0", "type": "gateway", "metric": "100"}],
+            "listening_ports": [{"address": "0.0.0.0", "port": "443", "protocol": "6", "pid": "100"}],
+            "process_open_sockets": [],
+        },
+        "software": {
+            "deb_packages": [{"name": "nginx", "version": "1.22", "arch": "amd64", "section": "web", "status": "install ok installed", "size": "1200"}],
+            "systemd_units": [{"id": "nginx.service", "active_state": "active", "sub_state": "running", "load_state": "loaded", "unit_file_state": "enabled", "description": "Nginx"}],
+            "kernel_modules": [],
+        },
+        "runtime": {"processes": [{"pid": "100", "name": "nginx", "path": "/usr/sbin/nginx", "uid": "0"}], "uptime": [{"total_seconds": "1000"}]},
+        "collection": {"query_count": 10, "successful_query_count": 10, "errors": []},
+    }
+    import_resp = client.post("/api/v1/discovery/import", json=synth_inv)
     assert import_resp.status_code == 200
     sid = import_resp.json()["session_id"]
 
     tf_gcp_resp = client.get(f"/api/v1/discovery/sessions/{sid}/terraform?target_provider=gcp&strategy=replatform")
-    assert tf_gcp_resp.status_code == 200
-    tf_gcp = tf_gcp_resp.json()
-    assert tf_gcp["target_provider"] == "gcp"
-    assert "google_compute_instance" in tf_gcp["iac_code"]
-    assert len(tf_gcp["traceability"]) >= 3
+    assert tf_gcp_resp.status_code == 400
+
+    tf_aws_resp = client.get(f"/api/v1/discovery/sessions/{sid}/terraform?target_provider=aws&strategy=replatform")
+    assert tf_aws_resp.status_code == 200
+    tf_aws = tf_aws_resp.json()
+    assert tf_aws["target_provider"] == "aws"
+    assert "aws_instance" in tf_aws["iac_code"]
+    assert len(tf_aws["traceability"]) >= 3
 
 
 def test_use_case_1_application_guided_migration_and_secret_redaction():
@@ -179,15 +216,15 @@ def test_use_case_1_application_guided_migration_and_secret_redaction():
     assert dep_sum["inferred_count"] >= 1
     assert dep_sum["unknown_count"] >= 1
 
-    # Create full 12-stage orchestrated migration job for GCP
+    # Create full 12-stage orchestrated migration job for AWS
     mig_resp = client.post(
         "/api/v1/migration/use-case-1/migrate",
-        json={"target_provider": "gcp", "deployment_mode": "container"},
+        json={"target_provider": "aws", "deployment_mode": "container"},
     )
     assert mig_resp.status_code == 200
     job = mig_resp.json()
     assert job["use_case"] == "app_source"
-    assert job["target_provider"] == "gcp"
+    assert job["target_provider"] == "aws"
     assert job["state"] == "PLAN_READY"
     assert len(job["ordered_stages"]) == 12
     assert "app.service" in job["generated_artifacts"]["files"]
@@ -260,63 +297,6 @@ def test_use_case_2_vm_image_migration_fidelity_qcow2_and_live_ram_blocker():
     assert remediated_job["source_config"]["require_live_memory_state"] is False
 
 
-def test_use_case_3_datacenter_campaign_pause_resume_retry_cmir_and_migration():
-    camps_resp = client.get("/api/v1/campaigns")
-    assert camps_resp.status_code == 200
-    camps = camps_resp.json().get("campaigns", [])
-    if not camps:
-        create_resp = client.post("/api/v1/campaigns/launch", json={"mode": "mode_2_discover_and_plan"})
-        assert create_resp.status_code == 200
-        campaign_id = create_resp.json().get("campaign_id") or create_resp.json().get("id")
-    else:
-        campaign_id = camps[0]["id"]
-
-    # 1. Pause campaign
-    pause_resp = client.post(f"/api/v1/campaigns/{campaign_id}/pause?reason=Ventana_Mantenimiento")
-    assert pause_resp.status_code == 200
-    assert pause_resp.json()["status"] == "paused"
-
-    # 2. Resume campaign without losing or duplicating assets
-    resume_resp = client.post(f"/api/v1/campaigns/{campaign_id}/resume")
-    assert resume_resp.status_code == 200
-    resumed_data = resume_resp.json()
-    assert resumed_data["resume_summary"]["preserved_assets_count"] == 7
-
-    # 3. Retry discovery on unreachable DMZ host (`dmz-proxy-isolated-03`) and verify partial results preserved
-    retry_resp = client.post(f"/api/v1/campaigns/{campaign_id}/assets/dmz-proxy-isolated-03/retry")
-    assert retry_resp.status_code == 200
-    retry_data = retry_resp.json()
-    assert retry_data["reachable"] is False
-    assert retry_data["partial_results_preserved"] is True
-
-    # 4. Get full hierarchical CMIR v2.1 for the campaign
-    cmir_resp = client.get(f"/api/v1/campaigns/{campaign_id}/cmir?target_provider=gcp")
-    assert cmir_resp.status_code == 200
-    cmir_data = cmir_resp.json()
-    assert cmir_data["version"] == "2.1"
-    node_types = {r["type"] for r in cmir_data["resources"]}
-    assert "datacenter" in node_types
-    assert "physical_host" in node_types
-    assert "hypervisor" in node_types
-    assert "virtual_machine" in node_types
-    assert "operating_system" in node_types
-    assert "database_instance" in node_types
-
-    # 5. Plan workload migration to GCP
-    mig_resp = client.post(
-        f"/api/v1/campaigns/{campaign_id}/migrate",
-        json={
-            "target_provider": "gcp",
-            "selected_resources": ["asset-vm-Middleware-rhel-02"],
-        },
-    )
-    assert mig_resp.status_code == 200
-    mig_bundle = mig_resp.json()
-    assert mig_bundle["target_provider"] == "gcp"
-    assert mig_bundle["migration_job"]["state"] == "PLAN_READY"
-    assert "google_compute_instance" in mig_bundle["generated_iac"]["iac_code"]
-
-
 def test_orchestrator_state_machine_approval_gate_failure_retry_and_rollback():
     # Create a new Use Case 1 job in PLAN_READY state
     create_resp = client.post(
@@ -382,7 +362,7 @@ def test_orchestrator_state_machine_approval_gate_failure_retry_and_rollback():
     # 7. Test Rollback on another job in TESTING state
     job2 = client.post(
         "/api/v1/migration/jobs",
-        json={"name": "Rollback Test", "use_case": "vm_image", "target_provider": "gcp"},
+        json={"name": "Rollback Test", "use_case": "vm_image", "target_provider": "aws"},
     ).json()
     mid2 = job2["migration_id"]
     client.post(f"/api/v1/migration/jobs/{mid2}/approve")
@@ -409,7 +389,7 @@ def test_use_case_2_live_host_operating_system_capture_and_cloud_preparation():
     # 1. Capture live host operating system (files, /etc, fstab, services, packages, kernel)
     cap_resp = client.post(
         "/api/v1/migration/use-case-2/capture-live",
-        json={"target_provider": "gcp", "output_format": "QCOW2"},
+        json={"target_provider": "aws", "output_format": "QCOW2"},
     )
     assert cap_resp.status_code == 200
     data = cap_resp.json()

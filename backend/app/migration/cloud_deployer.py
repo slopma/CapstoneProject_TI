@@ -4,7 +4,7 @@ Automated Cloud Deployment Runner & Interactive Terraform Console Engine for Clo
 Executes autonomous infrastructure provisioning, secret injection,
 container bootstrapping, real-time log streaming, process cancellation,
 state inspection, and post-cutover verification directly from CloudMove.
-Supports both AWS and GCP targets.
+Targets Amazon Web Services (AWS).
 """
 
 import json
@@ -24,12 +24,12 @@ from typing import Any, Callable, Dict, List, Optional
 _TERRAFORM_DIAGNOSIS_RULES: List[tuple[re.Pattern[str], str, str, str, str, bool]] = [
     (
         re.compile(
-            r'first character of "identifier" must be a letter|only lowercase alphanumeric characters and hyphens|name_prefix.*cannot be longer|RFC1035|InvalidParameterValue.*(?:identifier|cluster|bucket|name)|Identificador (?:RDS|ElastiCache|HCL) inválido|Nombre de bucket inválido|Nombre GCP inválido|name_prefix.*excede el límite',
+            r'first character of "identifier" must be a letter|only lowercase alphanumeric characters and hyphens|name_prefix.*cannot be longer|RFC1035|InvalidParameterValue.*(?:identifier|cluster|bucket|name)|Identificador (?:RDS|ElastiCache|HCL) inválido|Nombre de bucket inválido|name_prefix.*excede el límite',
             re.IGNORECASE,
         ),
         "INVALID_CLOUD_IDENTIFIER",
-        "Identificador de recurso inválido para el proveedor cloud",
-        "Un nombre generado (por ejemplo desde un repositorio que inicia con dígito como '2026-2' o excede el límite de caracteres) incumple las reglas de AWS/GCP.",
+        "Identificador de recurso inválido para AWS",
+        "Un nombre generado (por ejemplo desde un repositorio que inicia con dígito como '2026-2' o excede el límite de caracteres) incumple las reglas de nomenclatura de AWS.",
         "Haz clic en 'Reparar y Regenerar Manifiestos' para normalizar automáticamente los identificadores con prefijos válidos y volver a validar antes de desplegar.",
         True,
     ),
@@ -129,7 +129,7 @@ class CloudDeploymentRunner:
     """
     Orchestrates the end-to-end and interactive execution of a planned migration job
     directly from CloudMove, handling:
-    1. Cloud provider authentication & caller verification (AWS STS / GCP).
+    1. Cloud provider authentication & caller verification (AWS STS).
     2. Real-time streaming Terraform execution (`init`, `validate`, `plan`, `apply`, `continue`, `refresh`, `destroy`, `output`, `state`, `unlock`).
     3. Active process tracking and immediate operator cancellation (`SIGTERM` / `SIGKILL` + lock cleanup).
     4. Live `terraform.tfstate` resource and output inspection (EC2 Public IP, VPC, Subnets, Security Groups, Endpoints).
@@ -371,23 +371,6 @@ class CloudDeploymentRunner:
                             result["outputs"].setdefault("ssh_command", {"value": f"ssh ubuntu@{pub_ip}", "type": "string"})
                         if pub_dns:
                             result["outputs"].setdefault("instance_public_dns", {"value": pub_dns, "type": "string"})
-                    elif mode == "managed" and r_type == "google_compute_instance":
-                        result["primary_instance"] = item
-                        pub_ip = None
-                        net_ifs = attrs.get("network_interface") or []
-                        if isinstance(net_ifs, list) and len(net_ifs) > 0:
-                            acc_configs = net_ifs[0].get("access_config") or []
-                            if isinstance(acc_configs, list) and len(acc_configs) > 0:
-                                pub_ip = acc_configs[0].get("nat_ip")
-                        if res_id and "instance_id" not in result["outputs"]:
-                            result["outputs"]["instance_id"] = {"value": res_id, "type": "string"}
-                        if pub_ip:
-                            item["public_ip"] = pub_ip
-                            result["outputs"].setdefault("instance_public_ip", {"value": pub_ip, "type": "string"})
-                            result["outputs"].setdefault("frontend_url", {"value": f"http://{pub_ip}:3000", "type": "string"})
-                            result["outputs"].setdefault("backend_api_url", {"value": f"http://{pub_ip}:8000", "type": "string"})
-                            result["outputs"].setdefault("app_endpoint", {"value": f"http://{pub_ip}:3000", "type": "string"})
-                            result["outputs"].setdefault("ssh_command", {"value": f"ssh cloudmove@{pub_ip}", "type": "string"})
                     elif mode == "managed" and r_type == "aws_vpc" and res_id:
                         result["outputs"].setdefault("vpc_id", {"value": res_id, "type": "string"})
                     elif mode == "managed" and r_type == "aws_security_group" and res_id:

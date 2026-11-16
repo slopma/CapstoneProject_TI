@@ -11,8 +11,7 @@ Addresses Section 3, Section 5.3, and Section 7:
   consistency (`application_quiesced_snapshot`, `crash_consistent`, vs `dirty_live_disk` blocker).
 - Performs real staging copies and real `qemu-img convert` format conversions on staging copies
   while guaranteeing the source image file is never modified (`source_modified = False`).
-- Integrates the official compatibility matrix and strategy selector for AWS MGN, AWS VM Import/Export,
-  Google Cloud Migrate to Virtual Machines, and GCP Compute Engine Image Import.
+- Integrates the official compatibility matrix and strategy selector for AWS MGN and AWS VM Import/Export.
 """
 
 from __future__ import annotations
@@ -34,7 +33,6 @@ import tarfile
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from app.adapters.aws_adapter import AWSAdapter
-from app.adapters.gcp_adapter import GCPAdapter
 from app.cmir.builder import build_cmir_hierarchy
 from app.cmir.models import CMIR
 from app.config import PROJECT_ROOT
@@ -49,7 +47,6 @@ from app.migration.replication_and_import import (
 
 SUPPORTED_IMAGE_FORMATS = {"VMDK", "VHD", "VHDX", "QCOW2", "RAW", "OVA", "OVF"}
 AWS_NATIVE_IMPORT_FORMATS = {"VMDK", "VHD", "VHDX", "RAW", "OVA"}
-GCP_NATIVE_IMPORT_FORMATS = {"VMDK", "VHD", "VHDX", "QCOW2", "RAW", "OVA", "OVF"}
 
 DEFAULT_SAMPLE_MANIFEST_PATH = PROJECT_ROOT / "inventory" / "sample_images" / "debian12-erp-prod.manifest.json"
 DEFAULT_SAMPLE_IMAGE_PATH = PROJECT_ROOT / "inventory" / "sample_images" / "debian12-erp-prod.vmdk"
@@ -1240,13 +1237,8 @@ case "$MODE" in
         sudo dd if="$ROOT_PART" bs=4M status=progress | gzip -c | aws s3 cp - "s3://$S3_BUCKET/{slug_name}.raw.gz"
         echo "[4/5] Transmisión hacia S3 completada sin saturar el almacenamiento local."
         ;;
-    gcs)
-        echo "[3/5] Transmitiendo clon bit a bit directamente hacia GCP Storage (gs://$GCS_BUCKET/{slug_name}.raw.gz)..."
-        sudo dd if="$ROOT_PART" bs=4M status=progress | gzip -c | gcloud storage cp - "gs://$GCS_BUCKET/{slug_name}.raw.gz"
-        echo "[4/5] Transmisión hacia GCP completada sin saturar el almacenamiento local."
-        ;;
     *)
-        echo "Modo desconocido: $MODE. Usa 'local', 's3' o 'gcs'."
+        echo "Modo desconocido: $MODE. Usa 'local' o 's3'."
         exit 1
         ;;
 esac
@@ -1331,7 +1323,7 @@ def capture_live_operating_system(
     5. Flushes disk buffers via os.sync() for consistent application-quiesced snapshot.
     6. Safely creates/stages a bootable VM disk image (.qcow2 / .raw) in staging with real binary headers.
     7. Packages /etc configuration files, packages manifest, users, network, and restoration script.
-    8. Prepares cloud-init metadata and user-data for AWS or GCP cloud VM instantiation.
+    8. Prepares cloud-init metadata and user-data for AWS EC2 VM instantiation.
     9. Generates bit-by-bit raw disk clone script for live volume streaming.
     10. Computes cryptographic SHA-256 manifest and validates binary headers.
     """
@@ -1991,10 +1983,10 @@ def evaluate_vm_image_compatibility(
     prefer_continuous_replication: bool = False,
 ) -> Dict[str, Any]:
     """
-    Evaluate image compatibility with AWS or GCP, check binary authenticity,
+    Evaluate image compatibility with AWS, check binary authenticity,
     snapshot consistency, multi-disk completeness, the 5 & 8 fidelity dimensions,
-    format conversions (`QCOW2` -> `RAW` on AWS), and strategy selection (MGN / Migrate to VMs
-    vs VM Import / Image Import).
+    format conversions (`QCOW2` -> `RAW` on AWS), and strategy selection (AWS MGN
+    vs AWS VM Import/Export).
     """
     provider_clean = target_provider.lower().strip()
     img_format = manifest["format"]
@@ -2038,7 +2030,7 @@ def evaluate_vm_image_compatibility(
     if require_live_memory_state:
         blockers.append(
             "Se solicitó transferir el estado volátil de memoria RAM y sesiones TCP en caliente "
-            "(`require_live_memory_state=True`). La migración de imágenes de disco (AWS VM Import / GCP Image Import) "
+            "(`require_live_memory_state=True`). La migración de imágenes de disco (AWS VM Import/Export) "
             "transfiere el estado persistente en disco, NO la memoria RAM volátil ni los descriptores de sockets abiertos. "
             "Realice un snapshot consistente con parada controlada de servicios (quiesce) o replicación continua."
         )
@@ -2048,59 +2040,39 @@ def evaluate_vm_image_compatibility(
             "paquetes y servicios habilitados; la memoria RAM volátil y las sesiones TCP activas se reiniciarán en el primer arranque en la nube."
         )
 
-    # 2. Image format & conversion check
+    # 2. Image format & conversion check (AWS)
     requires_conversion = False
     conversion_plan = None
-    if provider_clean == "aws":
-        if img_format not in AWS_NATIVE_IMPORT_FORMATS:
-            requires_conversion = True
-            conversion_plan = {
-                "from_format": img_format,
-                "to_format": "RAW",
-                "tool": "qemu-img",
-                "command": f"qemu-img convert -p -f {img_format.lower()} -O raw {manifest['name']}.{img_format.lower()} staging/{manifest['name']}.raw",
-                "preserves_source_image": True,
-                "verify_after_conversion": "sha256sum staging/*.raw && qemu-img info staging/*.raw",
-            }
-            warnings.append(
-                f"El formato '{img_format}' no es importado directamente por `aws ec2 import-image`. "
-                "Se ejecutará una etapa previa de conversión sin pérdida a `RAW`/`VMDK` sobre una copia en staging."
-            )
-    else:
-        if img_format not in GCP_NATIVE_IMPORT_FORMATS:
-            requires_conversion = True
+    if img_format not in AWS_NATIVE_IMPORT_FORMATS:
+        requires_conversion = True
+        conversion_plan = {
+            "from_format": img_format,
+            "to_format": "RAW",
+            "tool": "qemu-img",
+            "command": f"qemu-img convert -p -f {img_format.lower()} -O raw {manifest['name']}.{img_format.lower()} staging/{manifest['name']}.raw",
+            "preserves_source_image": True,
+            "verify_after_conversion": "sha256sum staging/*.raw && qemu-img info staging/*.raw",
+        }
+        warnings.append(
+            f"El formato '{img_format}' no es importado directamente por `aws ec2 import-image`. "
+            "Se ejecutará una etapa previa de conversión sin pérdida a `RAW`/`VMDK` sobre una copia en staging."
+        )
 
-    # 3. Paravirtual & Cloud Hardware Drivers check
-    if provider_clean == "aws":
-        required_drivers = {"ena", "nvme"}
-        missing_drivers = sorted(list(required_drivers - drivers))
-        if missing_drivers:
-            warnings.append(
-                f"Faltan controladores para instancias Nitro en AWS: {', '.join(missing_drivers)}. "
-                "Se programó su inyección en initramfs sobre la copia de staging antes de importar."
-            )
-            boot_remediations.append({
-                "action": "inject_initramfs_drivers",
-                "target_drivers": missing_drivers,
-                "command": "dracut --add-drivers 'ena nvme nvme_core' -f || update-initramfs -u -k all",
-                "applied_on": "staging_copy_only",
-                "reason": "Garantizar arranque en instancias AWS Nitro (M6i/T3/C6i) con EBS NVMe y Enhanced Networking.",
-            })
-    else:
-        required_drivers = {"virtio_blk", "virtio_scsi", "virtio_net"}
-        missing_drivers = sorted(list(required_drivers - drivers))
-        if missing_drivers:
-            warnings.append(
-                f"Faltan controladores VirtIO para Google Compute Engine: {', '.join(missing_drivers)}. "
-                "Se programó su inclusión en initramfs sobre la copia de staging."
-            )
-            boot_remediations.append({
-                "action": "inject_virtio_drivers",
-                "target_drivers": missing_drivers,
-                "command": "update-initramfs -u -k all (con módulos virtio_blk, virtio_scsi, virtio_net, gvnic)",
-                "applied_on": "staging_copy_only",
-                "reason": "Garantizar detección de Persistent Disks y adaptador de red en GCP Compute Engine.",
-            })
+    # 3. Paravirtual & Cloud Hardware Drivers check (AWS Nitro)
+    required_drivers = {"ena", "nvme"}
+    missing_drivers = sorted(list(required_drivers - drivers))
+    if missing_drivers:
+        warnings.append(
+            f"Faltan controladores para instancias Nitro en AWS: {', '.join(missing_drivers)}. "
+            "Se programó su inyección en initramfs sobre la copia de staging antes de importar."
+        )
+        boot_remediations.append({
+            "action": "inject_initramfs_drivers",
+            "target_drivers": missing_drivers,
+            "command": "dracut --add-drivers 'ena nvme nvme_core' -f || update-initramfs -u -k all",
+            "applied_on": "staging_copy_only",
+            "reason": "Garantizar arranque en instancias AWS Nitro (M6i/T3/C6i) con EBS NVMe y Enhanced Networking.",
+        })
 
     # 4. Check /etc/fstab UUIDs & network udev MAC rules
     for d in manifest.get("disks", []):
@@ -2136,10 +2108,10 @@ def evaluate_vm_image_compatibility(
         "action": "verify_serial_console_grub",
         "command": "GRUB_CMDLINE_LINUX_DEFAULT='console=tty0 console=ttyS0,115200n8'",
         "applied_on": "staging_copy_only",
-        "reason": f"Habilitar diagnósticos de consola serie en {'EC2 Serial Console' if provider_clean == 'aws' else 'GCP Serial Port 1'}.",
+        "reason": "Habilitar diagnósticos de consola serie en EC2 Serial Console.",
     })
 
-    # 5. Select strategy from the official compatibility matrix (AWS MGN / GCP Migrate to VMs vs Image Import)
+    # 5. Select strategy from the official compatibility matrix (AWS MGN vs AWS VM Import)
     migration_strategy = select_machine_migration_strategy(
         manifest=manifest,
         target_provider=provider_clean,
@@ -2179,7 +2151,7 @@ def evaluate_vm_image_compatibility(
             "status": "COMPATIBLE_WITH_CLOUD_NIC_AND_HYPERVISOR_CHANGES" if not missing_drivers else "REQUIRES_STAGING_DRIVER_INJECTION",
             "detail": (
                 f"Modo de arranque `{boot_mode}`, arquitectura `{arch}`, cargador `{manifest['bootloader']}`. "
-                f"Cambian la dirección MAC, la IP asignada por la VPC y el UUID SMBIOS del hipervisor ({'AWS Nitro' if provider_clean == 'aws' else 'GCP KVM'}). "
+                f"Cambian la dirección MAC, la IP asignada por la VPC y el UUID SMBIOS del hipervisor (AWS Nitro). "
                 f"Controladores verificados: {', '.join(sorted(drivers)) or 'ninguno'}."
             ),
         },
@@ -2379,14 +2351,10 @@ def build_vm_image_transformation_catalog(
                         f"Crea el disco raíz de 30 GiB y el volumen EBS dedicado de 30 GiB gp3 cifrado "
                         f"(registrando Source_Capacity_GiB='{raw_disk_gib}' en tags). 100% compatible con AWS Academy."
                     ),
-                    "cloud_resources_created": (
-                        [f"google_compute_disk.disk_{slug}_1 (30 GiB pd-ssd)"]
-                        if provider_clean == "gcp"
-                        else [
-                            f"aws_instance.vm_{slug}.root_block_device (30 GiB gp3 cifrado)",
-                            f"aws_ebs_volume.disk_{slug}_1 (size = 30 GiB gp3, Source_Capacity_GiB = {raw_disk_gib})",
-                        ]
-                    ),
+                    "cloud_resources_created": [
+                        f"aws_instance.vm_{slug}.root_block_device (30 GiB gp3 cifrado)",
+                        f"aws_ebs_volume.disk_{slug}_1 (size = 30 GiB gp3, Source_Capacity_GiB = {raw_disk_gib})",
+                    ],
                 },
                 {
                     "id": "aws_academy_root_only_30gb",
@@ -2900,7 +2868,7 @@ def generate_source_vs_target_diff_report(
                 f"{p['mount_point']} ({p['filesystem']} por UUID)" for d in manifest["disks"] for p in d.get("partitions", [])
             ),
             "status": "EXACT_MATCH",
-            "notes": "Los nombres de dispositivo pueden pasar de `/dev/sdX` a `/dev/nvme*n1` (AWS) o `/dev/sdX` VirtIO (GCP), pero los puntos de montaje por UUID son idénticos.",
+            "notes": "Los nombres de dispositivo pueden pasar de `/dev/sdX` a `/dev/nvme*n1` (AWS), pero los puntos de montaje por UUID son idénticos.",
         },
         {
             "category": "3. Sistema Operativo, Kernel y Paquetes Instalados",
@@ -2979,7 +2947,7 @@ def generate_vm_image_migration_artifacts(
     generate validated Terraform files, import/replication CLI scripts, and Source-vs-Target diff report.
     """
     provider_clean = target_provider.lower().strip()
-    adapter = GCPAdapter() if provider_clean == "gcp" else AWSAdapter()
+    adapter = AWSAdapter()
     iac_bundle = adapter.generate_iac(cmir)
     diff_report = generate_source_vs_target_diff_report(manifest, compatibility, target_provider=provider_clean)
 
@@ -3003,9 +2971,8 @@ def generate_vm_image_migration_artifacts(
     root_total_gib = manifest.get("total_provisioned_gib", 50.0)
     boot_mode = manifest.get("boot_mode", "UEFI")
 
-    # 1. Full automated deployment script
-    if provider_clean == "aws":
-        deploy_script = f"""#!/usr/bin/env bash
+    # 1. Full automated deployment script (AWS)
+    deploy_script = f"""#!/usr/bin/env bash
 # ==============================================================================
 # CloudMove Use Case 2 — AWS Live VM Image Import & EC2 Provisioning Runbook
 # Source Image: {manifest['source_file']} (SHA-256: {manifest['sha256']})
@@ -3133,50 +3100,6 @@ terraform init
 terraform apply -auto-approve -var="ami_id=$AMI_ID"
 echo "Servidor en la nube instanciado y corriendo exitosamente con la imagen capturada."
 """
-    else:
-        deploy_script = f"""#!/usr/bin/env bash
-# ==============================================================================
-# CloudMove Use Case 2 — GCP Compute Engine Image Import & Provisioning Runbook
-# Source Image: {manifest['source_file']} (SHA-256: {manifest['sha256']})
-# Boot Mode: {manifest.get('boot_mode', 'UEFI')} | Disks Count: {len(manifest.get('disks', []))}
-# ==============================================================================
-set -euo pipefail
-
-GCP_PROJECT="${{GCP_PROJECT:-$(gcloud config get-value project 2>/dev/null)}}"
-GCP_ZONE="${{GCP_ZONE:-us-central1-a}}"
-GCS_BUCKET="${{GCS_BUCKET:-cloudmove-vm-images-$GCP_PROJECT}}"
-IMAGE_PATH="{manifest['source_file']}"
-IMAGE_NAME="{slug}"
-IMAGE_FORMAT="{manifest['format']}"
-
-echo "=========================================================="
-echo " CloudMove: Despliegue de Imagen hacia Google Cloud (GCE) "
-echo "=========================================================="
-
-echo "[1/5] Verificando autenticación y proyecto activo en Google Cloud..."
-gcloud auth print-access-token >/dev/null
-echo "  Proyecto activo: $GCP_PROJECT"
-
-echo "[2/5] Verificando / Creando bucket de almacenamiento en Google Cloud Storage..."
-if ! gcloud storage buckets describe "gs://$GCS_BUCKET" >/dev/null 2>&1; then
-    gcloud storage buckets create "gs://$GCS_BUCKET" --project="$GCP_PROJECT"
-fi
-
-echo "[3/5] Subiendo imagen de disco ($IMAGE_PATH) hacia Cloud Storage..."
-gcloud storage cp "$IMAGE_PATH" "gs://$GCS_BUCKET/$IMAGE_NAME.$IMAGE_FORMAT"
-
-echo "[4/5] Importando imagen hacia Google Compute Engine con soporte UEFI y VirtIO..."
-gcloud compute images import "$IMAGE_NAME-cloudmove" \\
-    --project="$GCP_PROJECT" \\
-    --source-file="gs://$GCS_BUCKET/$IMAGE_NAME.$IMAGE_FORMAT" \\
-    --os=debian-12 \\
-    --guest-os-features=UEFI_COMPATIBLE,GVNIC,VIRTIO_SCSI_MULTIQUEUE
-
-echo "[5/5] Desplegando infraestructura con Terraform..."
-terraform init
-terraform apply -auto-approve -var="custom_image_name=$IMAGE_NAME-cloudmove"
-echo "Máquina virtual Compute Engine instanciada y corriendo con la imagen capturada."
-"""
 
     # 2. Raw disk clone tool script
     raw_clone_script = f"""#!/usr/bin/env bash
@@ -3221,13 +3144,8 @@ case "$MODE" in
         sudo dd if="$TARGET_DISK" bs=4M status=progress | gzip -c | aws s3 cp - "s3://$S3_BUCKET/{slug}.raw.gz"
         echo "[4/5] Transmisión hacia S3 completada sin saturar el almacenamiento local."
         ;;
-    gcs)
-        echo "[3/5] Transmitiendo clon bit a bit directamente hacia GCP Storage (gs://$GCS_BUCKET/{slug}.raw.gz)..."
-        sudo dd if="$TARGET_DISK" bs=4M status=progress | gzip -c | gcloud storage cp - "gs://$GCS_BUCKET/{slug}.raw.gz"
-        echo "[4/5] Transmisión hacia GCP completada sin saturar el almacenamiento local."
-        ;;
     *)
-        echo "Modo desconocido: $MODE. Usa 'local', 's3' o 'gcs'."
+        echo "Modo desconocido: $MODE. Usa 'local' o 's3'."
         exit 1
         ;;
 esac

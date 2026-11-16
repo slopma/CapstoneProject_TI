@@ -472,8 +472,8 @@ class TransactionalDatabase:
         migration_id = job["migration_id"]
         target_provider = str(job.get("target_provider", "aws")).lower().strip()
         use_case = str(job.get("use_case", "app_source")).lower().strip()
-        if target_provider not in ("aws", "gcp"):
-            raise ValueError(f"Proveedor '{target_provider}' rechazado por restricción de integridad (solo aws|gcp).")
+        if target_provider != "aws":
+            raise ValueError(f"Proveedor '{target_provider}' rechazado por restricción de integridad (exclusivo aws).")
         if use_case not in ("app_source", "vm_image"):
             raise ValueError(f"Caso de uso '{use_case}' inválido en persistencia transaccional.")
 
@@ -1040,11 +1040,11 @@ class TransactionalDatabase:
                             })
                             continue
                         prov = str(job.get("target_provider", "")).lower().strip()
-                        if prov not in ("aws", "gcp"):
+                        if prov != "aws":
                             report["incompatible_records"].append({
                                 "file": str(migrations_json_path),
                                 "record_id": str(mid),
-                                "reason": f"Proveedor '{prov}' incompatible con el alcance AWS/GCP.",
+                                "reason": f"Proveedor '{prov}' incompatible con el alcance exclusivo AWS.",
                             })
                             continue
                         if self.get_migration_job(job["migration_id"]) is None:
@@ -1397,7 +1397,6 @@ class TransactionalDatabase:
             "collect_inventory",
             "inspect_disk",
             "check_mgn_prerequisites",
-            "check_gcp_migrate_prerequisites",
             "quiesce_database",
             "unquiesce_database",
             "install_mgn_agent",

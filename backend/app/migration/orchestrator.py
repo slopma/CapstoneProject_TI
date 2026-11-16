@@ -16,7 +16,7 @@ Enforces:
 - Pre-cutover and post-cutover test recording, honest rollback validation (blocking
   automatic rollback when an irreversible operation occurred and providing an alternative
   recovery procedure), and strict preservation of the source environment (`source_destroyed=False`).
-- Exclusively supports `aws` and `gcp` as target providers.
+- Exclusively supports `aws` as target provider.
 """
 
 from __future__ import annotations
@@ -32,7 +32,6 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from app.adapters.aws_adapter import AWSAdapter
-from app.adapters.gcp_adapter import GCPAdapter
 from app.cmir.models import CMIR
 from app.config import DATA_DIR, PROJECT_ROOT
 from app.dependencies.resolver import resolve_dependencies
@@ -63,7 +62,7 @@ from app.persistence.transactional_db import (
 )
 
 
-SUPPORTED_TARGET_PROVIDERS = {"aws", "gcp"}
+SUPPORTED_TARGET_PROVIDERS = {"aws"}
 SUPPORTED_USE_CASES = {"app_source", "vm_image"}
 
 MIGRATIONS_STORE_PATH = DATA_DIR / "migrations_state.json"
@@ -159,11 +158,9 @@ def _get_adapter(provider: str):
     p = str(provider or "").lower().strip()
     if p == "aws":
         return AWSAdapter()
-    if p == "gcp":
-        return GCPAdapter()
     raise ValueError(
         f"Proveedor destino '{provider}' fuera del alcance funcional. "
-        "Proveedores admitidos exclusivamente: 'aws' y 'gcp'."
+        "El único proveedor destino admitido en CloudMove es 'aws'."
     )
 
 
@@ -253,7 +250,7 @@ class MigrationOrchestrator:
         auto_assess_and_plan: bool = True,
     ) -> Dict[str, Any]:
         """
-        Create a new migration job in DRAFT state, validate target provider (`aws` | `gcp`),
+        Create a new migration job in DRAFT state, validate target provider (`aws`),
         and optionally execute discovery, assessment, and plan generation up to `PLAN_READY`.
         """
         uc = str(use_case or "").lower().strip()
@@ -967,7 +964,7 @@ class MigrationOrchestrator:
             src_cfg["require_live_memory_state"] = False
             src_cfg["prefer_continuous_replication"] = True
             remediation_note = (
-                "Remediación aplicada: Se activa Replicación Continua a Nivel de Bloques (AWS MGN / GCP Migrate to VMs) "
+                "Remediación aplicada: Se activa Replicación Continua a Nivel de Bloques (AWS MGN) "
                 "para migración continua con cutover programado de mínimo tiempo de indisponibilidad."
             )
         else:

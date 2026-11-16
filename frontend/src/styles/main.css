@@ -3301,12 +3301,6 @@ a:focus-visible,
   border-color: var(--color-aws-border);
 }
 
-.cm-badge.gcp {
-  background-color: var(--color-gcp-bg);
-  color: var(--color-gcp-accent);
-  border-color: var(--color-gcp-border);
-}
-
 /* Differentiated Button Hierarchy by Risk & Intent */
 .tech-btn,
 .cm-btn {
@@ -5083,8 +5077,7 @@ body {
 }
 
 .cm-badge.info,
-.cm-badge.derived,
-.cm-badge.gcp {
+.cm-badge.derived {
   background-color: #f2f8fd;
   border-color: #0972d3;
   color: #0972d3;

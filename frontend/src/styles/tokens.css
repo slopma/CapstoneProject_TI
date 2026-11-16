@@ -64,7 +64,7 @@
   --color-text-on-brand: #000716;
 
   /* ==========================================================================
-     3. BRAND & CLOUD PROVIDER ACCENTS (AWS & GCP Only — ADR-001)
+     3. BRAND & CLOUD PROVIDER ACCENTS (AWS Only — ADR-001)
      ========================================================================== */
   --color-primary: #0972d3;
   --color-primary-hover: #033160;
@@ -74,10 +74,6 @@
   --color-aws-accent: #ec7211;
   --color-aws-bg: #fff8f0;
   --color-aws-border: #ff9900;
-
-  --color-gcp-accent: #0972d3;
-  --color-gcp-bg: #f2f8fd;
-  --color-gcp-border: #539fe5;
 
   --color-onprem-accent: #545b64;
   --color-onprem-bg: #f2f3f3;
@@ -161,8 +157,6 @@
 
   --color-provider-aws: var(--color-aws-accent);
   --color-provider-aws-bg: var(--color-aws-bg);
-  --color-provider-gcp: var(--color-gcp-accent);
-  --color-provider-gcp-bg: var(--color-gcp-bg);
   --color-provider-azure: #0972d3;
   --color-provider-azure-bg: #f2f8fd;
   --color-provider-k8s: #0972d3;

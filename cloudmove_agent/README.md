@@ -399,7 +399,7 @@ Cuando el usuario utiliza el modo de descubrimiento profundo con `osquery` ([`cl
    - Ejecuta `osqueryi --json "SELECT version, build_platform, build_distro FROM osquery_info LIMIT 1;"` para certificar que el binario funciona en el computador.
    - A continuación, [`cloudmove_osquery_export.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_osquery_export.py#L31-L54) ejecuta las **16 consultas SQL de solo lectura** contra las tablas virtuales del sistema operativo:
      `system_info`, `os_version`, `platform_info`, `cpu_info`, `memory_info`, `uptime`, `interface_addresses`, `routes`, `mounts`, `block_devices`, `listening_ports`, `processes`, `process_open_sockets`, `deb_packages`, `systemd_units` y `kernel_modules`.
-   - Guarda el resultado en [`docs/cloudmove-osquery-agent-inventory.json`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/docs/cloudmove-osquery-agent-inventory.json) y lo sube automáticamente al backend de CloudMove (`POST /api/v1/discovery/osquery`).
+   - Guarda el resultado en `backend/data/cloudmove-osquery-agent-inventory.json` y lo sube automáticamente al backend de CloudMove (`POST /api/v1/discovery/osquery`).
 
 ---
 

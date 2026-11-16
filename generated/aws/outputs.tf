@@ -9,6 +9,51 @@ output "vpc_id" {
 }
 
 output "public_subnet_id" {
-  description = "ID of Public Subnet"
+  description = "ID of Primary Public Subnet (AZ a)"
   value       = aws_subnet.public_subnet.id
+}
+
+output "public_subnet_b_id" {
+  description = "ID of Secondary Public Subnet (AZ b)"
+  value       = aws_subnet.public_subnet_b.id
+}
+
+output "alb_dns_name" {
+  description = "Public DNS name of the High Availability Application Load Balancer"
+  value       = aws_lb.app_alb.dns_name
+}
+
+output "app_endpoint" {
+  description = "Public HTTP URL of the migrated application behind the Load Balancer"
+  value       = "http://${aws_lb.app_alb.dns_name}"
+}
+
+output "instance_id" {
+  description = "ID of the provisioned EC2 Compute Instance"
+  value       = aws_instance.backend_api_vm.id
+}
+
+output "instance_public_ip" {
+  description = "Public IPv4 address of the EC2 Instance"
+  value       = aws_instance.backend_api_vm.public_ip
+}
+
+output "instance_public_dns" {
+  description = "Public DNS hostname of the EC2 Instance"
+  value       = aws_instance.backend_api_vm.public_dns
+}
+
+output "frontend_url" {
+  description = "Direct HTTP URL for the Frontend Web Application"
+  value       = "http://${aws_instance.backend_api_vm.public_ip}:80"
+}
+
+output "backend_api_url" {
+  description = "Direct HTTP URL for the Backend API & Swagger Docs"
+  value       = "http://${aws_instance.backend_api_vm.public_ip}:80"
+}
+
+output "ssh_command" {
+  description = "SSH command to inspect containers and logs on the EC2 host"
+  value       = "ssh ubuntu@${aws_instance.backend_api_vm.public_ip}"
 }

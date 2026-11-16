@@ -2,8 +2,8 @@
 Cloud provider and Terraform HCL identifier sanitization & validation helpers.
 
 Ensures every derived resource name, database identifier, bucket name, launch template prefix,
-and HCL block identifier complies strictly with AWS, GCP, and Terraform naming rules
-(for example, never starting RDS/Cloud SQL identifiers with digits such as repo name `2026-2`).
+and HCL block identifier complies strictly with AWS and Terraform naming rules
+(for example, never starting RDS identifiers with digits such as repo name `2026-2`).
 """
 
 from __future__ import annotations
@@ -124,31 +124,14 @@ def validate_hcl_naming_constraints(tf_files: Dict[str, str]) -> List[str]:
                         f"El prefijo name_prefix '{np_m.group(1)}' de {r_type}.{r_id} ({fname}) "
                         f"excede el límite de 32 caracteres de AWS EC2 ({len(np_m.group(1))})."
                     )
-            elif r_type in ("aws_s3_bucket", "google_storage_bucket"):
-                attr = "bucket" if r_type == "aws_s3_bucket" else "name"
-                b_m = re.search(rf'^\s*{attr}\s*=\s*"([^"]+)"', body, re.MULTILINE)
+            elif r_type == "aws_s3_bucket":
+                b_m = re.search(r'^\s*bucket\s*=\s*"([^"]+)"', body, re.MULTILINE)
                 if b_m:
                     bname = b_m.group(1)
                     if not re.match(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$", bname) or "--" in bname:
                         errors.append(
                             f"Nombre de bucket inválido '{bname}' en {r_type}.{r_id} ({fname}): "
                             "debe usar solo [a-z0-9-], entre 3 y 63 caracteres."
-                        )
-            elif r_type in (
-                "google_sql_database_instance",
-                "google_redis_instance",
-                "google_compute_instance",
-                "google_compute_disk",
-                "google_container_cluster",
-                "google_cloud_run_v2_service",
-            ):
-                n_m = re.search(r'^\s*name\s*=\s*"([^"]+)"', body, re.MULTILINE)
-                if n_m:
-                    gname = n_m.group(1)
-                    if not re.match(r"^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$", gname):
-                        errors.append(
-                            f"Nombre GCP inválido '{gname}' en {r_type}.{r_id} ({fname}): "
-                            "debe cumplir RFC1035 (iniciar con [a-z], solo [a-z0-9-] y máx. 63 caracteres)."
                         )
 
     return errors
