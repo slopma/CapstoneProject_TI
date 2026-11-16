@@ -428,5 +428,152 @@ def test_native_compose_yaml_env_interpolation_and_probe_endpoints(tmp_path, mon
     assert res_default.json()["backend"]["port"] == 8000
 
 
+def test_digit_prefixed_repo_rds_naming_preflight_validation_and_diagnosis(tmp_path):
+    import re
+    from fastapi.testclient import TestClient
+    from app.adapters.aws_adapter import AWSAdapter
+    from app.adapters.gcp_adapter import GCPAdapter
+    from app.generators.naming import sanitize_bucket_name, sanitize_kebab_identifier
+    from app.main import app
+    from app.migration.app_migrator import (
+        build_application_cmir,
+        generate_app_migration_artifacts,
+        inspect_application_source,
+    )
+    from app.migration.cloud_deployer import CloudDeploymentRunner, _diagnose_terraform_failure
+
+    # 1. Digit-leading repo `2026-2` with managed RDS on AWS + Cloud SQL on GCP
+    repo_dir = tmp_path / "2026-2"
+    (repo_dir / "backend").mkdir(parents=True)
+    (repo_dir / "frontend").mkdir(parents=True)
+    (repo_dir / "database" / "rds").mkdir(parents=True)
+
+    (repo_dir / "compose.yaml").write_text(
+        "services:\n"
+        "  postgres:\n"
+        "    image: postgres:17-alpine\n"
+        "  backend:\n"
+        "    build:\n"
+        "      context: ./backend\n"
+        "    ports:\n"
+        "      - \"5001:5001\"\n"
+        "  frontend:\n"
+        "    build:\n"
+        "      context: ./frontend\n"
+        "    ports:\n"
+        "      - \"8080:80\"\n",
+        encoding="utf-8",
+    )
+    (repo_dir / "backend" / "package.json").write_text(
+        json.dumps({"name": "bookstore-api", "dependencies": {"express": "5.1.0", "pg": "8.16.3"}}),
+        encoding="utf-8",
+    )
+    (repo_dir / "frontend" / "package.json").write_text(
+        json.dumps({"name": "bookstore-web", "dependencies": {"react": "19.0.0", "vite": "6.0.0"}}),
+        encoding="utf-8",
+    )
+    (repo_dir / "database" / "schema.sql").write_text(
+        "CREATE TABLE public.books (book_id UUID PRIMARY KEY);\n",
+        encoding="utf-8",
+    )
+    (repo_dir / "database" / "rds" / "bootstrap.sh").write_text("#!/usr/bin/env bash\necho ok\n", encoding="utf-8")
+
+    disc = inspect_application_source(source_path=str(repo_dir), app_name_override="2026-2")
+
+    # Single-instance Free-Tier defaults self_hosted_container when compose owns DB
+    cmir_free = build_application_cmir(
+        disc,
+        target_provider="aws",
+        deployment_mode="container",
+        user_decisions={"compute_architecture": "single_instance_containerized"},
+    )
+    assert disc["user_decisions"].get("dep:dep-2026-2-postgresql") == "self_hosted_container"
+    assert "aws_db_instance" not in generate_app_migration_artifacts(disc, cmir_free, target_provider="aws")["files"]["main.tf"]
+
+    # Explicit RDS selection produces valid [a-z] identifier + wired user_data placeholders
+    cmir_rds = build_application_cmir(
+        disc,
+        target_provider="aws",
+        deployment_mode="container",
+        user_decisions={
+            "compute_architecture": "single_instance_containerized",
+            "dep:dep-2026-2-postgresql": "transform_to_cloud_managed",
+        },
+    )
+    aws_bundle = generate_app_migration_artifacts(disc, cmir_rds, target_provider="aws")
+    assert aws_bundle["validation"]["valid"] is True, aws_bundle["validation"]["errors"]
+    aws_main = aws_bundle["files"]["main.tf"]
+    ident_m = re.search(r'identifier\s*=\s*"([^"]+)"', aws_main)
+    assert ident_m is not None
+    assert ident_m.group(1)[0].isalpha(), f"RDS identifier must start with a letter, got {ident_m.group(1)}"
+    assert "aws_db_instance.dep_2026_2_postgresql.address" in aws_main
+    assert "__CLOUDMOVE_RDS_HOST__" in aws_bundle["files"]["user_data.sh"]
+    assert "db_endpoint" in aws_bundle["files"]["outputs.tf"]
+
+    # GCP SQL name must also satisfy RFC1035 leading-letter rule
+    cmir_gcp = build_application_cmir(
+        disc,
+        target_provider="gcp",
+        deployment_mode="container",
+        user_decisions={"dep:dep-2026-2-postgresql": "transform_to_cloud_managed"},
+    )
+    gcp_bundle = generate_app_migration_artifacts(disc, cmir_gcp, target_provider="gcp")
+    assert gcp_bundle["validation"]["valid"] is True, gcp_bundle["validation"]["errors"]
+    assert sanitize_kebab_identifier("2026-2-postgresql").startswith("cm-")
+    assert sanitize_bucket_name("2026-2_My.Bucket").startswith("cloudmove-")
+
+    # 2. Pre-flight offline validator catches bad identifier before terraform apply
+    broken_tf = {
+        "main.tf": (
+            'resource "aws_db_instance" "dep_2026_2_postgresql" {\n'
+            '  identifier = "2026-2-postgresql"\n'
+            '  engine     = "postgres"\n'
+            '}\n'
+        )
+    }
+    bad_val = AWSAdapter().validate_artifacts(broken_tf)
+    assert bad_val["valid"] is False
+    assert any("Identificador RDS inválido" in err for err in bad_val["errors"])
+
+    runner = CloudDeploymentRunner(workspace_root=tmp_path)
+    bad_job_dir = tmp_path / "bad-job"
+    bad_job_dir.mkdir()
+    preflight_res = runner.execute_terraform_command(
+        migration_id="bad-job",
+        job_dir=bad_job_dir,
+        action="full_deploy",
+        provider="aws",
+        artifacts_files=broken_tf,
+        async_exec=False,
+    )
+    assert preflight_res["success"] is False
+    assert preflight_res["stage"] == "PREFLIGHT_VALIDATION_FAILED"
+    assert preflight_res["error_diagnosis"]["code"] == "INVALID_CLOUD_IDENTIFIER"
+    assert preflight_res["error_diagnosis"]["can_auto_regenerate"] is True
+
+    # 3. Raw Terraform log diagnosis rule matches exact AWS provider error
+    diag = _diagnose_terraform_failure([
+        'Error: first character of "identifier" must be a letter',
+        '  with aws_db_instance.dep_2026_2_postgresql,',
+    ])
+    assert diag["code"] == "INVALID_CLOUD_IDENTIFIER"
+    assert diag["can_auto_regenerate"] is True
+
+    # 4. Regenerate endpoint cleans and rebuilds job artifacts
+    client = TestClient(app)
+    mig_res = client.post(
+        "/api/v1/migration/use-case-1/migrate",
+        json={"source_path": str(repo_dir), "app_name": "2026-2", "target_provider": "aws", "deployment_mode": "container"},
+    )
+    assert mig_res.status_code == 200
+    mid = mig_res.json()["migration_id"]
+    regen_res = client.post(f"/api/v1/migration/jobs/{mid}/regenerate")
+    assert regen_res.status_code == 200
+    regen_body = regen_res.json()
+    assert regen_body["success"] is True
+    assert regen_body["job"]["validation_results"]["valid"] is True
+
+
+
 
 

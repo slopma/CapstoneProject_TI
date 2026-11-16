@@ -623,16 +623,22 @@ def generate_container_user_data_sh(ai_payload: Dict[str, Any]) -> str:
 
     import base64, gzip
     from app.migration.app_migrator import _build_database_migration_script
-    migrate_db_script_content = _build_database_migration_script(
-        {"app_name": app_name, "database_backups": db_backups},
-        provider_clean="aws",
+    migrate_b64 = ""
+    if has_bkp and not (use_repo_compose and compose_has_own_db):
+        migrate_db_script_content = _build_database_migration_script(
+            {"app_name": app_name, "database_backups": db_backups},
+            provider_clean="aws",
+        )
+        compact_migrate_db_script = "\n".join(
+            line for line in migrate_db_script_content.splitlines()
+            if line.startswith("#!") or not line.lstrip().startswith("#")
+        )
+        migrate_b64 = base64.b64encode(gzip.compress(compact_migrate_db_script.encode("utf-8"))).decode("ascii")
+    bridge_b64 = (
+        base64.b64encode(gzip.compress(_CLOUDMOVE_PG_SUPABASE_BRIDGE_PY.encode("utf-8"))).decode("ascii")
+        if needs_cloudmove_bridge
+        else ""
     )
-    compact_migrate_db_script = "\n".join(
-        line for line in migrate_db_script_content.splitlines()
-        if line.startswith("#!") or not line.lstrip().startswith("#")
-    )
-    migrate_b64 = base64.b64encode(gzip.compress(compact_migrate_db_script.encode("utf-8"))).decode("ascii")
-    bridge_b64 = base64.b64encode(gzip.compress(_CLOUDMOVE_PG_SUPABASE_BRIDGE_PY.encode("utf-8"))).decode("ascii")
 
     restore_step_block = ""
     if has_bkp and not (use_repo_compose and compose_has_own_db):
@@ -786,6 +792,14 @@ for ENV_TARGET in /opt/{app_slug}/.env /opt/{app_slug}/*/.env; do
       if [ -n "${{CLOUDMOVE_RDS_HOST:-}}" ] && [ "${{CLOUDMOVE_RDS_HOST:-}}" != "__CLOUDMOVE_RDS_HOST__" ]; then
         set_env_var "$ENV_TARGET" "DB_HOST" "$CLOUDMOVE_RDS_HOST"
         set_env_var "$ENV_TARGET" "DB_SSL" "true"
+        set_env_var "$ENV_TARGET" "DB_SSL_REJECT_UNAUTHORIZED" "false"
+        if [ -f "/opt/{app_slug}/database/rds/bootstrap.sh" ]; then
+          set_env_var "$ENV_TARGET" "DB_ADMIN_USER" "${{CLOUDMOVE_RDS_USER:-cloudmove_admin}}"
+          set_env_var "$ENV_TARGET" "DB_ADMIN_PASSWORD" "$CLOUDMOVE_RDS_PASSWORD"
+        else
+          set_env_var "$ENV_TARGET" "DB_USER" "${{CLOUDMOVE_RDS_USER:-cloudmove_admin}}"
+          set_env_var "$ENV_TARGET" "DB_PASSWORD" "$CLOUDMOVE_RDS_PASSWORD"
+        fi
       fi
     fi
   fi
@@ -824,8 +838,33 @@ if [ ! -f "$COMPOSE_FILE" ]; then
   done
 fi
 {restore_step_block}
+if [ -n "${{CLOUDMOVE_RDS_HOST:-}}" ] && [ "${{CLOUDMOVE_RDS_HOST:-}}" != "__CLOUDMOVE_RDS_HOST__" ] && [ -f "/opt/{app_slug}/database/rds/bootstrap.sh" ]; then
+  echo "[6.2/7] Inicializando esquema, roles y datos semilla en Amazon RDS ($CLOUDMOVE_RDS_HOST)..."
+  set -a
+  [ -f "/opt/{app_slug}/.env" ] && . "/opt/{app_slug}/.env"
+  set +a
+  TARGET_DB_NAME="${{DB_NAME:-postgres}}"
+  for _try in $(seq 1 15); do
+    if PGPASSWORD="$CLOUDMOVE_RDS_PASSWORD" PGSSLMODE=require psql -h "$CLOUDMOVE_RDS_HOST" -U "${{CLOUDMOVE_RDS_USER:-cloudmove_admin}}" -d postgres -c "SELECT 1;" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 4
+  done
+  PGPASSWORD="$CLOUDMOVE_RDS_PASSWORD" PGSSLMODE=require psql -h "$CLOUDMOVE_RDS_HOST" -U "${{CLOUDMOVE_RDS_USER:-cloudmove_admin}}" -d postgres -tc "SELECT 1 FROM pg_database WHERE datname='$TARGET_DB_NAME'" | grep -q 1 || \
+    PGPASSWORD="$CLOUDMOVE_RDS_PASSWORD" PGSSLMODE=require psql -h "$CLOUDMOVE_RDS_HOST" -U "${{CLOUDMOVE_RDS_USER:-cloudmove_admin}}" -d postgres -c "CREATE DATABASE \"$TARGET_DB_NAME\";" || true
+  DB_HOST="$CLOUDMOVE_RDS_HOST" DB_PORT="5432" DB_NAME="$TARGET_DB_NAME" \
+    DB_ADMIN_USER="${{CLOUDMOVE_RDS_USER:-cloudmove_admin}}" DB_ADMIN_PASSWORD="$CLOUDMOVE_RDS_PASSWORD" \
+    APP_DB_USER="${{APP_DB_USER:-bookstore_app}}" APP_DB_PASSWORD="${{APP_DB_PASSWORD:-change_me_for_local_development}}" \
+    INGEST_DB_USER="${{INGEST_DB_USER:-bookstore_ingest}}" INGEST_DB_PASSWORD="${{INGEST_DB_PASSWORD:-change_me_for_local_development}}" \
+    PGSSLMODE=require bash "/opt/{app_slug}/database/rds/bootstrap.sh" || echo "[WARN] Revisa /var/log/cloudmove-user-data.log para detalles del bootstrap RDS."
+fi
+
 echo "[6.5/7] Construyendo e iniciando contenedores de aplicación mediante $COMPOSE_FILE con reinicio automático..."
-run_compose -f "$COMPOSE_FILE" up -d --build
+if [ -n "${{CLOUDMOVE_RDS_HOST:-}}" ] && [ "${{CLOUDMOVE_RDS_HOST:-}}" != "__CLOUDMOVE_RDS_HOST__" ] && [ "{str(use_repo_compose).lower()}" = "true" ]; then
+  run_compose -f "$COMPOSE_FILE" up -d --build --no-deps backend frontend || run_compose -f "$COMPOSE_FILE" up -d --build
+else
+  run_compose -f "$COMPOSE_FILE" up -d --build
+fi
 docker builder prune -af || true
 
 echo "[7/7] Registrando servicio systemd y sincronizador dinámico de IP pública ante reinicios..."
@@ -874,10 +913,10 @@ systemctl enable {app_slug}-containers.service
 echo "[OK] Despliegue contenerizado de '{app_name}' activo. Puertos: {ports}, Frontend: {fe_port}, Backend: {be_port}, Health Check: {health_ep}"
 """
     # Safety guard: AWS EC2 API limits uncompressed user_data to 16,384 bytes (16 KB).
-    # If the script exceeds 15,360 bytes (15 KB), wrap it as a self-extracting gzipped bootstrap
+    # If the script exceeds 16,000 bytes, wrap it as a self-extracting gzipped bootstrap
     # so no deployment ever fails AWS user_data length validation regardless of repository size.
     raw_bytes = raw_script.encode("utf-8")
-    if len(raw_bytes) > 15360:
+    if len(raw_bytes) > 16000:
         gz_data = gzip.compress(raw_bytes, compresslevel=9)
         b64_str = base64.b64encode(gz_data).decode("ascii")
         return f"""#!/bin/bash
@@ -886,6 +925,9 @@ echo "[OK] Despliegue contenerizado de '{app_name}' activo. Puertos: {ports}, Fr
 # Compressed size: {len(b64_str)} bytes (Original: {len(raw_bytes)} bytes)
 # ==============================================================================
 set -euo pipefail
+export CLOUDMOVE_RDS_HOST="__CLOUDMOVE_RDS_HOST__"
+export CLOUDMOVE_RDS_USER="__CLOUDMOVE_RDS_USER__"
+export CLOUDMOVE_RDS_PASSWORD="__CLOUDMOVE_RDS_PASSWORD__"
 echo "{b64_str}" | base64 -d | gzip -d | bash
 exit 0
 """

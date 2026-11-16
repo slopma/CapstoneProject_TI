@@ -1194,6 +1194,72 @@ class MigrationOrchestrator:
         })
         return self._save_job(job, actor_id=actor_id)
 
+    def regenerate_job_artifacts(
+        self,
+        migration_id: str,
+        re_inspect: bool = True,
+        actor_id: str = "architect@cloudmove.local",
+    ) -> Dict[str, Any]:
+        """
+        Re-run source discovery (when GitHub/local path is available) and regenerate
+        CMIR, Terraform HCL manifests, and user_data.sh using the latest CloudMove engine rules,
+        syncing the deployment workspace and clearing stale FAILED status metadata.
+        """
+        job = self.get_migration(migration_id)
+        src_cfg = dict(job.get("source_config") or {})
+        uc = job.get("use_case")
+
+        if uc == "app_source" and re_inspect:
+            gh_url = src_cfg.get("github_url")
+            src_path = src_cfg.get("source_path")
+            try:
+                if gh_url:
+                    fresh_disc = inspect_application_source(
+                        github_url=gh_url,
+                        github_ref=src_cfg.get("github_ref"),
+                        app_name_override=src_cfg.get("app_name"),
+                    )
+                    job["source_environment"] = fresh_disc
+                elif src_path and Path(src_path).exists():
+                    fresh_disc = inspect_application_source(
+                        source_path=src_path,
+                        app_name_override=src_cfg.get("app_name"),
+                    )
+                    job["source_environment"] = fresh_disc
+                self._save_job(job, actor_id=actor_id)
+            except Exception:
+                pass
+
+        updated = self.update_architecture_decisions(
+            migration_id=migration_id,
+            user_decisions=src_cfg.get("user_decisions") or {},
+            actor_id=actor_id,
+        )
+
+        # Reset stale FAILED metadata in workspace so operator can immediately re-validate or apply
+        try:
+            from app.migration.cloud_deployer import cloud_deployer
+
+            job_dir = cloud_deployer.resolve_job_dir(migration_id, updated)
+            artifacts_files = (updated.get("generated_artifacts") or {}).get("files") or {}
+            cloud_deployer.materialize_job_files(job_dir, artifacts_files=artifacts_files)
+            cloud_deployer._save_status_meta(
+                migration_id,
+                job_dir,
+                {
+                    "status": "IDLE",
+                    "stage": "REGENERATED",
+                    "active_command": None,
+                    "is_running": False,
+                    "message": "Manifiestos Terraform y scripts regenerados con las reglas corregidas. Listo para validar/desplegar.",
+                    "error": None,
+                    "updated_at": _utc_now(),
+                },
+            )
+        except Exception:
+            pass
+        return updated
+
     def _resolve_uc2_stage_meta(
         self,
         job: Dict[str, Any],

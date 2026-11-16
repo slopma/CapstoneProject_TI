@@ -9,6 +9,7 @@ Supports both AWS and GCP targets.
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -16,6 +17,110 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+
+_TERRAFORM_DIAGNOSIS_RULES: List[tuple[re.Pattern[str], str, str, str, str, bool]] = [
+    (
+        re.compile(
+            r'first character of "identifier" must be a letter|only lowercase alphanumeric characters and hyphens|name_prefix.*cannot be longer|RFC1035|InvalidParameterValue.*(?:identifier|cluster|bucket|name)|Identificador (?:RDS|ElastiCache|HCL) inválido|Nombre de bucket inválido|Nombre GCP inválido|name_prefix.*excede el límite',
+            re.IGNORECASE,
+        ),
+        "INVALID_CLOUD_IDENTIFIER",
+        "Identificador de recurso inválido para el proveedor cloud",
+        "Un nombre generado (por ejemplo desde un repositorio que inicia con dígito como '2026-2' o excede el límite de caracteres) incumple las reglas de AWS/GCP.",
+        "Haz clic en 'Reparar y Regenerar Manifiestos' para normalizar automáticamente los identificadores con prefijos válidos y volver a validar antes de desplegar.",
+        True,
+    ),
+    (
+        re.compile(
+            r"Reference to undeclared resource|Reference to undeclared input variable|Unsupported block type|Unsupported argument",
+            re.IGNORECASE,
+        ),
+        "HCL_SYNTAX_OR_REF_ERROR",
+        "Inconsistencia sintáctica o referencia HCL en los manifiestos",
+        "Existe una referencia o bloque en main.tf/outputs.tf generado con una versión anterior o configuración inconsistente.",
+        "Ejecuta 'Reparar y Regenerar Manifiestos' para resintetizar la plantilla Terraform y vuelve a ejecutar Dry-Run.",
+        True,
+    ),
+    (
+        re.compile(
+            r"ExpiredToken|InvalidClientTokenId|security token included in the request is expired|AuthFailure|No valid credential sources found",
+            re.IGNORECASE,
+        ),
+        "AWS_CREDENTIALS_EXPIRED",
+        "Credenciales o Session Token de AWS expirados o inválidos",
+        "Las credenciales temporales (AWS Academy / STS) caducaron o son incorrectas.",
+        "Actualiza AWS Access Key ID, Secret Access Key y Session Token en el Paso 1, pulsa 'Comprobar Identidad AWS / STS' y reintenta con 'Continuar / Aplicar'.",
+        False,
+    ),
+    (
+        re.compile(r"AccessDenied|UnauthorizedOperation|is not authorized to perform", re.IGNORECASE),
+        "AWS_PERMISSION_DENIED",
+        "Permiso IAM insuficiente en la cuenta AWS destino",
+        "El rol o usuario STS actual no tiene permiso para crear uno de los recursos planificados (frecuente en AWS Academy con IAM Roles personalizados).",
+        "Si falla creando aws_iam_role, selecciona 'Omitir IAM personalizado (skip_custom_iam)' en las decisiones de arquitectura y regenera los manifiestos.",
+        True,
+    ),
+    (
+        re.compile(
+            r"DBInstanceAlreadyExists|BucketAlreadyExists|BucketAlreadyOwnedByYou|InvalidGroup\.Duplicate|EntityAlreadyExists",
+            re.IGNORECASE,
+        ),
+        "RESOURCE_ALREADY_EXISTS",
+        "El recurso ya existe previamente en AWS",
+        "Un intento previo dejó el recurso creado en AWS fuera de terraform.tfstate (o el nombre de bucket ya está en uso globalmente).",
+        "Usa 'terraform refresh' / 'Continuar / Aplicar' o ejecuta 'Reparar y Regenerar Manifiestos' para asignar identificadores únicos e importar estado.",
+        True,
+    ),
+    (
+        re.compile(r"Error acquiring the state lock", re.IGNORECASE),
+        "STATE_LOCKED",
+        "Estado de Terraform bloqueado por ejecución previa",
+        "Un proceso anterior dejó el archivo .terraform.tfstate.lock.info activo.",
+        "Pulsa 'Desbloquear Estado' en la barra de comandos y luego reintenta el despliegue.",
+        False,
+    ),
+    (
+        re.compile(
+            r"VcpuLimitExceeded|InsufficientInstanceCapacity|DBSubnetGroupDoesNotCoverEnoughAZs|QuotaExceeded|LimitExceeded",
+            re.IGNORECASE,
+        ),
+        "QUOTA_OR_CAPACITY",
+        "Límite de cuota o disponibilidad de zona en AWS/GCP",
+        "La región o cuenta sandbox alcanzó un límite de instancias, subredes o vCPUs.",
+        "Cambia el perfil de cómputo a Free-Tier ('single_instance_containerized' / t3.micro) o cambia de región AWS y reintenta.",
+        False,
+    ),
+]
+
+
+def _diagnose_terraform_failure(logs: List[str], provider: str = "aws") -> Optional[Dict[str, Any]]:
+    """Classify the latest Terraform error block into an actionable remediation summary."""
+    tail_blob = "\n".join(logs[-100:])
+    if not tail_blob.strip():
+        return None
+    for pat, code, title, cause, remediation, can_regen in _TERRAFORM_DIAGNOSIS_RULES:
+        m = pat.search(tail_blob)
+        if m:
+            return {
+                "code": code,
+                "provider": provider.upper(),
+                "title": title,
+                "matched_snippet": m.group(0)[:220],
+                "cause": cause,
+                "remediation": remediation,
+                "can_auto_regenerate": can_regen,
+            }
+    err_lines = [ln.strip() for ln in logs[-40:] if "Error:" in ln or "[ERROR]" in ln]
+    return {
+        "code": "TERRAFORM_EXECUTION_ERROR",
+        "provider": provider.upper(),
+        "title": "Fallo en la ejecución de Terraform",
+        "matched_snippet": err_lines[0][:220] if err_lines else "",
+        "cause": err_lines[0] if err_lines else "Terraform retornó un código de salida distinto de cero.",
+        "remediation": "Revisa el detalle en la terminal de logs o regenera los manifiestos si realizaste cambios recientes.",
+        "can_auto_regenerate": True,
+    }
 
 
 class CloudDeploymentRunner:
@@ -575,16 +680,23 @@ class CloudDeploymentRunner:
 
         state_info = self.inspect_tfstate(job_dir)
         lock_exists = (job_dir / ".terraform.tfstate.lock.info").exists()
+        status_str = meta.get("status", "IDLE")
+        diagnosis = (
+            _diagnose_terraform_failure(logs, provider="aws")
+            if status_str == "FAILED"
+            else None
+        )
 
         return {
             "migration_id": migration_id,
             "workspace_dir": str(job_dir),
             "is_running": meta["is_running"],
             "active_command": meta["active_command"],
-            "status": meta.get("status", "IDLE"),
+            "status": status_str,
             "stage": meta.get("stage", "READY"),
             "message": meta.get("message", ""),
             "error": meta.get("error"),
+            "error_diagnosis": diagnosis,
             "updated_at": meta.get("updated_at"),
             "has_state_file": state_info["has_state_file"],
             "is_locked": lock_exists,
@@ -739,6 +851,29 @@ class CloudDeploymentRunner:
                         return res
                 _auto_import_orphaned_rds()
                 return None
+
+            if clean_action in ("validate", "plan", "dry_run", "apply", "continue", "full_deploy"):
+                from app.generators.naming import validate_hcl_naming_constraints
+
+                tf_workspace_files = {
+                    p.name: p.read_text(encoding="utf-8", errors="ignore")
+                    for p in sorted(job_dir.glob("*.tf"))
+                    if p.is_file()
+                }
+                semantic_errors = validate_hcl_naming_constraints(tf_workspace_files)
+                if semantic_errors:
+                    self._append_log(
+                        migration_id,
+                        job_dir,
+                        f"[{time.strftime('%X')}] [PRE-FLIGHT] Se detectaron {len(semantic_errors)} error(es) de validación semántica antes de invocar Terraform:",
+                    )
+                    for s_err in semantic_errors:
+                        self._append_log(migration_id, job_dir, f"  Error: {s_err}")
+                    return _finalize(
+                        False,
+                        "PREFLIGHT_VALIDATION_FAILED",
+                        {"returncode": 1, "cancelled": False, "error": semantic_errors[0]},
+                    )
 
             steps_to_run: List[tuple[str, List[str], int]] = []
             if clean_action == "init":

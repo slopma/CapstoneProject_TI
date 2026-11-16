@@ -119,8 +119,13 @@ def generate_discovery_aws_terraform(
         cmir_obj = CMIR.model_validate(cmir_dict)
         translated_cmir_nodes = adapter.translate_cmir(cmir_obj)
 
+    from app.generators.naming import sanitize_hcl_id, sanitize_kebab_identifier
+
     hostname = session_payload.get("hostname") or summary.get("hostname") or "discovered-host"
-    host_slug = _slug(hostname)
+    host_slug = sanitize_hcl_id(_slug(hostname), prefix="cm", max_len=48)
+    rds_identifier = sanitize_kebab_identifier(f"{hostname}-postgres", prefix="cm", max_len=63)
+    pg_subnet_group_name = sanitize_kebab_identifier(f"{hostname}-pg-subnet-group", prefix="cm", max_len=63)
+    mq_broker_name = sanitize_kebab_identifier(f"{hostname}-mq", prefix="cm", max_len=50)
     host_uuid = summary.get("uuid") or "unknown-uuid"
     collected_at = session_payload.get("collected_at") or summary.get("collected_at") or "unknown"
 
@@ -590,16 +595,16 @@ resource "aws_volume_attachment" "{host_slug}_attach_{d_slug}" {{
     if strategy_mode == "replatform" and has_postgres:
         rds_hcl = f"""# [PASO 5] Base de Datos Relacional Administrada (Origen: software.deb_packages [postgresql] + databases.detected_engine_evidence)
 resource "aws_db_subnet_group" "{host_slug}_pg_subnets" {{
-  name       = "{hostname}-pg-subnet-group"
+  name       = "{pg_subnet_group_name}"
   subnet_ids = [aws_subnet.{host_slug}_private_a.id, aws_subnet.{host_slug}_private_b.id]
 
   tags = {{
-    Name = "{hostname}-pg-subnet-group"
+    Name = "{pg_subnet_group_name}"
   }}
 }}
 
 resource "aws_db_instance" "{host_slug}_postgres" {{
-  identifier             = "{hostname.lower()}-postgres"
+  identifier             = "{rds_identifier}"
   engine                 = "postgres"
   engine_version         = "17"
   instance_class         = "db.t4g.micro"
@@ -645,7 +650,7 @@ resource "aws_db_instance" "{host_slug}_postgres" {{
     if strategy_mode == "replatform" and has_rabbitmq:
         mq_hcl = f"""# [PASO 6] Broker de Mensajería Administrado (Origen: software.deb_packages [rabbitmq-server] + software.systemd_units)
 resource "aws_mq_broker" "{host_slug}_rabbitmq" {{
-  broker_name                = "{hostname.lower()}-mq"
+  broker_name                = "{mq_broker_name}"
   engine_type                = "RabbitMQ"
   engine_version             = "3.13"
   host_instance_type         = "mq.t3.micro"
@@ -841,8 +846,13 @@ def generate_discovery_gcp_terraform(
         cmir_obj = CMIR.model_validate(cmir_dict)
         translated_cmir_nodes = adapter.translate_cmir(cmir_obj)
 
+    from app.generators.naming import sanitize_hcl_id, sanitize_kebab_identifier
+
     hostname = session_payload.get("hostname") or summary.get("hostname") or "discovered-host"
-    host_slug = _slug(hostname)
+    host_slug = sanitize_hcl_id(_slug(hostname), prefix="cm", max_len=48)
+    rds_identifier = sanitize_kebab_identifier(f"{hostname}-postgres", prefix="cm", max_len=63)
+    pg_subnet_group_name = sanitize_kebab_identifier(f"{hostname}-pg-subnet-group", prefix="cm", max_len=63)
+    mq_broker_name = sanitize_kebab_identifier(f"{hostname}-mq", prefix="cm", max_len=50)
     host_kebab = host_slug.replace("_", "-")
     host_uuid = summary.get("uuid") or "unknown-uuid"
     collected_at = session_payload.get("collected_at") or summary.get("collected_at") or "unknown"

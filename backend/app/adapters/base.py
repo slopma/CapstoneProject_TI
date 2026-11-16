@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 from app.cmir.models import CMIR, CMIRNode
+from app.generators.naming import validate_hcl_naming_constraints
 
 
 class BaseProviderAdapter(ABC):
@@ -115,6 +116,8 @@ class BaseProviderAdapter(ABC):
                 rtype_name = f"{rref.group(1)}.{rref.group(2)}"
                 if rtype_name not in declared_resources:
                     errors.append(f"Referencia a recurso HCL no declarado '{rtype_name}' en '{fname}'.")
+
+        errors.extend(validate_hcl_naming_constraints(tf_files))
 
         # Real CLI validation with `/usr/bin/terraform`
         tf_bin = shutil.which("terraform")

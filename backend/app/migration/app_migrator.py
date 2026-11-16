@@ -2266,9 +2266,13 @@ def build_github_to_cloud_transformation_catalog(
                 ],
             }
 
+            compose_has_own_db = bool((app_discovery.get("deep_insights") or {}).get("compose_has_own_db"))
             d_default = (
                 "self_hosted_container"
-                if (is_ext_baas and has_bkp)
+                if (
+                    (is_ext_baas and has_bkp)
+                    or (comp_selected == "single_instance_containerized" and compose_has_own_db)
+                )
                 else ("keep_external" if is_ext_baas else "transform_to_cloud_managed")
             )
             d_selected = decisions_in.get(d_key, d_default)
@@ -2927,6 +2931,7 @@ def build_application_cmir(
             "expose_db_port_externally": expose_db_port,
             "exposed_ports": app_discovery["exposed_ports"],
             "health_endpoints": app_discovery.get("health_endpoints", ["/health"]),
+            "service_endpoints": app_discovery.get("service_endpoints") or {},
         },
     })
     if app_discovery.get("git_metadata"):

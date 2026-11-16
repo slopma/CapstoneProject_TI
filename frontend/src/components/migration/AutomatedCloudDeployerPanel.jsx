@@ -68,6 +68,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
 
   // Verification & Terraform Console state
   const [verifyingCaller, setVerifyingCaller] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
   const [callerIdentity, setCallerIdentity] = useState(null);
   const [tfStatus, setTfStatus] = useState({
     is_running: false,
@@ -292,6 +293,39 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
     navigator.clipboard?.writeText(text);
     setCopiedText(label);
     setTimeout(() => setCopiedText(""), 2000);
+  };
+
+  // Regenerate Terraform artifacts using latest engine sanitizers/fixes
+  const handleRegenerateArtifacts = async () => {
+    if (!migrationId || regenerating || isRunning) return;
+    setRegenerating(true);
+    try {
+      const res = await apiFetch(`/api/v1/migration/jobs/${migrationId}/regenerate`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.terraform_status) {
+          setTfStatus(data.terraform_status);
+        }
+        onDeploymentCompleted?.();
+        setCopiedText("Manifiestos Terraform regenerados y listos para validar");
+        setTimeout(() => setCopiedText(""), 3000);
+      } else {
+        const errBody = await res.json().catch(() => ({}));
+        setTfStatus((prev) => ({
+          ...prev,
+          error: errBody.detail || "No se pudieron regenerar los manifiestos Terraform.",
+        }));
+      }
+    } catch (err) {
+      setTfStatus((prev) => ({
+        ...prev,
+        error: `Error al regenerar manifiestos: ${err.message}`,
+      }));
+    } finally {
+      setRegenerating(false);
+    }
   };
 
   // Download logs as .log file
@@ -961,8 +995,65 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
             >
               ↻ Actualizar Vista
             </button>
+            <button
+              type="button"
+              className="cm-btn sm secondary"
+              onClick={handleRegenerateArtifacts}
+              disabled={isRunning || regenerating}
+              title="Re-sintetiza main.tf, outputs.tf y user_data.sh aplicando las reglas vigentes de CloudMove"
+            >
+              {regenerating ? "⟳ Regenerando..." : "↻ Regenerar Manifiestos"}
+            </button>
           </div>
         </div>
+
+        {tfStatus.status === "FAILED" && (tfStatus.error_diagnosis || tfStatus.error) && (
+          <div
+            style={{
+              marginTop: 12,
+              padding: "12px 14px",
+              backgroundColor: "#fef2f2",
+              border: "1px solid #f87171",
+              borderRadius: 6,
+              color: "#7f1d1d",
+              fontSize: 12.5,
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <strong style={{ fontSize: 13.5, color: "#991b1b" }}>
+                [DIAGNÓSTICO] {tfStatus.error_diagnosis?.title || "Error en ejecución de Terraform"}
+              </strong>
+              {(tfStatus.error_diagnosis?.can_auto_regenerate ?? true) && (
+                <button
+                  type="button"
+                  className="cm-btn sm primary"
+                  onClick={handleRegenerateArtifacts}
+                  disabled={isRunning || regenerating}
+                >
+                  {regenerating ? "⟳ Reparando..." : "↻ Reparar y Regenerar Manifiestos"}
+                </button>
+              )}
+            </div>
+            {tfStatus.error_diagnosis?.cause && (
+              <div>
+                <strong>Causa:</strong> {tfStatus.error_diagnosis.cause}
+              </div>
+            )}
+            {tfStatus.error_diagnosis?.remediation && (
+              <div>
+                <strong>Acción recomendada:</strong> {tfStatus.error_diagnosis.remediation}
+              </div>
+            )}
+            {tfStatus.error_diagnosis?.matched_snippet && (
+              <div style={{ fontFamily: "monospace", fontSize: 11.5, backgroundColor: "#fee2e2", padding: "4px 8px", borderRadius: 4 }}>
+                {tfStatus.error_diagnosis.matched_snippet}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 3. Centro de Consulta de Datos y Recursos en Creación / Planificados (Caso 1 y Caso 2) */}

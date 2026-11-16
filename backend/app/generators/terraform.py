@@ -4,6 +4,12 @@ import tempfile
 from pathlib import Path
 from typing import List, Dict, Any
 
+from app.generators.naming import (
+    sanitize_bucket_name,
+    sanitize_hcl_id,
+    sanitize_kebab_identifier,
+)
+
 
 def format_terraform_code(code: str) -> str:
     """
@@ -145,8 +151,19 @@ variable "github_token" {{
     app_ingress_ports = {80, 443}
     primary_http_port = 80
     health_check_path = "/health"
+    service_fe_port: int | None = None
+    service_be_port: int | None = None
     created_instance_ids: List[str] = []
     created_db_ids: List[str] = []
+    planned_db_ids: List[str] = [
+        sanitize_hcl_id(r.get("safe_id") or r.get("id", "db"), prefix="cm", max_len=64)
+        for r in resources
+        if (
+            r.get("type") in ("aws_db_instance", "database_instance", "database")
+            or r.get("cmir_type") in ("database", "database_instance")
+        )
+        and r.get("type") not in ("containerized_in_compose", "external_baas")
+    ]
 
     expose_db_port_externally = not any(
         (r.get("metadata") or {}).get("expose_db_port_externally") is False
@@ -158,6 +175,12 @@ variable "github_token" {{
             if isinstance(pval, int):
                 app_ingress_ports.add(pval)
         meta = r.get("metadata", {}) or {}
+        if isinstance(meta.get("service_endpoints"), dict):
+            se = meta["service_endpoints"]
+            if isinstance(se.get("frontend_port"), int):
+                service_fe_port = se["frontend_port"]
+            if isinstance(se.get("backend_port"), int):
+                service_be_port = se["backend_port"]
         for ep in meta.get("exposed_ports", []):
             if isinstance(ep, int):
                 app_ingress_ports.add(ep)
@@ -483,8 +506,8 @@ variable "github_token" {{
     created_db_ids: List[str] = []
 
     for r in resources:
-        r_id = r.get("safe_id", r.get("id").replace("-", "_"))
-        r_name = r.get("safe_name", r.get("name"))
+        r_id = sanitize_hcl_id(r.get("safe_id") or str(r.get("id", "res")), prefix="cm", max_len=64)
+        r_name = sanitize_kebab_identifier(r.get("safe_name") or str(r.get("name", "resource")), prefix="cm", max_len=63)
         r_type = r.get("type", "aws_instance")
         cmir_type = r.get("cmir_type", "workload")
         engine = r.get("engine", "postgres")
@@ -556,14 +579,23 @@ variable "github_token" {{
                     ami_expr = f"var.ami_id != \"\" ? var.ami_id : (var.enable_vm_import ? aws_ami.{other_id}[0].id : data.aws_ami.ubuntu.id)"
                     break
 
+            rds_user_data_expr = (
+                f'replace(replace(replace(file("${{path.module}}/user_data.sh"), "__CLOUDMOVE_RDS_HOST__", aws_db_instance.{planned_db_ids[0]}.address), "__CLOUDMOVE_RDS_USER__", "cloudmove_admin"), "__CLOUDMOVE_RDS_PASSWORD__", local.effective_db_password)'
+                if planned_db_ids
+                else None
+            )
+            lt_name_prefix = f'{sanitize_kebab_identifier(r_name, prefix="cm", max_len=28)}-lt-'
+            asg_name = sanitize_kebab_identifier(f"{r_name}-asg", prefix="cm", max_len=63)
             if enable_ha_alb_asg and not meta.get("dedicated_instance"):
                 main_lines.extend([
                     f'resource "aws_launch_template" "{r_id}_lt" {{',
-                    f'  name_prefix            = "{r_name}-lt-"',
+                    f'  name_prefix            = "{lt_name_prefix}"',
                     f'  image_id               = {ami_expr}',
                     '  instance_type          = var.instance_type',
                     '  vpc_security_group_ids = [aws_security_group.app_sg.id]',
-                    '  user_data              = filebase64("${path.module}/user_data.sh")',
+                    f'  user_data              = base64encode({rds_user_data_expr})'
+                    if rds_user_data_expr
+                    else '  user_data              = filebase64("${path.module}/user_data.sh")',
                     '  tag_specifications {',
                     '    resource_type = "instance"',
                     '    tags = {',
@@ -575,7 +607,7 @@ variable "github_token" {{
                     '}',
                     '',
                     f'resource "aws_autoscaling_group" "{r_id}_asg" {{',
-                    f'  name                      = "{r_name}-asg"',
+                    f'  name                      = "{asg_name}"',
                     '  min_size                  = var.asg_min_size',
                     '  max_size                  = var.asg_max_size',
                     '  desired_capacity          = var.asg_desired_capacity',
@@ -605,8 +637,15 @@ variable "github_token" {{
                 '  subnet_id                   = aws_subnet.public_subnet.id',
                 '  vpc_security_group_ids      = [aws_security_group.app_sg.id]',
                 '  associate_public_ip_address = true',
-                '  user_data_base64            = base64gzip(file("${path.module}/user_data.sh"))',
+                f'  user_data_base64            = base64gzip({rds_user_data_expr})'
+                if rds_user_data_expr
+                else '  user_data_base64            = base64gzip(file("${path.module}/user_data.sh"))',
                 '  user_data_replace_on_change = true',
+                *(
+                    [f'  depends_on                  = [aws_db_instance.{planned_db_ids[0]}]']
+                    if planned_db_ids
+                    else []
+                ),
                 '  root_block_device {',
                 f'    volume_size           = {root_vol_gb}',
                 '    volume_type           = "gp3"',
@@ -623,9 +662,11 @@ variable "github_token" {{
                 '',
             ])
         elif r_type == "aws_iam_role":
+            role_name = sanitize_kebab_identifier(r_name, prefix="cm", max_len=64)
+            profile_name = sanitize_kebab_identifier(f"{r_name}-profile", prefix="cm", max_len=64)
             main_lines.extend([
                 f'resource "aws_iam_role" "{r_id}" {{',
-                f'  name = "{r_name}"',
+                f'  name = "{role_name}"',
                 '  assume_role_policy = jsonencode({',
                 '    Version = "2012-10-17"',
                 '    Statement = [',
@@ -639,14 +680,14 @@ variable "github_token" {{
                 '    ]',
                 '  })',
                 '  tags = {',
-                f'    Name      = "{r_name}"',
+                f'    Name      = "{role_name}"',
                 f'    CMIR_ID   = "{r.get("id")}"',
                 '    ManagedBy = "CloudMove"',
                 '  }',
                 '}',
                 '',
                 f'resource "aws_iam_instance_profile" "{r_id}_profile" {{',
-                f'  name = "{r_name}-profile"',
+                f'  name = "{profile_name}"',
                 f'  role = aws_iam_role.{r_id}.name',
                 '}',
                 '',
@@ -667,9 +708,10 @@ variable "github_token" {{
         elif (r_type in ("aws_db_instance", "database_instance", "database") or cmir_type in ("database", "database_instance")) and r_type != "containerized_in_compose":
             created_db_ids.append(r_id)
             db_engine = "postgres" if "postg" in str(engine).lower() else "mysql" if "mysql" in str(engine).lower() else "postgres"
+            rds_ident = sanitize_kebab_identifier(r_name, prefix="cm", max_len=63)
             main_lines.extend([
                 f'resource "aws_db_instance" "{r_id}" {{',
-                f'  identifier             = "{r_name}"',
+                f'  identifier             = "{rds_ident}"',
                 f'  engine                 = "{db_engine}"',
                 '  instance_class         = "db.t3.micro"',
                 '  allocated_storage      = 20',
@@ -682,7 +724,7 @@ variable "github_token" {{
                 '  db_subnet_group_name   = aws_db_subnet_group.db_subnets.name',
                 '  vpc_security_group_ids = [aws_security_group.data_sg.id]',
                 '  tags = {',
-                f'    Name      = "{r_name}"',
+                f'    Name      = "{rds_ident}"',
                 f'    CMIR_ID   = "{r.get("id")}"',
                 '    ManagedBy = "CloudMove"',
                 '  }',
@@ -690,9 +732,10 @@ variable "github_token" {{
                 '',
             ])
         elif r_type == "aws_elasticache_cluster":
+            cache_id = sanitize_kebab_identifier(r_name, prefix="cm", max_len=50)
             main_lines.extend([
                 f'resource "aws_elasticache_cluster" "{r_id}" {{',
-                f'  cluster_id           = "{r_name}"',
+                f'  cluster_id           = "{cache_id}"',
                 '  engine               = "redis"',
                 '  node_type            = "cache.t3.micro"',
                 '  num_cache_nodes      = 1',
@@ -700,7 +743,7 @@ variable "github_token" {{
                 '  port                 = 6379',
                 '  security_group_ids   = [aws_security_group.data_sg.id]',
                 '  tags = {',
-                f'    Name      = "{r_name}"',
+                f'    Name      = "{cache_id}"',
                 f'    CMIR_ID   = "{r.get("id")}"',
                 '    ManagedBy = "CloudMove"',
                 '  }',
@@ -708,9 +751,10 @@ variable "github_token" {{
                 '',
             ])
         elif r_type == "aws_s3_bucket":
+            s3_bucket = sanitize_bucket_name(r_name)
             main_lines.extend([
                 f'resource "aws_s3_bucket" "{r_id}" {{',
-                f'  bucket = "cloudmove-{r_name}"',
+                f'  bucket = "{s3_bucket}"',
                 '  tags = {',
                 f'    Name      = "{r_name}"',
                 f'    CMIR_ID   = "{r.get("id")}"',
@@ -841,8 +885,8 @@ variable "github_token" {{
     primary_inst_id = created_instance_ids[0] if created_instance_ids else None
     instance_output_blocks = ""
     if primary_inst_id:
-        fe_port = 3000 if 3000 in app_ingress_ports else primary_http_port
-        be_port = 8000 if 8000 in app_ingress_ports else primary_http_port
+        fe_port = service_fe_port or (3000 if 3000 in app_ingress_ports else primary_http_port)
+        be_port = service_be_port or (8000 if 8000 in app_ingress_ports else primary_http_port)
         db_output_block = ""
         if 5432 in app_ingress_ports:
             db_output_block = f"""
@@ -850,6 +894,20 @@ output "database_connection_url" {{
   description = "PostgreSQL / PostGIS Container Connection URL on the EC2 Instance"
   value       = "postgresql://postgres:${{local.effective_db_password}}@${{aws_instance.{primary_inst_id}.public_ip}}:5432/postgres"
   sensitive   = true
+}}
+"""
+        rds_output_block = ""
+        if created_db_ids:
+            db_rid = created_db_ids[0]
+            rds_output_block = f"""
+output "db_endpoint" {{
+  description = "Managed Amazon RDS Endpoint"
+  value       = aws_db_instance.{db_rid}.endpoint
+}}
+
+output "db_address" {{
+  description = "Managed Amazon RDS Hostname"
+  value       = aws_db_instance.{db_rid}.address
 }}
 """
         instance_output_blocks = f"""
@@ -877,7 +935,7 @@ output "backend_api_url" {{
   description = "Direct HTTP URL for the Backend API & Swagger Docs"
   value       = "http://${{aws_instance.{primary_inst_id}.public_ip}}:{be_port}"
 }}
-{db_output_block}
+{db_output_block}{rds_output_block}
 output "ssh_command" {{
   description = "SSH command to inspect containers and logs on the EC2 host"
   value       = "ssh ubuntu@${{aws_instance.{primary_inst_id}.public_ip}}"
@@ -918,7 +976,7 @@ output "app_endpoint" {{
     else:
         app_ep_block = ""
         if primary_inst_id:
-            fe_port = 3000 if 3000 in app_ingress_ports else primary_http_port
+            fe_port = service_fe_port or (3000 if 3000 in app_ingress_ports else primary_http_port)
             app_ep_block = f"""
 output "app_endpoint" {{
   description = "Public HTTP URL of the migrated application on Single Free-Tier EC2 Instance"
@@ -1103,8 +1161,8 @@ variable "custom_image_name" {
     created_db_ids: List[str] = []
 
     for r in resources:
-        r_id = r.get("safe_id", str(r.get("id", "res")).replace("-", "_"))
-        r_name = r.get("safe_name", str(r.get("name", "resource")).lower().replace("_", "-"))
+        r_id = sanitize_hcl_id(r.get("safe_id") or str(r.get("id", "res")), prefix="cm", max_len=64)
+        r_name = sanitize_kebab_identifier(r.get("safe_name") or str(r.get("name", "resource")), prefix="cm", max_len=54)
         r_type = r.get("type", "google_compute_instance")
         cmir_type = r.get("cmir_type", "workload")
         engine = str(r.get("engine") or "postgres").lower()
@@ -1264,9 +1322,10 @@ variable "custom_image_name" {
                 '',
             ])
         elif r_type == "google_storage_bucket":
+            gcs_bucket = sanitize_bucket_name(r_name)
             main_lines.extend([
                 f'resource "google_storage_bucket" "{r_id}" {{',
-                f'  name                        = "cloudmove-{r_name}"',
+                f'  name                        = "{gcs_bucket}"',
                 '  location                    = var.gcp_region',
                 '  uniform_bucket_level_access = true',
                 '  force_destroy               = true',
@@ -1430,8 +1489,8 @@ variable "admin_password" {
     created_db_ids: List[str] = []
 
     for r in resources:
-        r_id = r.get("safe_id", r.get("id").replace("-", "_"))
-        r_name = r.get("safe_name", r.get("name"))
+        r_id = sanitize_hcl_id(r.get("safe_id") or str(r.get("id", "res")), prefix="cm", max_len=64)
+        r_name = sanitize_kebab_identifier(r.get("safe_name") or str(r.get("name", "resource")), prefix="cm", max_len=63)
         r_type = r.get("type", "azurerm_linux_virtual_machine")
         cmir_type = r.get("cmir_type", "workload")
 

@@ -1538,6 +1538,31 @@ def clear_job_terraform_logs_endpoint(migration_id: str):
     return cloud_deployer.clear_terraform_logs(migration_id, job_dir)
 
 
+@router.post("/jobs/{migration_id}/regenerate")
+def regenerate_job_artifacts_endpoint(migration_id: str, re_inspect: bool = Query(True)):
+    """
+    Re-discover repository sources (if available) and regenerate CMIR + Terraform manifests
+    using the latest naming sanitizers and runtime fixes, updating the deployment workspace.
+    """
+    try:
+        updated_job = migration_orchestrator.regenerate_job_artifacts(
+            migration_id=migration_id,
+            re_inspect=re_inspect,
+        )
+        from app.migration.cloud_deployer import cloud_deployer
+
+        job_dir = cloud_deployer.resolve_job_dir(migration_id, updated_job)
+        return {
+            "success": True,
+            "job": updated_job,
+            "terraform_status": cloud_deployer.get_terraform_status(migration_id, job_dir),
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("/jobs/{migration_id}/deploy-live")
 def deploy_live_migration_job_endpoint(
     migration_id: str,

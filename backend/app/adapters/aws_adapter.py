@@ -95,8 +95,10 @@ class AWSAdapter(BaseProviderAdapter):
             elif "supabase" in engine_lower or "firebase" in engine_lower or meta.get("is_external_baas") is True:
                 target_type = "external_baas"
 
-        safe_name = node.name.lower().replace(" ", "-").replace("_", "-").replace("/", "-")
-        safe_id = node.id.lower().replace("-", "_").replace(".", "_").replace(":", "_").replace("/", "_")
+        from app.generators.naming import sanitize_hcl_id, sanitize_kebab_identifier
+
+        safe_name = sanitize_kebab_identifier(node.name, prefix="cm", max_len=63, require_leading_letter=True)
+        safe_id = sanitize_hcl_id(node.id, prefix="cm", max_len=64)
 
         return {
             "id": node.id,
