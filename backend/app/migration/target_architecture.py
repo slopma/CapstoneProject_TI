@@ -567,8 +567,10 @@ def build_target_cloud_cmir(
             c_id = f"target-app-{slug}-{c_name}"
             workload_ids[c_name] = c_id
             tier = comp.get("tier", "backend")
-            p_map = comp.get("container_ports", [80])[0]
-            h_map = comp.get("host_ports", [80])[0]
+            container_ports = comp.get("container_ports") or [80]
+            host_ports = comp.get("host_ports") or container_ports or [80]
+            p_map = container_ports[0]
+            h_map = host_ports[0]
 
             resources.append(Resource(
                 id=c_id,

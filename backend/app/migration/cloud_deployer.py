@@ -143,6 +143,7 @@ class CloudDeploymentRunner:
         self.workspace_root = workspace_root or default_root
         self._lock = threading.RLock()
         self._active_processes: Dict[str, subprocess.Popen] = {}
+        self._active_workers: Dict[str, threading.Thread] = {}
         self._active_commands: Dict[str, str] = {}
         self._cancelled_flags: Dict[str, bool] = {}
         self._job_logs: Dict[str, List[str]] = {}
@@ -711,6 +712,7 @@ class CloudDeploymentRunner:
         with self._lock:
             self._active_processes.pop(migration_id, None)
             self._active_commands.pop(migration_id, None)
+            self._active_workers.pop(migration_id, None)
 
         meta = {
             "status": "CANCELLED",
@@ -742,8 +744,15 @@ class CloudDeploymentRunner:
         """
         with self._lock:
             proc = self._active_processes.get(migration_id)
-            is_running = bool(proc and proc.poll() is None)
+            worker = self._active_workers.get(migration_id)
+            proc_running = bool(proc and proc.poll() is None)
+            worker_running = bool(worker and worker.is_alive())
+            is_running = proc_running or worker_running
             active_cmd = self._active_commands.get(migration_id) if is_running else None
+            if not is_running and migration_id in self._active_commands and not proc_running and not worker_running:
+                self._active_commands.pop(migration_id, None)
+            if not is_running and worker and not worker.is_alive():
+                self._active_workers.pop(migration_id, None)
             if migration_id not in self._job_logs:
                 self._job_logs[migration_id] = self._load_persisted_logs(job_dir)
             logs = list(self._job_logs.get(migration_id, []))
@@ -809,8 +818,9 @@ class CloudDeploymentRunner:
         already_active_cmd: Optional[str] = None
         with self._lock:
             proc = self._active_processes.get(migration_id)
-            if proc and proc.poll() is None:
-                already_active_cmd = self._active_commands.get(migration_id)
+            worker = self._active_workers.get(migration_id)
+            if (proc and proc.poll() is None) or (worker and worker.is_alive()):
+                already_active_cmd = self._active_commands.get(migration_id) or "running"
             else:
                 self._cancelled_flags[migration_id] = False
                 self._active_commands[migration_id] = clean_action
@@ -823,7 +833,18 @@ class CloudDeploymentRunner:
                 **self.get_terraform_status(migration_id, job_dir),
             }
 
-        self.materialize_job_files(job_dir, artifacts_files=artifacts_files, secrets=secrets)
+        try:
+            self.materialize_job_files(job_dir, artifacts_files=artifacts_files, secrets=secrets)
+        except Exception as exc:
+            with self._lock:
+                self._active_commands.pop(migration_id, None)
+            err_msg = f"Error preparando workspace de Terraform en {job_dir}: {exc}"
+            self._append_log(migration_id, job_dir, f"[ERROR] {err_msg}")
+            return {
+                "success": False,
+                "error": err_msg,
+                **self.get_terraform_status(migration_id, job_dir),
+            }
 
         terraform_bin = shutil.which("terraform")
         if not terraform_bin:
@@ -1025,8 +1046,14 @@ class CloudDeploymentRunner:
 
             last_res: Dict[str, Any] = {"returncode": 0, "cancelled": False}
             for step_label, cmd, timeout_s in steps_to_run:
+                with self._lock:
+                    if self._cancelled_flags.get(migration_id):
+                        return _finalize(False, "CANCELLED", {"returncode": -15, "cancelled": True})
                 if len(cmd) >= 2 and cmd[1] in ("plan", "apply", "destroy"):
                     _auto_import_orphaned_rds()
+                with self._lock:
+                    if self._cancelled_flags.get(migration_id):
+                        return _finalize(False, "CANCELLED", {"returncode": -15, "cancelled": True})
                 self._append_log(migration_id, job_dir, f"[{time.strftime('%X')}] {step_label}")
                 last_res = self._run_streaming_subprocess(migration_id, job_dir, cmd, env=env, timeout_sec=timeout_s)
                 if last_res.get("cancelled"):
@@ -1056,6 +1083,7 @@ class CloudDeploymentRunner:
             with self._lock:
                 self._active_processes.pop(migration_id, None)
                 self._active_commands.pop(migration_id, None)
+                self._active_workers.pop(migration_id, None)
 
             cancelled = bool(res_dict.get("cancelled"))
             status_str = "CANCELLED" if cancelled else ("SUCCESS" if success else "FAILED")
@@ -1101,8 +1129,49 @@ class CloudDeploymentRunner:
 
             return full_status
 
+        def _safe_worker() -> Dict[str, Any]:
+            with self._lock:
+                self._active_workers.setdefault(migration_id, threading.current_thread())
+            try:
+                return _worker()
+            except Exception as exc:
+                with self._lock:
+                    self._active_processes.pop(migration_id, None)
+                    self._active_commands.pop(migration_id, None)
+                    self._active_workers.pop(migration_id, None)
+                self._append_log(migration_id, job_dir, f"[ERROR INESPERADO] {exc}")
+                self._save_status_meta(
+                    migration_id,
+                    job_dir,
+                    {
+                        "status": "FAILED",
+                        "stage": f"FAILED_{clean_action.upper()}",
+                        "active_command": None,
+                        "is_running": False,
+                        "message": f"El comando 'terraform {clean_action}' finalizó con un error inesperado.",
+                        "error": str(exc),
+                        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    },
+                )
+                return {"success": False, **self.get_terraform_status(migration_id, job_dir)}
+
         if async_exec:
-            t = threading.Thread(target=_worker, daemon=True)
+            self._save_status_meta(
+                migration_id,
+                job_dir,
+                {
+                    "status": "RUNNING",
+                    "stage": f"TERRAFORM_{clean_action.upper()}",
+                    "active_command": clean_action,
+                    "is_running": True,
+                    "message": f"Ejecutando 'terraform {clean_action}' en {provider.upper()}...",
+                    "error": None,
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                },
+            )
+            t = threading.Thread(target=_safe_worker, daemon=True)
+            with self._lock:
+                self._active_workers[migration_id] = t
             t.start()
             # Give the worker thread a brief moment to initialize status
             time.sleep(0.08)
@@ -1112,7 +1181,7 @@ class CloudDeploymentRunner:
             status_payload["action"] = clean_action
             return status_payload
         else:
-            return _worker()
+            return _safe_worker()
 
     def verify_cloud_provider_credentials(
         self,
