@@ -235,6 +235,8 @@ class CloudMoveAgentDaemon:
                 result = self._task_capture_live_os(params)
             elif action == "stage_selected_paths":
                 result = self._task_stage_selected_paths(params)
+            elif action == "push_selected_paths_to_ec2":
+                result = self._task_push_selected_paths_to_ec2(params)
             elif action == "self_update":
                 result = self._task_self_update()
             else:
@@ -370,20 +372,14 @@ class CloudMoveAgentDaemon:
             "manifest": res,
         }
 
-    def _task_stage_selected_paths(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Collect selected host paths/directories, pack into bounded tar.gz, and stream chunks."""
-        stage_id = str(params.get("stage_id") or "").strip()
-        selected_paths = [
-            str(p).strip() for p in (params.get("selected_paths") or []) if str(p).strip()
-        ]
-        migration_id = params.get("migration_id")
-        if not stage_id or not selected_paths:
-            raise ValueError("Se requieren 'stage_id' y 'selected_paths' para sincronizar archivos.")
-
-        max_total_bytes = int(params.get("max_total_mb", 1500)) * 1024 * 1024
-        per_file_max_bytes = int(params.get("per_file_max_mb", 150)) * 1024 * 1024
-        chunk_size = 1024 * 1024
-
+    def _pack_selected_paths(
+        self,
+        selected_paths: List[str],
+        tar_path: Path,
+        max_total_bytes: int,
+        per_file_max_bytes: int,
+    ) -> Dict[str, Any]:
+        """Walk user-selected paths/directories safely and pack them into a gzip tar archive."""
         candidates: List[tuple[int, str, Path]] = []
         skipped_files: List[Dict[str, Any]] = []
         seen_real: set[str] = set()
@@ -403,7 +399,7 @@ class CloudMoveAgentDaemon:
                         targets.append(Path(root_dir) / fn)
 
             for fp in targets:
-                if len(candidates) >= 6000:
+                if len(candidates) >= 12000:
                     skipped_files.append({"path": str(fp), "size_bytes": 0, "reason": "max_file_count_reached"})
                     continue
                 if fp.is_symlink() or not fp.is_file():
@@ -424,64 +420,89 @@ class CloudMoveAgentDaemon:
                 if sz > per_file_max_bytes:
                     skipped_files.append({"path": rp_str, "size_bytes": sz, "reason": "exceeds_per_file_limit"})
                     continue
-                arc = rp_str.lstrip("/")
-                candidates.append((sz, arc, fp))
+                candidates.append((sz, rp_str.lstrip("/"), fp))
 
-        # Pack smaller user files/documents first so a massive binary never starves docs
+        # Pack smaller user files/documents first so massive installers never starve docs
         candidates.sort(key=lambda item: (item[0], item[1]))
         included_files: List[Dict[str, Any]] = []
         total_raw_bytes = 0
 
+        with tarfile.open(tar_path, "w:gz") as tf:
+            for sz, arc, fp in candidates:
+                if total_raw_bytes + sz > max_total_bytes:
+                    skipped_files.append({"path": "/" + arc, "size_bytes": sz, "reason": "exceeds_total_stage_budget"})
+                    continue
+                try:
+                    tf.add(fp, arcname=arc, recursive=False)
+                    total_raw_bytes += sz
+                    included_files.append({"path": "/" + arc, "size_bytes": sz})
+                except Exception as exc:
+                    skipped_files.append({"path": "/" + arc, "size_bytes": sz, "reason": str(exc)})
+
+            inv_bytes = json.dumps(
+                {
+                    "agent_id": self.agent_id,
+                    "selected_paths": selected_paths,
+                    "included_count": len(included_files),
+                    "total_included_bytes": total_raw_bytes,
+                    "skipped_count": len(skipped_files),
+                    "skipped_sample": skipped_files[:100],
+                },
+                indent=2,
+                ensure_ascii=False,
+            ).encode("utf-8")
+            ti = tarfile.TarInfo("var/log/cloudmove_selected_paths_inventory.json")
+            ti.size = len(inv_bytes)
+            tf.addfile(ti, io.BytesIO(inv_bytes))
+
+        return {
+            "included_files": included_files,
+            "skipped_files": skipped_files,
+            "total_raw_bytes": total_raw_bytes,
+            "archive_size": tar_path.stat().st_size,
+        }
+
+    def _stream_tar_chunks(self, tar_path: Path, post_chunk_fn: Any, chunk_size: int = 1024 * 1024) -> tuple[int, str]:
+        """Read tar.gz sequentially in 1 MiB chunks, compute SHA-256, and stream via callback."""
+        archive_size = tar_path.stat().st_size
+        total_chunks = max(1, (archive_size + chunk_size - 1) // chunk_size)
+        hasher = hashlib.sha256()
+        with tar_path.open("rb") as f:
+            for idx in range(total_chunks):
+                chunk = f.read(chunk_size)
+                hasher.update(chunk)
+                post_chunk_fn(idx, total_chunks, chunk)
+        return total_chunks, hasher.hexdigest()
+
+    def _task_stage_selected_paths(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Collect selected host paths/directories, pack into bounded tar.gz, and stream to CloudMove."""
+        stage_id = str(params.get("stage_id") or "").strip()
+        selected_paths = [
+            str(p).strip() for p in (params.get("selected_paths") or []) if str(p).strip()
+        ]
+        migration_id = params.get("migration_id")
+        if not stage_id or not selected_paths:
+            raise ValueError("Se requieren 'stage_id' y 'selected_paths' para sincronizar archivos.")
+
+        max_total_bytes = int(params.get("max_total_mb", 4096)) * 1024 * 1024
+        per_file_max_bytes = int(params.get("per_file_max_mb", 512)) * 1024 * 1024
+
         with tempfile.TemporaryDirectory(prefix="cm_stage_") as tmpd:
             tar_path = Path(tmpd) / f"{stage_id}.tar.gz"
-            with tarfile.open(tar_path, "w:gz") as tf:
-                for sz, arc, fp in candidates:
-                    if total_raw_bytes + sz > max_total_bytes:
-                        skipped_files.append({"path": "/" + arc, "size_bytes": sz, "reason": "exceeds_total_stage_budget"})
-                        continue
-                    try:
-                        tf.add(fp, arcname=arc, recursive=False)
-                        total_raw_bytes += sz
-                        included_files.append({"path": "/" + arc, "size_bytes": sz})
-                    except Exception as exc:
-                        skipped_files.append({"path": "/" + arc, "size_bytes": sz, "reason": str(exc)})
+            pack_info = self._pack_selected_paths(selected_paths, tar_path, max_total_bytes, per_file_max_bytes)
+            archive_size = pack_info["archive_size"]
 
-                inv_bytes = json.dumps(
-                    {
-                        "agent_id": self.agent_id,
-                        "selected_paths": selected_paths,
-                        "included_count": len(included_files),
-                        "total_included_bytes": total_raw_bytes,
-                        "skipped_count": len(skipped_files),
-                        "skipped_sample": skipped_files[:100],
-                    },
-                    indent=2,
-                    ensure_ascii=False,
-                ).encode("utf-8")
-                ti = tarfile.TarInfo("var/log/cloudmove_selected_paths_inventory.json")
-                ti.size = len(inv_bytes)
-                tf.addfile(ti, io.BytesIO(inv_bytes))
+            def _send_server(idx: int, total: int, chunk: bytes) -> None:
+                qs = urllib.parse.urlencode({"stage_id": stage_id, "chunk_index": idx, "total_chunks": total})
+                self._http_request(
+                    "POST",
+                    f"/api/v1/agents/{self.agent_id}/stage-chunk?{qs}",
+                    raw_bytes=chunk,
+                    content_type="application/octet-stream",
+                    timeout=60,
+                )
 
-            archive_size = tar_path.stat().st_size
-            total_chunks = max(1, (archive_size + chunk_size - 1) // chunk_size)
-            hasher = hashlib.sha256()
-            with tar_path.open("rb") as f:
-                for idx in range(total_chunks):
-                    chunk = f.read(chunk_size)
-                    hasher.update(chunk)
-                    qs = urllib.parse.urlencode({
-                        "stage_id": stage_id,
-                        "chunk_index": idx,
-                        "total_chunks": total_chunks,
-                    })
-                    self._http_request(
-                        "POST",
-                        f"/api/v1/agents/{self.agent_id}/stage-chunk?{qs}",
-                        raw_bytes=chunk,
-                        content_type="application/octet-stream",
-                        timeout=60,
-                    )
-
+            total_chunks, sha_hex = self._stream_tar_chunks(tar_path, _send_server)
             commit_resp = self._http_request(
                 "POST",
                 f"/api/v1/agents/{self.agent_id}/stage-commit",
@@ -490,8 +511,8 @@ class CloudMoveAgentDaemon:
                     "total_chunks": total_chunks,
                     "selected_paths": selected_paths,
                     "migration_id": migration_id,
-                    "expected_sha256": hasher.hexdigest(),
-                    "skipped_files": skipped_files[:200],
+                    "expected_sha256": sha_hex,
+                    "skipped_files": pack_info["skipped_files"][:200],
                 },
                 timeout=60,
             )
@@ -499,8 +520,67 @@ class CloudMoveAgentDaemon:
         return {
             "status": "success",
             "stage_id": stage_id,
-            "included_files_count": len(included_files),
-            "skipped_files_count": len(skipped_files),
+            "included_files_count": len(pack_info["included_files"]),
+            "skipped_files_count": len(pack_info["skipped_files"]),
+            "bundle_size_bytes": archive_size,
+            "commit": commit_resp,
+        }
+
+    def _task_push_selected_paths_to_ec2(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Stream selected host paths directly to target EC2 /upload-chunk + /upload-commit."""
+        target_url = str(params.get("target_url") or "").strip().rstrip("/")
+        sync_token = str(params.get("sync_token") or "").strip()
+        stage_id = str(params.get("stage_id") or f"ec2push-{uuid.uuid4().hex[:8]}").strip()
+        selected_paths = [
+            str(p).strip() for p in (params.get("selected_paths") or []) if str(p).strip()
+        ]
+        if not target_url or not sync_token or not selected_paths:
+            raise ValueError("Se requieren 'target_url', 'sync_token' y 'selected_paths'.")
+
+        max_total_bytes = int(params.get("max_total_mb", 24000)) * 1024 * 1024
+        per_file_max_bytes = int(params.get("per_file_max_mb", 1024)) * 1024 * 1024
+
+        def _ec2_post(path_qs: str, data: bytes, ctype: str) -> Dict[str, Any]:
+            req = urllib.request.Request(
+                f"{target_url}{path_qs}",
+                data=data,
+                headers={
+                    "Content-Type": ctype,
+                    "X-CloudMove-Sync-Token": sync_token,
+                    "User-Agent": f"CloudMove-Agent/{AGENT_VERSION}",
+                },
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+                return json.loads(raw) if raw.startswith("{") else {"raw": raw}
+
+        with tempfile.TemporaryDirectory(prefix="cm_ec2push_") as tmpd:
+            tar_path = Path(tmpd) / f"{stage_id}.tar.gz"
+            pack_info = self._pack_selected_paths(selected_paths, tar_path, max_total_bytes, per_file_max_bytes)
+            archive_size = pack_info["archive_size"]
+
+            def _send_ec2(idx: int, total: int, chunk: bytes) -> None:
+                qs = urllib.parse.urlencode({"stage_id": stage_id, "chunk_index": idx, "total_chunks": total})
+                _ec2_post(f"/upload-chunk?{qs}", chunk, "application/octet-stream")
+
+            total_chunks, sha_hex = self._stream_tar_chunks(tar_path, _send_ec2)
+            commit_resp = _ec2_post(
+                "/upload-commit",
+                json.dumps({
+                    "stage_id": stage_id,
+                    "total_chunks": total_chunks,
+                    "expected_sha256": sha_hex,
+                }).encode("utf-8"),
+                "application/json",
+            )
+
+        return {
+            "status": "success",
+            "mode": "direct_ec2_push",
+            "target_url": target_url,
+            "included_files_count": len(pack_info["included_files"]),
+            "skipped_files_count": len(pack_info["skipped_files"]),
             "bundle_size_bytes": archive_size,
             "commit": commit_resp,
         }
@@ -546,12 +626,12 @@ class CloudMoveAgentDaemon:
                     self.send_heartbeat()
                     self.poll_and_execute_tasks()
                     cycle_count += 1
-                    if cycle_count % 3 == 0:
+                    if cycle_count % 6 == 0:
                         self._task_collect_inventory()
             except Exception as exc:
                 logger.warning(f"Error en ciclo de agente: {exc}")
 
-            time.sleep(self.heartbeat_interval)
+            time.sleep(min(10, self.heartbeat_interval))
 
     def stop(self) -> None:
         self._running = False

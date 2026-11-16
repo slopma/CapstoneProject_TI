@@ -26,6 +26,7 @@ from enum import Enum
 import json
 import os
 from pathlib import Path
+import secrets
 import shutil
 import uuid
 from typing import Any, Dict, List, Optional
@@ -440,47 +441,25 @@ class MigrationOrchestrator:
                         str(p) for p in (src_cfg.get("selected_user_paths") or []) if str(p).strip()
                     ]
                 manifest["migration_id"] = migration_id
+                manifest.setdefault("uc2_sync_token", secrets.token_urlsafe(18))
                 req_stage_id = src_cfg.get("stage_id") or (src_cfg.get("manifest_override") or {}).get("stage_id")
                 if req_stage_id:
                     manifest["stage_id"] = req_stage_id
                 try:
-                    from app.migration.uc2_staging import (
-                        create_or_get_stage,
-                        find_ready_stage,
-                        link_stage_to_migration,
-                    )
+                    from app.migration.uc2_staging import ensure_uc2_selected_paths_staged
 
                     sel_list = manifest.get("selected_user_paths") or []
-                    ready_stg = find_ready_stage(
-                        stage_id=manifest.get("stage_id"),
-                        migration_id=migration_id,
-                        agent_id=resolved_agent_id,
-                        selected_paths=sel_list,
-                    )
-                    if ready_stg:
-                        manifest["stage_id"] = ready_stg["stage_id"]
-                        manifest["staged_files_count"] = ready_stg.get("files_count", 0)
-                        link_stage_to_migration(ready_stg["stage_id"], migration_id)
-                    elif capture_live and sel_list and resolved_agent_id:
-                        ag = get_transactional_db().get_agent(resolved_agent_id)
-                        ver = str((ag or {}).get("version") or "0")
-                        if tuple(int(x) for x in ver.split(".")[:2]) >= (2, 2):
-                            stg = create_or_get_stage(
-                                selected_paths=sel_list,
-                                agent_id=resolved_agent_id,
-                                migration_id=migration_id,
-                            )
-                            manifest["stage_id"] = stg["stage_id"]
-                            get_transactional_db().create_agent_task(
-                                agent_id=resolved_agent_id,
-                                action="stage_selected_paths",
-                                parameters={
-                                    "stage_id": stg["stage_id"],
-                                    "selected_paths": sel_list,
-                                    "migration_id": migration_id,
-                                },
-                                timeout_seconds=900,
-                            )
+                    if sel_list:
+                        stg_res = ensure_uc2_selected_paths_staged(
+                            selected_paths=sel_list,
+                            agent_id=resolved_agent_id,
+                            migration_id=migration_id,
+                            stage_id=manifest.get("stage_id"),
+                            public_api_url=os.getenv("CLOUDMOVE_API_URL", ""),
+                        )
+                        if stg_res.get("stage"):
+                            manifest["stage_id"] = stg_res["stage"]["stage_id"]
+                            manifest["staged_files_count"] = stg_res["stage"].get("files_count", 0)
                 except Exception:
                     pass
                 require_live_mem = bool(src_cfg.get("require_live_memory_state", False))
@@ -1248,12 +1227,13 @@ class MigrationOrchestrator:
             return job
         resolved = stage_meta or self._resolve_uc2_stage_meta(job, migration_id=migration_id)
         src_env = dict(job.get("source_environment") or {})
+        src_env.setdefault("uc2_sync_token", secrets.token_urlsafe(18))
         if resolved:
             src_env["stage_id"] = resolved["stage_id"]
             src_env["staged_files_count"] = resolved.get("files_count", 0)
             if resolved.get("selected_paths") and not src_env.get("selected_user_paths"):
                 src_env["selected_user_paths"] = resolved["selected_paths"]
-            job["source_environment"] = src_env
+        job["source_environment"] = src_env
         cmir_obj = CMIR.model_validate(job["cmir"])
         compat = job.get("compatibility_assessment") or evaluate_vm_image_compatibility(
             src_env, target_provider=job.get("target_provider", "aws")

@@ -30,6 +30,7 @@ export default function Uc2StageTransferBox({
   const [infoMsg, setInfoMsg] = useState("");
   const [upgradeCmd, setUpgradeCmd] = useState("");
   const folderInputRef = useRef(null);
+  const filesInputRef = useRef(null);
   const pollRef = useRef(null);
 
   const loadStatus = useCallback(async () => {
@@ -153,15 +154,18 @@ export default function Uc2StageTransferBox({
       setBusyMode("");
       setProgress(null);
       if (folderInputRef.current) folderInputRef.current.value = "";
+      if (filesInputRef.current) filesInputRef.current.value = "";
     }
   };
 
-  if (!selectedPaths || selectedPaths.length === 0) {
-    return null;
-  }
-
   const readyStage = statusData?.ready ? statusData.stage : null;
   const agSupports = Boolean(statusData?.supports_file_staging);
+  const needsUpgradeBanner = Boolean(statusData?.agent_connected && !agSupports);
+  const shownUpgradeCmd = upgradeCmd || (needsUpgradeBanner ? statusData?.upgrade_command_linux || "" : "");
+
+  if ((!selectedPaths || selectedPaths.length === 0) && !needsUpgradeBanner) {
+    return null;
+  }
 
   return (
     <div
@@ -178,9 +182,11 @@ export default function Uc2StageTransferBox({
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <AwsStatusIndicator type={readyStage ? "success" : "pending"}>
+          <AwsStatusIndicator type={readyStage ? "success" : agSupports ? "info" : "pending"}>
             {readyStage
               ? `Staging listo: ${readyStage.files_count} archivos reales (${fmtBytes(readyStage.bundle_size_bytes)} .tar.gz)`
+              : agSupports
+              ? "Se subirá automáticamente al capturar / desplegar (o sincroniza ahora)"
               : "Contenido real pendiente de carga a Staging AWS"}
           </AwsStatusIndicator>
           {statusData?.agent_connected && (
@@ -195,7 +201,7 @@ export default function Uc2StageTransferBox({
             type="button"
             className="cm-btn sm secondary"
             onClick={handleAgentSync}
-            disabled={Boolean(busyMode)}
+            disabled={Boolean(busyMode) || !selectedPaths || selectedPaths.length === 0}
             title={agSupports ? "Empaquetar y subir rutas automáticamente desde el agente" : "Sincronizar vía agente (requiere v2.2+)"}
           >
             {busyMode === "agent" ? "Sincronizando agente..." : "Sincronizar vía Agente"}
@@ -205,13 +211,29 @@ export default function Uc2StageTransferBox({
             type="button"
             className="cm-btn sm primary"
             onClick={() => folderInputRef.current && folderInputRef.current.click()}
-            disabled={Boolean(busyMode)}
+            disabled={Boolean(busyMode) || !selectedPaths || selectedPaths.length === 0}
           >
-            {busyMode === "browser" ? "Subiendo carpeta..." : "Subir carpeta local desde navegador"}
+            {busyMode === "browser" ? "Subiendo..." : "Subir carpeta local"}
+          </button>
+
+          <button
+            type="button"
+            className="cm-btn sm secondary"
+            onClick={() => filesInputRef.current && filesInputRef.current.click()}
+            disabled={Boolean(busyMode) || !selectedPaths || selectedPaths.length === 0}
+          >
+            Subir archivo(s)
           </button>
 
           <input
             ref={folderInputRef}
+            type="file"
+            multiple
+            style={{ display: "none" }}
+            onChange={handleFolderChosen}
+          />
+          <input
+            ref={filesInputRef}
             type="file"
             multiple
             style={{ display: "none" }}
@@ -233,19 +255,22 @@ export default function Uc2StageTransferBox({
         </div>
       )}
 
-      {upgradeCmd && (
+      {shownUpgradeCmd && !readyStage && (
         <AwsAlert
-          type="info"
-          title={`Agente actual en v${statusData?.agent_version || "2.1.0"} — Actualiza en 1 comando o usa 'Subir carpeta local desde navegador'`}
+          type={needsUpgradeBanner ? "warning" : "info"}
+          title={`Agente ${statusData?.agent_hostname || "remoto"} en v${statusData?.agent_version || "2.1.0"} — Actualiza a v${statusData?.latest_agent_version || "2.2.0"} para subida automática al capturar/migrar`}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
-            <code style={{ fontSize: 11.5 }}>{upgradeCmd}</code>
+          <div style={{ fontSize: 12, color: "#414d5c", marginTop: 2 }}>
+            Ejecuta este comando en el equipo origen (conserva tu inscripción y token) o sube la carpeta/archivo directo desde tu navegador:
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+            <code style={{ fontSize: 11.5 }}>{shownUpgradeCmd}</code>
             {onCopy && (
               <button
                 type="button"
                 className="cm-btn sm secondary"
                 style={{ padding: "2px 8px", fontSize: 11 }}
-                onClick={() => onCopy(upgradeCmd, "Comando de actualización copiado")}
+                onClick={() => onCopy(shownUpgradeCmd, "Comando de actualización copiado")}
               >
                 Copiar comando
               </button>

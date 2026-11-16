@@ -110,43 +110,46 @@ def test_agent_v22_stage_selected_paths_and_install_upgrade(tmp_path: Path, monk
     agent_id = enr["agent_id"]
     api_key = enr["agent_api_key"]
 
-    src_dir = tmp_path / "Descargas"
-    (src_dir / "sub").mkdir(parents=True)
-    (src_dir / "sub" / "informe.txt").write_text("hola aws", encoding="utf-8")
-    (src_dir / ".env").write_text("SECRET=123", encoding="utf-8")
-    (src_dir / "id_rsa").write_text("PRIVATE KEY", encoding="utf-8")
+    try:
+        src_dir = tmp_path / "Descargas"
+        (src_dir / "sub").mkdir(parents=True)
+        (src_dir / "sub" / "informe.txt").write_text("hola aws", encoding="utf-8")
+        (src_dir / ".env").write_text("SECRET=123", encoding="utf-8")
+        (src_dir / "id_rsa").write_text("PRIVATE KEY", encoding="utf-8")
 
-    from cloudmove_agent.agent_daemon import CloudMoveAgentDaemon
+        from cloudmove_agent.agent_daemon import CloudMoveAgentDaemon
 
-    daemon = CloudMoveAgentDaemon(server_url="http://testserver", agent_id=agent_id, api_key=api_key)
+        daemon = CloudMoveAgentDaemon(server_url="http://testserver", agent_id=agent_id, api_key=api_key)
 
-    def _client_http(method, path, payload=None, timeout=15, raw_bytes=None, content_type="application/json"):
-        headers = daemon._build_auth_headers(content_type=content_type)
-        if raw_bytes is not None:
-            resp = client.request(method, path, content=raw_bytes, headers=headers)
-        elif payload is not None:
-            resp = client.request(method, path, json=payload, headers=headers)
-        else:
-            resp = client.request(method, path, headers=headers)
-        assert resp.status_code < 300, resp.text
-        return resp.json() if resp.content else {}
+        def _client_http(method, path, payload=None, timeout=15, raw_bytes=None, content_type="application/json"):
+            headers = daemon._build_auth_headers(content_type=content_type)
+            if raw_bytes is not None:
+                resp = client.request(method, path, content=raw_bytes, headers=headers)
+            elif payload is not None:
+                resp = client.request(method, path, json=payload, headers=headers)
+            else:
+                resp = client.request(method, path, headers=headers)
+            assert resp.status_code < 300, resp.text
+            return resp.json() if resp.content else {}
 
-    daemon._http_request = _client_http
+        daemon._http_request = _client_http
 
-    stage_id = "uc2stg-agenttest01"
-    res = daemon._task_stage_selected_paths({
-        "stage_id": stage_id,
-        "selected_paths": [str(src_dir)],
-    })
-    assert res["status"] == "success"
-    assert res["included_files_count"] == 1
-    assert res["skipped_files_count"] >= 2  # .env & id_rsa excluded
+        stage_id = "uc2stg-agenttest01"
+        res = daemon._task_stage_selected_paths({
+            "stage_id": stage_id,
+            "selected_paths": [str(src_dir)],
+        })
+        assert res["status"] == "success"
+        assert res["included_files_count"] == 1
+        assert res["skipped_files_count"] >= 2  # .env & id_rsa excluded
 
-    meta = uc2_staging.get_stage_metadata(stage_id, include_secrets=True)
-    assert meta["status"] == "READY"
-    rel_paths = [f["path"] for f in meta["files"]]
-    assert any(p.endswith("Descargas/sub/informe.txt") for p in rel_paths)
-    assert not any(p.endswith(".env") or p.endswith("id_rsa") for p in rel_paths)
+        meta = uc2_staging.get_stage_metadata(stage_id, include_secrets=True)
+        assert meta["status"] == "READY"
+        rel_paths = [f["path"] for f in meta["files"]]
+        assert any(p.endswith("Descargas/sub/informe.txt") for p in rel_paths)
+        assert not any(p.endswith(".env") or p.endswith("id_rsa") for p in rel_paths)
+    finally:
+        client.post(f"/api/v1/agents/{agent_id}/revoke", json={"reason": "test cleanup"})
 
 
 def test_uc2_user_data_size_and_telemetry_directory_binary_handlers(tmp_path: Path, monkeypatch):
@@ -196,16 +199,18 @@ def test_uc2_user_data_size_and_telemetry_directory_binary_handlers(tmp_path: Pa
     rd = tmp_path / "rootfs"
     ed = tmp_path / "ebs"
     (rd / "home" / "lacastrilp" / "Descargas" / "docs").mkdir(parents=True)
-    (ed / "rootfs").mkdir(parents=True)
+    (ed / "rootfs" / "home" / "lacastrilp" / "Escritorio").mkdir(parents=True)
     pdf_bytes = b"%PDF-1.4\x00\xff\xfeSAMPLE"
     (rd / "home" / "lacastrilp" / "Descargas" / "docs" / "guia.pdf").write_bytes(pdf_bytes)
     (rd / "home" / "lacastrilp" / "Descargas" / "leeme.txt").write_text("archivo texto", encoding="utf-8")
+    (ed / "rootfs" / "home" / "lacastrilp" / "Escritorio" / "ebs_only.txt").write_text("solo en ebs", encoding="utf-8")
     tok_file = tmp_path / "sync_token"
     tok_file.write_text("sync_secret_456", encoding="utf-8")
 
     mod.RD = str(rd)
     mod.ED = str(ed)
     mod.TK = str(tok_file)
+    mod.CD = str(tmp_path / "chunks")
 
     import http.server
     srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), mod.H)
@@ -220,6 +225,16 @@ def test_uc2_user_data_size_and_telemetry_directory_binary_handlers(tmp_path: Pa
         assert r_dir.status == 200
         assert "leeme.txt" in body_dir
         assert "docs" in body_dir
+
+        conn.request("GET", "/files/view?path=home/lacastrilp/Escritorio/ebs_only.txt")
+        r_ebs = conn.getresponse()
+        assert r_ebs.status == 200
+        assert "solo en ebs" in r_ebs.read().decode("utf-8")
+
+        conn.request("GET", "/files")
+        files_json = json.loads(conn.getresponse().read().decode("utf-8"))
+        ebs_row = next(f for f in files_json["files"] if f["path"].endswith("ebs_only.txt"))
+        assert ebs_row["ebs_mirrored"] is True
 
         conn.request("GET", "/files/view?path=home/lacastrilp/Descargas/docs/guia.pdf")
         r_bin = conn.getresponse()
@@ -236,6 +251,56 @@ def test_uc2_user_data_size_and_telemetry_directory_binary_handlers(tmp_path: Pa
 
         conn.request("POST", "/sync-stage", body=b'{"bundle_url":"https://digitalcafeluna.store/x"}', headers={"X-CloudMove-Sync-Token": "wrong"})
         assert conn.getresponse().status == 403
+
+        chunk_payload = b"hello-chunk"
+        conn.request(
+            "POST",
+            "/upload-chunk?stage_id=testup&chunk_index=0",
+            body=chunk_payload,
+            headers={"X-CloudMove-Sync-Token": "sync_secret_456"},
+        )
+        assert conn.getresponse().status == 200
+        assert (tmp_path / "chunks" / "testup" / "p000000").read_bytes() == chunk_payload
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_paths_cover_and_auto_stage_on_uc2_inspect(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(uc2_staging, "get_staging_base_dir", lambda: tmp_path / "uc2_staged")
+    assert uc2_staging._paths_cover(["/home/u/Descargas"], ["/home/u/Descargas/a.pdf"]) is True
+    assert uc2_staging._paths_cover(["/home/u/Descargas"], ["/home/u/Descargas", "/home/u/hoja.pdf"]) is False
+
+    tok = client.post("/api/v1/agents/enrollment-tokens", json={"ttl_seconds": 300, "max_uses": 1}).json()["token"]
+    enr = client.post(
+        "/api/v1/agents/enroll",
+        json={"enrollment_token": tok, "hostname": "inspect-kali-node", "version": "2.2.0"},
+    ).json()
+    agent_id = enr["agent_id"]
+
+    try:
+        resp = client.post(
+            "/api/v1/migration/use-case-2/inspect",
+            json={
+                "image_path": "live_system",
+                "capture_live_host": True,
+                "source_type": "live_server",
+                "agent_id": agent_id,
+                "manifest_override": {
+                    "format": "QCOW2",
+                    "selected_user_paths": ["/home/lacastrilp/Descargas", "/home/lacastrilp/hojade vida.pdf"],
+                },
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        stg = data.get("stage_status") or {}
+        assert stg.get("dispatched") is True
+        assert stg.get("stage", {}).get("stage_id")
+
+        from app.persistence.transactional_db import get_transactional_db
+
+        tasks = get_transactional_db().get_pending_tasks_for_agent(agent_id)
+        assert any(t["action"] == "stage_selected_paths" for t in tasks)
+    finally:
+        client.post(f"/api/v1/agents/{agent_id}/revoke", json={"reason": "test cleanup"})

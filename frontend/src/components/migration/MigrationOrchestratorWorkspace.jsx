@@ -1089,8 +1089,17 @@ export default function MigrationOrchestratorWorkspace({
         setUc2Decisions((prev) => ({ ...prev, ...catDecisions }));
       }
       if (isLive) {
+        let extra = "";
+        if (data.stage_status?.ready && data.stage_status?.stage) {
+          setUc2StageMeta(data.stage_status.stage);
+          extra = ` · Archivos en Staging: ${data.stage_status.stage.files_count || 0} OK`;
+        } else if (data.stage_status?.dispatched) {
+          extra = " · Sincronización automática de archivos seleccionada iniciada en el agente.";
+        } else if (data.stage_status?.upgrade_required) {
+          extra = ` · Aviso: actualiza el agente (v${data.stage_status.agent_version}) o sube la carpeta/archivo desde el navegador para incluirlos en AWS.`;
+        }
         setStatusBanner(
-          `Captura de SO en vivo completada exitosamente: ${data.manifest?.os?.distro || "Linux"} (${data.manifest?.name}) · Formato ${data.manifest?.format} · SHA-256 ${data.manifest?.sha256?.slice(0, 16)}...`
+          `Captura de SO en vivo completada exitosamente: ${data.manifest?.os?.distro || "Linux"} (${data.manifest?.name}) · Formato ${data.manifest?.format} · SHA-256 ${data.manifest?.sha256?.slice(0, 16)}...${extra}`
         );
       } else {
         setStatusBanner(
@@ -2276,6 +2285,10 @@ export default function MigrationOrchestratorWorkspace({
                         null
                       }
                       onStageReady={setUc2StageMeta}
+                      onCopy={(txt, msg) => {
+                        navigator.clipboard?.writeText(txt);
+                        setStatusBanner(msg || "Copiado al portapapeles");
+                      }}
                     />
                   </div>
 

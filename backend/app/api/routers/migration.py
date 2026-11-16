@@ -1155,7 +1155,10 @@ def orchestrate_use_case_1_migration(request: Optional[AppInspectRequest] = None
 
 
 @router.post("/use-case-2/inspect")
-def inspect_use_case_2_vm_image(request: Optional[ImageInspectRequest] = None):
+def inspect_use_case_2_vm_image(
+    http_request: Request,
+    request: Optional[ImageInspectRequest] = None,
+):
     """
     Use Case 2: Inspect a VM/disk image (`VMDK`, `VHD`, `VHDX`, `QCOW2`, `RAW`, `OVA`, `OVF`)
     or capture the live operating system where CloudMove/agent runs.
@@ -1173,6 +1176,23 @@ def inspect_use_case_2_vm_image(request: Optional[ImageInspectRequest] = None):
             output_format=req.output_format or "QCOW2",
             agent_id=req.agent_id,
         )
+        sel_paths = (req.manifest_override or {}).get("selected_user_paths") or manifest.get("selected_user_paths") or []
+        stage_status = None
+        if req.capture_live_host and sel_paths:
+            try:
+                from app.migration.uc2_staging import ensure_uc2_selected_paths_staged
+
+                stage_status = ensure_uc2_selected_paths_staged(
+                    selected_paths=sel_paths,
+                    agent_id=req.agent_id or (manifest.get("live_capture_details") or {}).get("captured_via", "").replace("agent:", "") or None,
+                    stage_id=(req.manifest_override or {}).get("stage_id"),
+                    public_api_url=_infer_public_api_url(http_request),
+                )
+                if stage_status.get("stage"):
+                    manifest["stage_id"] = stage_status["stage"]["stage_id"]
+                    manifest["staged_files_count"] = stage_status["stage"].get("files_count", 0)
+            except Exception:
+                stage_status = None
         source_type = str(manifest.get("source_type") or req.source_type or "standalone_offline_disk_image")
         compat = evaluate_vm_image_compatibility(
             manifest,
@@ -1194,6 +1214,7 @@ def inspect_use_case_2_vm_image(request: Optional[ImageInspectRequest] = None):
             "transformation_catalog": manifest.get("transformation_catalog"),
             "compatibility": compat,
             "cmir": cmir_obj.model_dump(),
+            "stage_status": stage_status,
         }
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1240,7 +1261,10 @@ def trigger_probe_devices(agent_id: Optional[str] = Query(None)):
 
 
 @router.post("/use-case-2/capture-live")
-def capture_live_host_use_case_2(request: Optional[ImageInspectRequest] = None):
+def capture_live_host_use_case_2(
+    http_request: Request,
+    request: Optional[ImageInspectRequest] = None,
+):
     """
     Use Case 2: Capture the live host operating system (system files, /etc, fstab, packages,
     services, kernel) and generate an authentic VM disk image (QCOW2/RAW) for cloud provisioning.
@@ -1248,7 +1272,7 @@ def capture_live_host_use_case_2(request: Optional[ImageInspectRequest] = None):
     req = request or ImageInspectRequest()
     req.capture_live_host = True
     req.source_type = "live_server"
-    return inspect_use_case_2_vm_image(req)
+    return inspect_use_case_2_vm_image(http_request=http_request, request=req)
 
 
 @router.post("/use-case-2/migrate")
@@ -1344,6 +1368,44 @@ def _sync_job_after_terraform(migration_id: str, tf_result: Dict[str, Any]) -> N
                 )
             else:
                 break
+
+        # Ensure Case 2 selected user folders/files reach the newly created EC2 (via staging pull or direct push)
+        latest_job = migration_orchestrator.get_migration(migration_id)
+        if latest_job.get("use_case") == "vm_image":
+            src_env = latest_job.get("source_environment") or {}
+            src_cfg = latest_job.get("source_config") or {}
+            sel_paths = src_env.get("selected_user_paths") or src_cfg.get("selected_user_paths") or []
+            ec2_ip = (
+                ((tf_result.get("outputs") or {}).get("instance_public_ip") or {}).get("value")
+                or ((tf_result.get("primary_instance") or {}).get("public_ip"))
+            )
+            sync_tok = str(src_env.get("uc2_sync_token") or "").strip()
+            if ec2_ip and sel_paths:
+                from app.migration.uc2_staging import (
+                    build_stage_download_url,
+                    dispatch_push_to_ec2,
+                    find_ready_stage,
+                    push_stage_to_ec2,
+                )
+
+                ready_stg = find_ready_stage(
+                    stage_id=src_env.get("stage_id"),
+                    migration_id=migration_id,
+                    agent_id=src_cfg.get("agent_id"),
+                    selected_paths=sel_paths,
+                    include_secrets=True,
+                )
+                if ready_stg:
+                    dl_url = build_stage_download_url(_infer_public_api_url(None), ready_stg)
+                    push_stage_to_ec2(ec2_ip, dl_url, sync_token=sync_tok or ready_stg.get("sync_token"))
+                elif sync_tok:
+                    dispatch_push_to_ec2(
+                        ec2_host=ec2_ip,
+                        selected_paths=sel_paths,
+                        sync_token=sync_tok,
+                        agent_id=src_cfg.get("agent_id"),
+                        migration_id=migration_id,
+                    )
     except Exception:
         pass
 
@@ -1979,64 +2041,25 @@ def get_uc2_stage_status(
 @router.post("/uc2-stage/dispatch-agent")
 def dispatch_uc2_agent_stage(req: Uc2DispatchAgentStageRequest, http_request: Request):
     """Request the enrolled remote agent to pack and upload selected folders/files to staging."""
-    from app.migration.uc2_staging import create_or_get_stage, get_stage_metadata
-    from app.api.routers.agents import LATEST_AGENT_VERSION, _is_version_gte
+    from app.migration.uc2_staging import ensure_uc2_selected_paths_staged
 
     if not req.selected_paths:
         raise HTTPException(status_code=400, detail="Debes seleccionar al menos una carpeta o archivo.")
 
-    db = get_transactional_db()
-    remote_agents = [
-        a for a in db.list_agents(include_revoked=False)
-        if a.get("status") == "ONLINE"
-        and (a.get("hostname") or "").lower() not in ("cloudmove-server", "localhost")
-        and a.get("ip_address") != "100.50.88.231"
-    ]
-    agent = (
-        next((a for a in remote_agents if a.get("agent_id") == req.agent_id), None)
-        if req.agent_id
-        else (remote_agents[0] if remote_agents else None)
-    )
-    if not agent:
-        raise HTTPException(status_code=404, detail="No hay ningún agente remoto ONLINE conectado.")
-
-    api_url = _infer_public_api_url(http_request)
-    upgrade_cmd = f"curl -sSL {api_url}/api/v1/agents/install.sh | sudo bash -s -- --upgrade"
-    ag_ver = str(agent.get("version") or "2.1.0")
-    if not _is_version_gte(ag_ver, LATEST_AGENT_VERSION):
-        return {
-            "dispatched": False,
-            "upgrade_required": True,
-            "agent_id": agent["agent_id"],
-            "agent_version": ag_ver,
-            "latest_agent_version": LATEST_AGENT_VERSION,
-            "upgrade_command_linux": upgrade_cmd,
-            "message": f"El agente instalado en '{agent['hostname']}' usa v{ag_ver}. Actualízalo a v{LATEST_AGENT_VERSION} con el comando sugerido o sube la carpeta directamente desde tu navegador.",
-        }
-
-    meta = create_or_get_stage(
+    res = ensure_uc2_selected_paths_staged(
         selected_paths=req.selected_paths,
-        agent_id=agent["agent_id"],
+        agent_id=req.agent_id,
         migration_id=req.migration_id,
-        source_type="agent",
+        public_api_url=_infer_public_api_url(http_request),
     )
-    task = db.create_agent_task(
-        agent_id=agent["agent_id"],
-        action="stage_selected_paths",
-        parameters={
-            "stage_id": meta["stage_id"],
-            "selected_paths": req.selected_paths,
-            "migration_id": req.migration_id,
-            "max_total_mb": req.max_total_mb,
-        },
-        timeout_seconds=900,
-    )
-    return {
-        "dispatched": True,
-        "upgrade_required": False,
-        "task": task,
-        "stage": get_stage_metadata(meta["stage_id"], include_secrets=False),
-    }
+    if res.get("status") == "no_online_agent":
+        raise HTTPException(status_code=404, detail="No hay ningún agente remoto ONLINE conectado.")
+    if res.get("upgrade_required"):
+        res["message"] = (
+            f"El agente instalado usa v{res.get('agent_version', '2.1.0')}. "
+            f"Actualízalo a v{res.get('latest_agent_version', '2.2.0')} con el comando sugerido o sube la carpeta directamente desde tu navegador."
+        )
+    return res
 
 
 @router.get("/uc2-stage/{stage_id}/bundle.tar.gz")

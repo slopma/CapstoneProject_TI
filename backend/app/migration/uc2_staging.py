@@ -29,7 +29,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from app.persistence.transactional_db import get_transactional_db
 
 
-DEFAULT_MAX_STAGE_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB safety limit per stage archive
+DEFAULT_MAX_STAGE_BYTES = 15 * 1024 * 1024 * 1024  # 15 GiB safety limit per stage archive
+MIN_FREE_DISK_BYTES = 4 * 1024 * 1024 * 1024  # Keep at least 4 GiB free on CloudMove host
 STAGE_ID_RE = re.compile(r"^[A-Za-z0-9_.\-]{3,80}$")
 
 _STAGE_LOCK = threading.RLock()
@@ -37,6 +38,39 @@ _STAGE_LOCK = threading.RLock()
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _ensure_staging_base() -> Path:
+    base = get_staging_base_dir()
+    base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def get_dynamic_stage_budget_mb() -> int:
+    """Compute safe staging budget (in MiB) based on available host storage."""
+    try:
+        free_b = shutil.disk_usage(_ensure_staging_base()).free
+        usable_mb = max(512, int((free_b - MIN_FREE_DISK_BYTES) // (1024 * 1024)))
+        return min(14 * 1024, usable_mb)
+    except Exception:
+        return 4096
+
+
+def prune_old_stages(keep_latest: int = 3, protected_stage_id: Optional[str] = None) -> None:
+    """Remove stale staging directories when creating new uploads to prevent disk bloat."""
+    try:
+        base = _ensure_staging_base()
+        entries = [d for d in base.iterdir() if d.is_dir()]
+        entries.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+        for idx, d in enumerate(entries):
+            if idx < keep_latest or (protected_stage_id and d.name == protected_stage_id):
+                continue
+            meta = _read_meta(d.name)
+            if meta and meta.get("status") == "UPLOADING":
+                continue
+            shutil.rmtree(d, ignore_errors=True)
+    except Exception:
+        pass
 
 
 def get_staging_base_dir() -> Path:
@@ -105,6 +139,7 @@ def create_or_get_stage(
     agent_id: Optional[str] = None,
     migration_id: Optional[str] = None,
     source_type: str = "agent",
+    sync_token: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Initialize or update metadata for a Case 2 file staging session."""
     clean_id = (
@@ -117,6 +152,7 @@ def create_or_get_stage(
     ][:100]
 
     with _STAGE_LOCK:
+        prune_old_stages(keep_latest=3, protected_stage_id=clean_id)
         existing = _read_meta(clean_id)
         if existing:
             if norm_paths:
@@ -125,6 +161,8 @@ def create_or_get_stage(
                 existing["agent_id"] = agent_id
             if migration_id:
                 existing["migration_id"] = migration_id
+            if sync_token:
+                existing["sync_token"] = sync_token
             return _write_meta(clean_id, existing)
 
         now = _utc_now()
@@ -136,7 +174,7 @@ def create_or_get_stage(
             "status": "PENDING",
             "selected_paths": norm_paths,
             "download_token": secrets.token_urlsafe(24),
-            "sync_token": secrets.token_urlsafe(18),
+            "sync_token": sync_token or secrets.token_urlsafe(18),
             "files": [],
             "skipped_files": [],
             "files_count": 0,
@@ -390,18 +428,15 @@ def get_stage_metadata(stage_id: str, include_secrets: bool = False) -> Optional
     return clean
 
 
-def _paths_overlap(stage_paths: Iterable[str], requested_paths: Iterable[str]) -> bool:
+def _paths_cover(stage_paths: Iterable[str], requested_paths: Iterable[str]) -> bool:
     s_norm = [str(p).strip().rstrip("/") for p in stage_paths if str(p).strip()]
     r_norm = [str(p).strip().rstrip("/") for p in requested_paths if str(p).strip()]
     if not s_norm or not r_norm:
         return False
-    for req in r_norm:
-        if any(
-            st == req or st.startswith(f"{req}/") or req.startswith(f"{st}/")
-            for st in s_norm
-        ):
-            return True
-    return False
+    return all(
+        any(st == req or req.startswith(f"{st}/") for st in s_norm)
+        for req in r_norm
+    )
 
 
 def find_ready_stage(
@@ -412,11 +447,12 @@ def find_ready_stage(
     include_secrets: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Locate the newest READY staged bundle matching stage_id, migration_id, or selected_paths."""
-    base = get_staging_base_dir()
+    base = _ensure_staging_base()
     if stage_id:
         meta = _read_meta(stage_id)
         if meta and meta.get("status") == "READY" and (_stage_dir(stage_id) / "bundle.tar.gz").is_file():
-            return meta if include_secrets else get_stage_metadata(stage_id, include_secrets=False)
+            if not selected_paths or _paths_cover(meta.get("selected_paths") or [], selected_paths):
+                return meta if include_secrets else get_stage_metadata(stage_id, include_secrets=False)
 
     candidates: List[Dict[str, Any]] = []
     for entry in base.iterdir():
@@ -433,12 +469,19 @@ def find_ready_stage(
 
     chosen: Optional[Dict[str, Any]] = None
     if migration_id:
-        chosen = next((m for m in candidates if m.get("migration_id") == migration_id), None)
+        chosen = next(
+            (
+                m for m in candidates
+                if m.get("migration_id") == migration_id
+                and (not selected_paths or _paths_cover(m.get("selected_paths") or [], selected_paths))
+            ),
+            None,
+        )
     if not chosen and selected_paths:
         chosen = next(
             (
                 m for m in candidates
-                if _paths_overlap(m.get("selected_paths") or [], selected_paths)
+                if _paths_cover(m.get("selected_paths") or [], selected_paths)
                 and (not agent_id or not m.get("agent_id") or m.get("agent_id") == agent_id)
             ),
             None,
@@ -506,3 +549,172 @@ def push_stage_to_ec2(
         "ok": False,
         "error": last_err or "El endpoint /sync-stage aún no está habilitado en la instancia EC2 actual (requiere re-apply).",
     }
+
+
+def _find_active_remote_agent(preferred_agent_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Return ONLINE remote host agent (excluding CloudMove server itself)."""
+    db = get_transactional_db()
+    remote = [
+        a for a in db.list_agents(include_revoked=False)
+        if a.get("status") == "ONLINE"
+        and (a.get("hostname") or "").lower() not in ("cloudmove-server", "localhost")
+        and a.get("ip_address") != "100.50.88.231"
+    ]
+    if not remote:
+        return None
+    if preferred_agent_id:
+        match = next((a for a in remote if a.get("agent_id") == preferred_agent_id), None)
+        if match:
+            return match
+    return remote[0]
+
+
+def ensure_uc2_selected_paths_staged(
+    selected_paths: Optional[List[str]],
+    agent_id: Optional[str] = None,
+    migration_id: Optional[str] = None,
+    stage_id: Optional[str] = None,
+    public_api_url: str = "",
+) -> Dict[str, Any]:
+    """
+    Ensure user-selected folders/files are staged cleanly whenever Case 2 inspect or plan runs.
+    Dispatches an automatic agent staging task if not yet staged and agent supports v2.2.0+.
+    """
+    clean_paths = [str(p).strip() for p in (selected_paths or []) if str(p).strip()]
+    if not clean_paths:
+        return {"status": "no_paths"}
+
+    agent = _find_active_remote_agent(agent_id)
+    eff_agent_id = (agent or {}).get("agent_id") or agent_id
+
+    ready = find_ready_stage(
+        stage_id=stage_id,
+        migration_id=migration_id,
+        agent_id=eff_agent_id,
+        selected_paths=clean_paths,
+        include_secrets=False,
+    )
+    if ready:
+        if migration_id and ready.get("migration_id") != migration_id:
+            link_stage_to_migration(ready["stage_id"], migration_id)
+        return {
+            "status": "READY",
+            "ready": True,
+            "stage": ready,
+            "agent_id": eff_agent_id,
+        }
+
+    if not agent:
+        return {"status": "no_online_agent", "ready": False}
+
+    from app.api.routers.agents import LATEST_AGENT_VERSION, _is_version_gte
+
+    ver = str(agent.get("version") or "2.1.0")
+    upgrade_cmd = (
+        f"curl -sSL {public_api_url.rstrip('/')}/api/v1/agents/install.sh | sudo bash -s -- --upgrade"
+        if public_api_url
+        else "curl -sSL https://digitalcafeluna.store/api/v1/agents/install.sh | sudo bash -s -- --upgrade"
+    )
+    if not _is_version_gte(ver, LATEST_AGENT_VERSION):
+        return {
+            "status": "upgrade_required",
+            "ready": False,
+            "upgrade_required": True,
+            "agent_id": agent["agent_id"],
+            "agent_version": ver,
+            "latest_agent_version": LATEST_AGENT_VERSION,
+            "upgrade_command_linux": upgrade_cmd,
+        }
+
+    # Avoid spamming duplicate PENDING/DISPATCHED staging tasks for the same paths
+    db = get_transactional_db()
+    with db.transaction(write=False) as conn:
+        pending = conn.execute(
+            """
+            SELECT task_id, parameters_json FROM agent_tasks
+            WHERE agent_id = ? AND action = 'stage_selected_paths' AND status IN ('PENDING', 'DISPATCHED')
+            """,
+            (agent["agent_id"],),
+        ).fetchall()
+    for row in pending:
+        try:
+            p = json.loads(row["parameters_json"] or "{}")
+            if _paths_cover(p.get("selected_paths") or [], clean_paths):
+                return {
+                    "status": "PENDING",
+                    "ready": False,
+                    "dispatched": True,
+                    "task_id": row["task_id"],
+                    "stage": get_stage_metadata(p.get("stage_id", ""), include_secrets=False),
+                    "agent_id": agent["agent_id"],
+                }
+        except Exception:
+            pass
+
+    meta = create_or_get_stage(
+        selected_paths=clean_paths,
+        agent_id=agent["agent_id"],
+        migration_id=migration_id,
+        source_type="agent",
+    )
+    budget_mb = get_dynamic_stage_budget_mb()
+    task = db.create_agent_task(
+        agent_id=agent["agent_id"],
+        action="stage_selected_paths",
+        parameters={
+            "stage_id": meta["stage_id"],
+            "selected_paths": clean_paths,
+            "migration_id": migration_id,
+            "max_total_mb": budget_mb,
+            "per_file_max_mb": 512,
+        },
+        timeout_seconds=1800,
+    )
+    return {
+        "status": "PENDING",
+        "ready": False,
+        "dispatched": True,
+        "task_id": task["task_id"],
+        "stage": get_stage_metadata(meta["stage_id"], include_secrets=False),
+        "agent_id": agent["agent_id"],
+    }
+
+
+def dispatch_push_to_ec2(
+    ec2_host: str,
+    selected_paths: List[str],
+    sync_token: str,
+    agent_id: Optional[str] = None,
+    migration_id: Optional[str] = None,
+    max_total_mb: int = 24000,
+) -> Optional[Dict[str, Any]]:
+    """
+    Dispatch direct host-to-EC2 transfer task to v2.2.0+ agent when full folder size exceeds
+    CloudMove server staging budget or wasn't yet extracted onto the newly provisioned EC2.
+    """
+    clean_paths = [str(p).strip() for p in (selected_paths or []) if str(p).strip()]
+    if not clean_paths or not ec2_host or not sync_token:
+        return None
+    agent = _find_active_remote_agent(agent_id)
+    if not agent:
+        return None
+    from app.api.routers.agents import LATEST_AGENT_VERSION, _is_version_gte
+
+    if not _is_version_gte(str(agent.get("version") or "2.1.0"), LATEST_AGENT_VERSION):
+        return None
+
+    db = get_transactional_db()
+    return db.create_agent_task(
+        agent_id=agent["agent_id"],
+        action="push_selected_paths_to_ec2",
+        parameters={
+            "stage_id": f"ec2push-{secrets.token_hex(6)}",
+            "selected_paths": clean_paths,
+            "target_url": f"http://{ec2_host}:3000",
+            "sync_token": sync_token,
+            "migration_id": migration_id,
+            "max_total_mb": max_total_mb,
+            "per_file_max_mb": 1024,
+        },
+        timeout_seconds=3600,
+    )

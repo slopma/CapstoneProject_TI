@@ -431,7 +431,7 @@ cat <<CONF > /etc/cloudmove/agent.conf
 server_url = $SERVER_URL
 agent_id = $AGENT_ID
 api_key = $API_KEY
-heartbeat_interval = 20
+heartbeat_interval = 10
 CONF
 chmod 600 /etc/cloudmove/agent.conf
 

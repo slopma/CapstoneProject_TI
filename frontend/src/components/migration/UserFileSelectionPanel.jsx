@@ -59,6 +59,7 @@ export default function UserFileSelectionPanel({
   hostname = "dispositivo-local",
   agentId = null,
   onStageReady,
+  onCopy,
 }) {
   const [expandedPaths, setExpandedPaths] = useState(() => {
     const init = new Set();
@@ -543,6 +544,7 @@ export default function UserFileSelectionPanel({
         selectedPaths={Array.from(selectedSet)}
         agentId={agentId}
         onStageReady={onStageReady}
+        onCopy={onCopy}
       />
 
       {quotaError && (

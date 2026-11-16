@@ -3305,9 +3305,11 @@ echo "Restauración de imagen de sistema completada exitosamente."
             resolved_stage = None
 
     stage_bundle_url = ""
-    stage_sync_token = (resolved_stage or {}).get("sync_token") or hashlib.sha256(
-        f"{slug}:{manifest.get('sha256', '')}".encode("utf-8")
-    ).hexdigest()[:24]
+    stage_sync_token = (
+        str(manifest.get("uc2_sync_token") or "").strip()
+        or str((resolved_stage or {}).get("sync_token") or "").strip()
+        or hashlib.sha256(f"{slug}:{manifest.get('sha256', '')}".encode("utf-8")).hexdigest()[:24]
+    )
     if resolved_stage and resolved_stage.get("status") == "READY" and resolved_stage.get("download_token"):
         api_base = str(public_api_url or os.getenv("CLOUDMOVE_API_URL") or "").strip().rstrip("/")
         if api_base:
@@ -3529,8 +3531,8 @@ echo "Restauración de imagen de sistema completada exitosamente."
         u for u in (manifest.get("local_users") or []) if u not in ("root", "nobody", "ubuntu", "admin")
     )
 
-    telemetry_server_py = r'''import hashlib,hmac,http.server,json,os,platform,pwd,socket,subprocess,threading,urllib.parse
-MP="/opt/cloudmove/os_capture/image_manifest.json";RD="/opt/cloudmove/os_capture/rootfs";ED="/mnt/cloudmove_ebs";BP="/opt/cloudmove/os_capture/os_real_files_bundle.tar.gz";TK="/opt/cloudmove/os_capture/sync_token"
+    telemetry_server_py = r'''import hashlib,hmac,http.server,json,os,platform,pwd,shutil,socket,subprocess,threading,urllib.parse
+MP="/opt/cloudmove/os_capture/image_manifest.json";RD="/opt/cloudmove/os_capture/rootfs";ED="/mnt/cloudmove_ebs";BP="/opt/cloudmove/os_capture/os_real_files_bundle.tar.gz";TK="/opt/cloudmove/os_capture/sync_token";CD="/tmp/cm_up"
 _r=lambda c:subprocess.run(c,capture_output=True,text=True).stdout
 def _sha(fp):
     h=hashlib.sha256()
@@ -3538,16 +3540,23 @@ def _sha(fp):
         while ch:=f.read(65536): h.update(ch)
     return h.hexdigest()[:16]
 def uf():
-    o=[]
-    for rt,_,fs in (os.walk(RD) if os.path.isdir(RD) else []):
-        for fn in sorted(fs):
-            if len(o)>=2500: break
-            fp=os.path.join(rt,fn);rp=os.path.relpath(fp,RD)
-            try:
-                et=os.path.join(ED,"rootfs",rp);ec=os.path.isfile(et);st=os.stat(fp)
-                o.append({"path":rp,"origin_path":"/"+rp,"disk_path":fp,"rootfs_path":fp,"ebs_path":et if ec else None,"ebs_expected_path":et,"ebs_mirrored":ec,"is_dir":False,"category":"config" if rp.startswith("etc/") else ("user" if rp.startswith(("home/","opt/","srv/","app/")) else "logs"),"size_bytes":st.st_size,"sha256":_sha(fp) if st.st_size<2097152 else f"sz-{st.st_size}","view_url":"/files/view?path="+urllib.parse.quote(rp)})
-            except Exception: pass
-    return sorted(o,key=lambda x:x["path"])
+    seen={};er=ED+"/rootfs"
+    for b in (er,RD):
+        for rt,_,fs in (os.walk(b) if os.path.isdir(b) else []):
+            for fn in sorted(fs):
+                if len(seen)>=2500: break
+                fp=os.path.join(rt,fn);rp=os.path.relpath(fp,b)
+                if rp in seen: continue
+                try:
+                    rf=os.path.join(RD,rp);et=os.path.join(er,rp);ec=os.path.exists(et);st=os.stat(fp)
+                    seen[rp]={"path":rp,"origin_path":"/"+rp,"disk_path":fp,"rootfs_path":rf,"ebs_path":et if ec else None,"ebs_expected_path":et,"ebs_mirrored":ec,"is_dir":False,"category":"config" if rp.startswith("etc/") else ("user" if rp.startswith(("home/","opt/","srv/","app/")) else "logs"),"size_bytes":st.st_size,"sha256":_sha(fp) if st.st_size<2097152 else f"sz-{st.st_size}","view_url":"/files/view?path="+urllib.parse.quote(rp)}
+                except Exception: pass
+    return sorted(seen.values(),key=lambda x:x["path"])
+def _resolve(rel):
+    for b in (ED+"/rootfs",RD):
+        br=os.path.realpath(b);sf=os.path.realpath(os.path.join(b,rel))
+        if (sf==br or sf.startswith(br+"/")) and os.path.exists(sf): return sf
+    return None
 def tel():
     try:
         with open(MP,encoding="utf-8") as f: m=json.load(f)
@@ -3630,18 +3639,18 @@ class H(http.server.BaseHTTPRequestHandler):
                 with open(BP,"rb") as f: self._w(200,"application/gzip",f.read(),'attachment;filename="os_real_files_bundle.tar.gz"');return
             if p=="/files": fl=uf();self._w(200,"application/json; charset=utf-8",json.dumps({"status":"OK","rootfs_dir":RD,"ebs_mount_dir":ED+"/rootfs","ebs_mounted":os.path.ismount(ED),"total_files":len(fl),"total_bytes":sum(f["size_bytes"] for f in fl),"files":fl},separators=(",",":"),ensure_ascii=False));return
             if p in ("/files/view","/files/download"):
-                rel=(q.get("path") or ["etc/os-release"])[0].lstrip("/");sf=os.path.realpath(os.path.join(RD,rel))
-                if not sf.startswith(rr): self._w(403,"text/plain","Ruta no permitida");return
+                rel=(q.get("path") or ["etc/os-release"])[0].lstrip("/");sf=_resolve(rel)
+                if not sf: self._w(404,"text/plain",f"No encontrado: {rel}");return
                 if p=="/files/view" and os.path.isdir(sf):
                     en=[f"{'[DIR] ' if os.path.isdir(os.path.join(sf,x)) else '[FILE]'} {x} ({os.path.getsize(os.path.join(sf,x)) if os.path.isfile(os.path.join(sf,x)) else 0} B)" for x in sorted(os.listdir(sf))[:200]]
-                    self._w(200,"text/plain; charset=utf-8",f"# Directorio: /{rel}\n# RootFS: {sf}\n# EBS: {ED}/rootfs/{rel}\n# Entradas: {len(en)}\n\n"+("\n".join(en) or "(vacío)"));return
+                    self._w(200,"text/plain; charset=utf-8",f"# Directorio: /{rel}\n# RootFS: {RD}/{rel}\n# EBS: {ED}/rootfs/{rel}\n# Entradas: {len(en)}\n\n"+("\n".join(en) or "(vacío)"));return
                 if not os.path.isfile(sf): self._w(404,"text/plain",f"No encontrado: {rel}");return
                 if p=="/files/download":
                     with open(sf,"rb") as f: self._w(200,"application/octet-stream",f.read(),f'attachment;filename="{os.path.basename(sf)}"');return
                 st=os.stat(sf)
                 with open(sf,"rb") as f: raw=f.read(131072)
                 if b"\x00" in raw[:2048]:
-                    self._w(200,"text/plain; charset=utf-8",f"# Archivo binario migrado: /{rel}\n# Tamaño: {st.st_size} bytes\n# SHA-256: {_sha(sf)}\n# Ruta RootFS: {sf}\n# Ruta EBS: {ED}/rootfs/{rel}\n# Descarga: /files/download?path={urllib.parse.quote(rel)}\n");return
+                    self._w(200,"text/plain; charset=utf-8",f"# Archivo binario migrado: /{rel}\n# Tamaño: {st.st_size} bytes\n# SHA-256: {_sha(sf)}\n# Ruta RootFS: {RD}/{rel}\n# Ruta EBS: {ED}/rootfs/{rel}\n# Descarga: /files/download?path={urllib.parse.quote(rel)}\n");return
                 self._w(200,"text/plain; charset=utf-8",raw.decode("utf-8",errors="replace"));return
             d=tel()
             if p.startswith(("/health","/api/")): self._w(200,"application/json; charset=utf-8",json.dumps(d,separators=(",",":"),ensure_ascii=False));return
@@ -3649,16 +3658,33 @@ class H(http.server.BaseHTTPRequestHandler):
         except Exception as exc: self._w(500,"text/plain",f"Error: {exc}")
     def do_POST(self):
         try:
-            u=urllib.parse.urlparse(self.path)
-            if u.path!="/sync-stage": self._w(404,"application/json",'{"error":"not found"}');return
+            u=urllib.parse.urlparse(self.path);p=u.path;q=urllib.parse.parse_qs(u.query)
             tok=open(TK,encoding="utf-8").read().strip() if os.path.isfile(TK) else ""
             if not tok or not hmac.compare_digest(tok,self.headers.get("X-CloudMove-Sync-Token","")):
                 self._w(403,"application/json",'{"error":"forbidden"}');return
-            n=int(self.headers.get("Content-Length","0") or "0");body=json.loads(self.rfile.read(n).decode("utf-8"))
-            bu=str(body.get("bundle_url") or "")
-            if not bu.startswith(("https://","http://")): self._w(400,"application/json",'{"error":"invalid url"}');return
-            threading.Thread(target=lambda:subprocess.run(["bash","/opt/cloudmove/os_capture/sync_stage.sh",bu],capture_output=True),daemon=True).start()
-            self._w(202,"application/json",'{"status":"sync_started"}')
+            n=int(self.headers.get("Content-Length","0") or "0");raw=self.rfile.read(n)
+            if p=="/sync-stage":
+                bu=str(json.loads(raw.decode("utf-8")).get("bundle_url") or "")
+                if not bu.startswith(("https://","http://")): self._w(400,"application/json",'{"error":"invalid url"}');return
+                threading.Thread(target=lambda:subprocess.run(["bash","/opt/cloudmove/os_capture/sync_stage.sh",bu],capture_output=True),daemon=True).start()
+                self._w(202,"application/json",'{"status":"sync_started"}');return
+            if p=="/upload-chunk":
+                sid=(q.get("stage_id") or [""])[0];ci=int((q.get("chunk_index") or ["0"])[0])
+                sd=os.path.join(CD,os.path.basename(sid));os.makedirs(sd,exist_ok=True)
+                open(os.path.join(sd,f"p{ci:06d}"),"wb").write(raw)
+                self._w(200,"application/json",'{"ok":true}');return
+            if p=="/upload-commit":
+                b=json.loads(raw.decode("utf-8"));sid=os.path.basename(b["stage_id"]);tc=int(b["total_chunks"])
+                sd=os.path.join(CD,sid);tfp=sd+".tar.gz";h=hashlib.sha256()
+                with open(tfp,"wb") as out:
+                    for i in range(tc):
+                        d=open(os.path.join(sd,f"p{i:06d}"),"rb").read();h.update(d);out.write(d)
+                shutil.rmtree(sd,ignore_errors=True)
+                if b.get("expected_sha256") and h.hexdigest()!=b["expected_sha256"]: os.unlink(tfp);self._w(400,"application/json",'{"error":"sha"}');return
+                tg=ED+"/rootfs" if os.path.ismount(ED) else RD
+                subprocess.run(["bash","/opt/cloudmove/os_capture/apply_tar.sh",tfp,tg],check=False)
+                self._w(200,"application/json",'{"status":"extracted"}');return
+            self._w(404,"application/json",'{"error":"not found"}')
         except Exception as exc: self._w(500,"application/json",json.dumps({"error":str(exc)}))
 
 if __name__=="__main__":
@@ -3728,24 +3754,58 @@ for _ in $(seq 1 "$TRIES"); do
 done
 EOF_EBS
 chmod +x /opt/cloudmove/os_capture/sync_ebs.sh
+cat << 'EOF_APPLY' > /opt/cloudmove/os_capture/apply_tar.sh
+#!/usr/bin/env bash
+set -uo pipefail
+T="$1";TG="${{2:-/mnt/cloudmove_ebs/rootfs}}"
+mkdir -p "$TG"
+tar -xzf "$T" --no-same-owner -C "$TG/"
+rm -f "$T"
+for HD in "$TG"/home/*; do
+    [ -d "$HD" ] || continue
+    U=$(basename "$HD")
+    id "$U" >/dev/null 2>&1 || useradd -m -s /bin/bash "$U" >/dev/null 2>&1 || true
+    mkdir -p "/opt/cloudmove/os_capture/rootfs/home/$U" "/home/$U"
+    for SUB in "$HD"/*; do
+        [ -e "$SUB" ] || continue
+        BN=$(basename "$SUB")
+        ln -sfn "$SUB" "/opt/cloudmove/os_capture/rootfs/home/$U/$BN" 2>/dev/null || true
+        ln -sfn "$SUB" "/home/$U/$BN" 2>/dev/null || true
+    done
+done
+EOF_APPLY
+chmod +x /opt/cloudmove/os_capture/apply_tar.sh
 cat << 'EOF_STAGE' > /opt/cloudmove/os_capture/sync_stage.sh
 #!/usr/bin/env bash
 set -uo pipefail
 URL="${{1:-}}"
 [ -z "$URL" ] && exit 0
-TMP=/tmp/cm_stage_bundle.tar.gz
-curl -fsSL --retry 4 --retry-delay 2 "$URL" -o "$TMP" || exit 1
-tar -xzf "$TMP" --no-same-owner -C /opt/cloudmove/os_capture/rootfs/
-rm -f "$TMP"
-for HD in /opt/cloudmove/os_capture/rootfs/home/*; do
-    [ -d "$HD" ] || continue
-    U=$(basename "$HD")
-    id "$U" >/dev/null 2>&1 || useradd -m -s /bin/bash "$U" >/dev/null 2>&1 || true
-    [ -d "/home/$U" ] && cp -rnu "$HD/." "/home/$U/" 2>/dev/null && chown -R "$U:$U" "/home/$U" 2>/dev/null || true
-done
-mountpoint -q /mnt/cloudmove_ebs && mkdir -p /mnt/cloudmove_ebs/rootfs && cp -ru /opt/cloudmove/os_capture/rootfs/. /mnt/cloudmove_ebs/rootfs/ 2>/dev/null || true
-SZ=$(du -sm /opt/cloudmove/os_capture/rootfs | cut -f1)
-[ "${{SZ:-0}}" -le 350 ] && tar -czf /opt/cloudmove/os_capture/os_real_files_bundle.tar.gz -C /opt/cloudmove/os_capture/rootfs . || true
+bash /opt/cloudmove/os_capture/sync_ebs.sh 36 >/var/log/cloudmove-ebs.log 2>&1 || true
+TG=/opt/cloudmove/os_capture/rootfs
+mountpoint -q /mnt/cloudmove_ebs && TG=/mnt/cloudmove_ebs/rootfs
+mkdir -p "$TG"
+curl -fsSL --retry 4 --retry-delay 2 "$URL" | tar -xz --no-same-owner -C "$TG/" || exit 1
+if [ "$TG" = "/mnt/cloudmove_ebs/rootfs" ]; then
+    for HD in "$TG"/home/*; do
+        [ -d "$HD" ] || continue
+        U=$(basename "$HD")
+        id "$U" >/dev/null 2>&1 || useradd -m -s /bin/bash "$U" >/dev/null 2>&1 || true
+        mkdir -p "/opt/cloudmove/os_capture/rootfs/home/$U" "/home/$U"
+        for SUB in "$HD"/*; do
+            [ -e "$SUB" ] || continue
+            BN=$(basename "$SUB")
+            ln -sfn "$SUB" "/opt/cloudmove/os_capture/rootfs/home/$U/$BN" 2>/dev/null || true
+            ln -sfn "$SUB" "/home/$U/$BN" 2>/dev/null || true
+        done
+    done
+else
+    for HD in /opt/cloudmove/os_capture/rootfs/home/*; do
+        [ -d "$HD" ] || continue
+        U=$(basename "$HD")
+        id "$U" >/dev/null 2>&1 || useradd -m -s /bin/bash "$U" >/dev/null 2>&1 || true
+        [ -d "/home/$U" ] && cp -rnu "$HD/." "/home/$U/" 2>/dev/null && chown -R "$U:$U" "/home/$U" 2>/dev/null || true
+    done
+fi
 EOF_STAGE
 chmod +x /opt/cloudmove/os_capture/sync_stage.sh
 cat << 'EOF_SERVER' > /opt/cloudmove/os_capture/telemetry_server.py
@@ -3780,10 +3840,10 @@ STAGE_URL="{stage_bundle_url}"
         "etc/group",
     ]
     for trim_key in trim_order:
-        if len(base64.b64encode(gzip.compress(user_data_script.encode("utf-8")))) <= 15500:
+        if len(base64.b64encode(gzip.compress(user_data_script.encode("utf-8")))) <= 15200:
             break
         if trim_key in bundled_files_contents:
-            bundled_files_contents[trim_key] = bundled_files_contents[trim_key][:220] + "\n# [Compactado EC2 16 KB]"
+            bundled_files_contents[trim_key] = bundled_files_contents[trim_key][:200] + "\n# [Compactado EC2 16 KB]"
             user_data_script = _build_uc2_user_data(bundled_files_contents, compact_os_json)
 
     protected = {
@@ -3795,10 +3855,10 @@ STAGE_URL="{stage_bundle_url}"
         "home/lacastrilp/archivos_usuario_origen.txt",
     } | {p.lstrip("/") for p in selected_paths}
     for longest_k in sorted(bundled_files_contents, key=lambda k: (k in protected, -len(bundled_files_contents[k]))):
-        if len(base64.b64encode(gzip.compress(user_data_script.encode("utf-8")))) <= 15500:
+        if len(base64.b64encode(gzip.compress(user_data_script.encode("utf-8")))) <= 15200:
             break
-        if len(bundled_files_contents[longest_k]) > 600:
-            bundled_files_contents[longest_k] = bundled_files_contents[longest_k][:600] + "\n# [Recortado]"
+        if len(bundled_files_contents[longest_k]) > 450:
+            bundled_files_contents[longest_k] = bundled_files_contents[longest_k][:450] + "\n# [Recortado]"
             user_data_script = _build_uc2_user_data(bundled_files_contents, compact_os_json)
 
     files = dict(iac_bundle["files"])

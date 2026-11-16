@@ -599,7 +599,7 @@ def _build_folder_node(
                     category=category,
                     depth=depth + 1,
                     max_depth=max_depth,
-                    max_children=20,
+                    max_children=35 if depth >= 1 else 60,
                 )
                 if child_node:
                     children.append(child_node)
@@ -649,7 +649,7 @@ def collect_filesystem_tree() -> List[Dict[str, Any]]:
                     category="user_home",
                     depth=0,
                     max_depth=4,
-                    max_children=30,
+                    max_children=60,
                 )
                 if user_node:
                     user_node["label"] = f"Carpeta de Usuario ({user_dir.name})"

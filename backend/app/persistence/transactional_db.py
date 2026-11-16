@@ -1402,6 +1402,7 @@ class TransactionalDatabase:
             "unquiesce_database",
             "install_mgn_agent",
             "stage_selected_paths",
+            "push_selected_paths_to_ec2",
             "self_update",
         )
         if action not in allowed_actions:
