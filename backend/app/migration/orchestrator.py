@@ -419,6 +419,10 @@ class MigrationOrchestrator:
                     output_format=src_cfg.get("output_format", "QCOW2"),
                     agent_id=src_cfg.get("agent_id"),
                 )
+                if src_cfg.get("selected_user_paths") and not manifest.get("selected_user_paths"):
+                    manifest["selected_user_paths"] = [
+                        str(p) for p in (src_cfg.get("selected_user_paths") or []) if str(p).strip()
+                    ]
                 require_live_mem = bool(src_cfg.get("require_live_memory_state", False))
                 require_authentic_bin = bool(src_cfg.get("require_authentic_binary", False))
                 source_type = str(manifest.get("source_type") or src_cfg.get("source_type") or "standalone_offline_disk_image")

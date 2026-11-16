@@ -1,9 +1,13 @@
 import io
+import ipaddress
 import json
 from pathlib import Path
+import re
 import socket
+import time
 from typing import Any, Dict, List, Optional
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -1479,6 +1483,30 @@ def deploy_live_migration_job_endpoint(migration_id: str, request: Optional[Depl
     return deploy_res
 
 
+def _sanitize_probe_host(ip: str) -> str:
+    """Validate target host/IP for live EC2 probe while preventing loopback/metadata SSRF."""
+    clean_ip = (
+        str(ip or "")
+        .strip()
+        .replace("http://", "")
+        .replace("https://", "")
+        .split("/")[0]
+        .split(":")[0]
+    )
+    if not clean_ip or len(clean_ip) > 253 or not re.match(r"^[A-Za-z0-9.\-]+$", clean_ip):
+        raise HTTPException(status_code=400, detail="Dirección IP o hostname inválido")
+    lower = clean_ip.lower()
+    if lower in ("localhost", "ip6-localhost") or lower.endswith(".local"):
+        raise HTTPException(status_code=400, detail="Host local no permitido para sonda externa")
+    try:
+        ip_obj = ipaddress.ip_address(clean_ip)
+        if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or ip_obj.is_multicast or ip_obj.is_unspecified:
+            raise HTTPException(status_code=400, detail="Rango IP privado, reservado o link-local no permitido")
+    except ValueError:
+        pass
+    return clean_ip
+
+
 def _probe_tcp_port(host: str, port: int, timeout: float = 2.0) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -1501,6 +1529,42 @@ def _probe_http_endpoint(url: str, timeout: float = 2.5) -> Dict[str, Any]:
         return {"online": False, "status": None, "message": str(exc)}
 
 
+def _fetch_json_endpoint(url: str, timeout: float = 3.5) -> Dict[str, Any]:
+    """Fetch JSON from an EC2 validation endpoint with measured latency."""
+    t0 = time.monotonic()
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "CloudMove-UC2-Validator/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            elapsed_ms = round((time.monotonic() - t0) * 1000.0, 1)
+            return {
+                "ok": 200 <= resp.status < 300,
+                "http_status": resp.status,
+                "latency_ms": elapsed_ms,
+                "data": json.loads(raw),
+                "error": None,
+            }
+    except urllib.error.HTTPError as exc:
+        return {
+            "ok": False,
+            "http_status": exc.code,
+            "latency_ms": round((time.monotonic() - t0) * 1000.0, 1),
+            "data": None,
+            "error": f"HTTP {exc.code}",
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "http_status": None,
+            "latency_ms": round((time.monotonic() - t0) * 1000.0, 1),
+            "data": None,
+            "error": str(exc),
+        }
+
+
 @router.get("/probe-instance-status")
 def probe_instance_status(
     ip: str = Query(..., description="Public IP address or hostname of the deployed instance"),
@@ -1510,9 +1574,7 @@ def probe_instance_status(
     Detects if Cloud-Init is still provisioning Docker Compose or if services are ready.
     Avoids browser Mixed Content blocks and CORS issues.
     """
-    clean_ip = ip.strip().replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
-    if not clean_ip:
-        raise HTTPException(status_code=400, detail="Invalid IP address")
+    clean_ip = _sanitize_probe_host(ip)
 
     ssh_ok = _probe_tcp_port(clean_ip, 22, timeout=2.0)
     fe_probe = _probe_http_endpoint(f"http://{clean_ip}:3000", timeout=2.5)
@@ -1522,13 +1584,13 @@ def probe_instance_status(
 
     if all_ready:
         phase = "ready"
-        summary = "Servicios en línea y respondiendo exitosamente (HTTP 200). ¡Listo para acceder!"
+        summary = "Servicios en línea y respondiendo exitosamente (HTTP 200). Listo para acceder."
     elif ssh_ok:
         phase = "booting"
-        summary = "Instancia EC2 activa. Cloud-Init está instalando Docker y levantando los contenedores (~1-2 min)..."
+        summary = "Instancia EC2 activa. Cloud-Init está completando el aprovisionamiento (~1-2 min)..."
     else:
         phase = "offline"
-        summary = "Instancia no accesible aún. Verifique que la instancia haya terminado de iniciar en AWS y que la sesión del Learner Lab esté activa."
+        summary = "Instancia no accesible aún. Verifica que haya terminado de iniciar en AWS y la sesión del laboratorio esté activa."
 
     return {
         "ip": clean_ip,
@@ -1551,6 +1613,122 @@ def probe_instance_status(
         "phase": phase,
         "summary": summary,
     }
+
+
+@router.get("/probe-uc2-validation")
+def probe_uc2_validation(
+    ip: str = Query(..., description="Public IP of deployed Case 2 EC2 instance"),
+):
+    """
+    Live Case 2 diagnostic assistant ('¿Funcionó mi despliegue?'):
+    Probes /health and /files on the deployed EC2 instance server-side,
+    avoiding HTTPS->HTTP Mixed Content blocks in the CloudMove browser session.
+    """
+    clean_ip = _sanitize_probe_host(ip)
+    ssh_ok = _probe_tcp_port(clean_ip, 22, timeout=2.0)
+    health_res = _fetch_json_endpoint(f"http://{clean_ip}:3000/health", timeout=3.5)
+    if not health_res["ok"]:
+        health_res = _fetch_json_endpoint(f"http://{clean_ip}:8000/health", timeout=3.0)
+    files_res = _fetch_json_endpoint(f"http://{clean_ip}:3000/files", timeout=3.5)
+
+    hdata = health_res.get("data") or {}
+    fdata = files_res.get("data") or {}
+    live_files = fdata.get("files") or hdata.get("uploaded_files") or []
+    manifest_files = ((hdata.get("captured_os_manifest") or {}).get("uploaded_os_files") or [])
+    expected_count = len(manifest_files) if manifest_files else len(live_files)
+    synced_count = len(live_files)
+    ebs_mirrored_count = sum(1 for f in live_files if f.get("ebs_mirrored"))
+    ebs_mounted = bool(hdata.get("ebs_mounted") or ebs_mirrored_count > 0)
+
+    all_ok = bool(
+        health_res["ok"]
+        and files_res["ok"]
+        and synced_count > 0
+        and (expected_count == 0 or synced_count >= expected_count)
+    )
+
+    return {
+        "ip": clean_ip,
+        "ssh_open": ssh_ok,
+        "all_ok": all_ok,
+        "checks": {
+            "health": {
+                "ok": health_res["ok"],
+                "http_status": health_res["http_status"],
+                "latency_ms": health_res["latency_ms"],
+                "url": f"http://{clean_ip}:3000/health",
+                "error": health_res["error"],
+            },
+            "files": {
+                "ok": files_res["ok"],
+                "http_status": files_res["http_status"],
+                "latency_ms": files_res["latency_ms"],
+                "url": f"http://{clean_ip}:3000/files",
+                "synced_count": synced_count,
+                "expected_count": expected_count,
+                "ebs_mirrored_count": ebs_mirrored_count,
+                "error": files_res["error"],
+            },
+            "ebs": {
+                "mounted": ebs_mounted,
+                "mount_dir": fdata.get("ebs_mount_dir") or hdata.get("ebs_mount_dir") or "/mnt/cloudmove_ebs/rootfs",
+                "rootfs_dir": fdata.get("rootfs_dir") or hdata.get("rootfs_dir") or "/opt/cloudmove/os_capture/rootfs",
+            },
+        },
+        "telemetry": hdata,
+        "files_payload": fdata,
+    }
+
+
+@router.get("/probe-uc2-file")
+def probe_uc2_file(
+    ip: str = Query(..., description="Public IP of deployed Case 2 EC2 instance"),
+    path: str = Query(..., description="Relative file path inside /opt/cloudmove/os_capture/rootfs/"),
+):
+    """Fetch captured file text content safely from the deployed EC2 telemetry server."""
+    clean_ip = _sanitize_probe_host(ip)
+    clean_rel = str(path or "").lstrip("/")
+    if not clean_rel or ".." in clean_rel.split("/"):
+        raise HTTPException(status_code=400, detail="Ruta de archivo inválida")
+    target_url = f"http://{clean_ip}:3000/files/view?path={urllib.parse.quote(clean_rel)}"
+    try:
+        req = urllib.request.Request(target_url, headers={"User-Agent": "CloudMove-UC2-Viewer/1.0"})
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
+            raw = resp.read()
+            text = raw.decode("utf-8", errors="replace")
+            return {
+                "ok": True,
+                "path": clean_rel,
+                "origin_path": f"/{clean_rel}",
+                "rootfs_path": f"/opt/cloudmove/os_capture/rootfs/{clean_rel}",
+                "ebs_path": f"/mnt/cloudmove_ebs/rootfs/{clean_rel}",
+                "size_bytes": len(raw),
+                "content": text,
+            }
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(status_code=exc.code, detail=f"Archivo no accesible en EC2: HTTP {exc.code}")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"No se pudo leer el archivo desde {clean_ip}: {exc}")
+
+
+@router.get("/probe-uc2-bundle")
+def probe_uc2_bundle(
+    ip: str = Query(..., description="Public IP of deployed Case 2 EC2 instance"),
+):
+    """Download os_real_files_bundle.tar.gz directly from the deployed EC2 instance."""
+    clean_ip = _sanitize_probe_host(ip)
+    target_url = f"http://{clean_ip}:3000/bundle.tar.gz"
+    try:
+        req = urllib.request.Request(target_url, headers={"User-Agent": "CloudMove-UC2-Bundle/1.0"})
+        with urllib.request.urlopen(req, timeout=10.0) as resp:
+            raw = resp.read()
+            return Response(
+                content=raw,
+                media_type="application/gzip",
+                headers={"Content-Disposition": 'attachment; filename="os_real_files_bundle.tar.gz"'},
+            )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"No se pudo descargar bundle.tar.gz desde {clean_ip}: {exc}")
 
 
 class AwsAccountAuditRequest(BaseModel):

@@ -3279,20 +3279,25 @@ echo "Restauración de imagen de sistema completada exitosamente."
     # 4. Autonomous cloud-init user_data.sh for Case 2 (OS state reconstruction + real OS files bundle + live telemetry portal)
     # Compressed via base64gzip in main.tf so the full OS files bundle fits well inside AWS EC2's 16 KB UserData limit.
     import base64
-    import io
-    b64_os_files_bundle = ""
+    import gzip
     bundled_files_meta: List[Dict[str, Any]] = []
+    bundled_files_contents: Dict[str, str] = {}
+    selected_paths = [
+        str(p).strip() for p in (manifest.get("selected_user_paths") or []) if str(p).strip()
+    ][:50]
+    sensitive_tokens = (".env", "id_rsa", "id_ed25519", ".pem", ".key", "secret", "password", ".aws/credentials")
     try:
-        tar_buf = io.BytesIO()
-        with tarfile.open(fileobj=tar_buf, mode="w:gz", compresslevel=9) as tf:
+        seen_arcnames = set()
+        if True:
             def _add_virtual_file(arcname: str, text_content: str) -> None:
+                clean_arc = arcname.lstrip("/")
+                if not clean_arc or clean_arc in seen_arcnames:
+                    return
+                seen_arcnames.add(clean_arc)
                 raw_bytes = text_content.encode("utf-8", errors="replace")
-                ti = tarfile.TarInfo(name=arcname)
-                ti.size = len(raw_bytes)
-                ti.mode = 0o644
-                tf.addfile(ti, io.BytesIO(raw_bytes))
+                bundled_files_contents[clean_arc] = text_content
                 bundled_files_meta.append({
-                    "path": arcname,
+                    "path": clean_arc,
                     "size_bytes": len(raw_bytes),
                     "sha256": hashlib.sha256(raw_bytes).hexdigest()[:16],
                 })
@@ -3357,13 +3362,42 @@ echo "Restauración de imagen de sistema completada exitosamente."
                 pass
             _add_virtual_file("home/lacastrilp/archivos_usuario_origen.txt", "\n".join(home_lines))
 
+            # 4b2. Explicit traceability map for user-selected files/folders + safe content inclusion
+            if selected_paths:
+                sel_map = []
+                extra_captured = 0
+                for sp in selected_paths:
+                    rel_sp = sp.lstrip("/")
+                    sel_map.append({
+                        "origin_path": sp,
+                        "rootfs_path": f"/opt/cloudmove/os_capture/rootfs/{rel_sp}",
+                        "ebs_path": f"/mnt/cloudmove_ebs/rootfs/{rel_sp}",
+                    })
+                    lower_sp = sp.lower()
+                    if (
+                        extra_captured < 6
+                        and not any(tok in lower_sp for tok in sensitive_tokens)
+                    ):
+                        p_sel = Path(sp)
+                        if p_sel.is_file():
+                            try:
+                                if p_sel.stat().st_size <= 2500:
+                                    _add_virtual_file(rel_sp, p_sel.read_text(encoding="utf-8", errors="replace"))
+                                    extra_captured += 1
+                            except Exception:
+                                pass
+                _add_virtual_file(
+                    "var/log/cloudmove_selected_paths_map.json",
+                    json.dumps(sel_map, indent=2, ensure_ascii=False),
+                )
+
             # 4c. Real README.md from the active workspace on the host OS
             readme_p = cwd_root / "README.md"
             if readme_p.is_file():
                 try:
                     _add_virtual_file(
                         "home/lacastrilp/CapstoneProject_TI/README.md",
-                        readme_p.read_text(encoding="utf-8", errors="replace")[:3000],
+                        readme_p.read_text(encoding="utf-8", errors="replace")[:700],
                     )
                 except Exception:
                     pass
@@ -3371,7 +3405,7 @@ echo "Restauración de imagen de sistema completada exitosamente."
             # 4d. Real disk/partition snapshot (lsblk + df -hT) from source OS
             try:
                 lsblk_src = subprocess.run(
-                    ["lsblk", "-o", "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,UUID,MODEL"],
+                    ["lsblk", "-o", "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT"],
                     capture_output=True, text=True, timeout=4,
                 ).stdout
                 df_src = subprocess.run(
@@ -3379,7 +3413,7 @@ echo "Restauración de imagen de sistema completada exitosamente."
                 ).stdout
                 _add_virtual_file(
                     "var/log/cloudmove_source_lsblk_df.txt",
-                    f"=== DISCOS Y PARTICIONES EN SO ORIGEN ===\n{lsblk_src}\n=== USO DE SISTEMA DE ARCHIVOS (df -hT) ===\n{df_src}",
+                    f"=== lsblk ===\n{lsblk_src[:900]}\n=== df -hT ===\n{df_src[:900]}",
                 )
             except Exception:
                 pass
@@ -3387,12 +3421,12 @@ echo "Restauración de imagen de sistema completada exitosamente."
             # 4e. Real processes & listening ports snapshot from source OS
             try:
                 ps_src = subprocess.run(
-                    ["ps", "-eo", "pid,user,pcpu,pmem,comm,args", "--sort=-pmem"],
+                    ["ps", "-eo", "pid,user,pcpu,pmem,comm", "--sort=-pmem"],
                     capture_output=True, text=True, timeout=4,
                 ).stdout
                 _add_virtual_file(
                     "var/log/cloudmove_source_processes_ports.txt",
-                    "\n".join(l[:110] for l in ps_src.splitlines()[:35]),
+                    "\n".join(l[:90] for l in ps_src.splitlines()[:18]),
                 )
             except Exception:
                 pass
@@ -3406,44 +3440,39 @@ echo "Restauración de imagen de sistema completada exitosamente."
                 if dpkg_src:
                     _add_virtual_file(
                         "var/log/cloudmove_source_dpkg_packages.txt",
-                        "\n".join(dpkg_src.splitlines()[:80]),
+                        "\n".join(dpkg_src.splitlines()[:15]),
                     )
             except Exception:
                 pass
 
-        b64_os_files_bundle = base64.b64encode(tar_buf.getvalue()).decode("ascii")
     except Exception:
-        b64_os_files_bundle = ""
+        pass
 
     compact_os_state = {
         "image_id": manifest.get("image_id"),
         "name": manifest.get("name"),
-        "sha256": manifest.get("sha256"),
+        "sha256": (manifest.get("sha256") or "")[:16],
         "format": manifest.get("format"),
         "boot_mode": manifest.get("boot_mode"),
-        "partition_scheme": manifest.get("partition_scheme"),
         "total_provisioned_gib": manifest.get("total_provisioned_gib"),
-        "total_used_gib": manifest.get("total_used_gib"),
         "os": manifest.get("os", {}),
         "resources": manifest.get("resources", {}),
-        "disks": manifest.get("disks", []),
+        "disks": [
+            {"device": d.get("device"), "size_gib": d.get("size_gib"), "is_boot": d.get("is_boot")}
+            for d in (manifest.get("disks") or [])[:4]
+        ],
         "local_users": manifest.get("local_users", []),
         "systemd_services": [
             {"name": s.get("name"), "active_state": s.get("active_state"), "port": s.get("port")}
-            for s in (manifest.get("systemd_services") or [])[:20]
+            for s in (manifest.get("systemd_services") or [])[:4]
         ],
         "running_processes": [
             {"pid": p.get("pid"), "user": p.get("user"), "name": p.get("name"), "cpu": p.get("cpu_percent"), "mem": p.get("mem_percent")}
-            for p in (manifest.get("running_processes") or [])[:15]
+            for p in (manifest.get("running_processes") or [])[:4]
         ],
-        "listening_ports": manifest.get("listening_ports", []),
-        "scheduled_tasks_count": len(manifest.get("scheduled_tasks") or []),
-        "filesystem_inventory": [
-            {"path": d.get("path"), "files_count": d.get("files_count"), "subdirs_count": d.get("subdirs_count"), "sample_entries": (d.get("sample_entries") or [])[:6]}
-            for d in (manifest.get("filesystem_inventory") or [])
-            if isinstance(d, dict) and d.get("exists")
-        ],
-        "uploaded_os_files": bundled_files_meta,
+        "listening_ports": manifest.get("listening_ports", [])[:8],
+        "selected_user_paths": selected_paths,
+        "uploaded_os_files": [{"path": f["path"], "size_bytes": f["size_bytes"]} for f in bundled_files_meta],
         "installed_packages_count": (manifest.get("installed_packages_summary") or {}).get("total_count", 0),
         "target_provider": provider_clean,
         "parity_score_percent": diff_report.get("parity_score_percent", 100.0),
@@ -3456,344 +3485,204 @@ echo "Restauración de imagen de sistema completada exitosamente."
         u for u in (manifest.get("local_users") or []) if u not in ("root", "nobody", "ubuntu", "admin")
     )
 
-    telemetry_server_py = '''import hashlib
-import http.server
-import json
-import os
-import platform
-import socket
-import subprocess
-import threading
-import urllib.parse
-
-MANIFEST_PATH = "/opt/cloudmove/os_capture/image_manifest.json"
-ROOTFS_DIR = "/opt/cloudmove/os_capture/rootfs"
-EBS_MOUNT_DIR = "/mnt/cloudmove_ebs"
-BUNDLE_PATH = "/opt/cloudmove/os_capture/os_real_files_bundle.tar.gz"
-
-def list_uploaded_files():
-    out = []
-    if not os.path.isdir(ROOTFS_DIR):
-        return out
-    for root, _, files in os.walk(ROOTFS_DIR):
-        for fn in sorted(files):
-            full_p = os.path.join(root, fn)
-            rel_p = os.path.relpath(full_p, ROOTFS_DIR)
+    telemetry_server_py = r'''import hashlib,http.server,json,os,platform,pwd,socket,subprocess,threading,urllib.parse
+MP="/opt/cloudmove/os_capture/image_manifest.json";RD="/opt/cloudmove/os_capture/rootfs";ED="/mnt/cloudmove_ebs";BP="/opt/cloudmove/os_capture/os_real_files_bundle.tar.gz"
+_r=lambda c:subprocess.run(c,capture_output=True,text=True).stdout
+def uf():
+    o=[]
+    for rt,_,fs in (os.walk(RD) if os.path.isdir(RD) else []):
+        for fn in sorted(fs):
+            fp=os.path.join(rt,fn);rp=os.path.relpath(fp,RD)
             try:
-                st = os.stat(full_p)
-                with open(full_p, "rb") as f:
-                    h = hashlib.sha256(f.read()).hexdigest()[:16]
-                ebs_copy = os.path.isfile(os.path.join(EBS_MOUNT_DIR, "rootfs", rel_p))
-                out.append({
-                    "path": rel_p,
-                    "disk_path": full_p,
-                    "ebs_path": os.path.join(EBS_MOUNT_DIR, "rootfs", rel_p) if ebs_copy else None,
-                    "ebs_mirrored": ebs_copy,
-                    "size_bytes": st.st_size,
-                    "sha256": h,
-                    "view_url": "/files/view?path=" + urllib.parse.quote(rel_p),
-                })
-            except Exception:
-                pass
-    return sorted(out, key=lambda x: x["path"])
-
-def get_live_telemetry():
+                et=os.path.join(ED,"rootfs",rp);ec=os.path.isfile(et)
+                with open(fp,"rb") as f: h=hashlib.sha256(f.read()).hexdigest()[:16]
+                o.append({"path":rp,"origin_path":"/"+rp,"disk_path":fp,"rootfs_path":fp,"ebs_path":et if ec else None,"ebs_expected_path":et,"ebs_mirrored":ec,"category":"config" if rp.startswith("etc/") else ("user" if rp.startswith(("home/","opt/","srv/","app/")) else "logs"),"size_bytes":os.stat(fp).st_size,"sha256":h,"view_url":"/files/view?path="+urllib.parse.quote(rp)})
+            except Exception: pass
+    return sorted(o,key=lambda x:x["path"])
+def tel():
     try:
-        with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
-            manifest = json.load(f)
-    except Exception:
-        manifest = {}
-    lsblk_out = subprocess.run(["lsblk", "-o", "NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,UUID"], capture_output=True, text=True).stdout
-    df_out = subprocess.run(["df", "-hT"], capture_output=True, text=True).stdout
-    ps_out = subprocess.run(["ps", "-eo", "pid,user,pcpu,pmem,comm", "--sort=-pcpu"], capture_output=True, text=True).stdout
-    uptime_out = subprocess.run(["uptime", "-p"], capture_output=True, text=True).stdout.strip()
-    uploaded = list_uploaded_files()
-    return {
-        "status": "ONLINE",
-        "use_case": "vm_image",
-        "cloud_hostname": socket.gethostname(),
-        "cloud_kernel": platform.release(),
-        "cloud_uptime": uptime_out,
-        "ebs_mounted": os.path.ismount(EBS_MOUNT_DIR) or os.path.isdir(os.path.join(EBS_MOUNT_DIR, "rootfs")),
-        "uploaded_files_count": len(uploaded),
-        "uploaded_files": uploaded,
-        "lsblk_live": lsblk_out,
-        "df_live": df_out,
-        "ps_live": "\\n".join(ps_out.splitlines()[:25]),
-        "captured_os_manifest": manifest,
-    }
+        with open(MP,encoding="utf-8") as f: m=json.load(f)
+    except Exception: m={}
+    lr=_r(["lsblk","-o","NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,UUID"]);lrows=[]
+    try:
+        def w(ns,d=0):
+            for n in ns or []: lrows.append({"name":n.get("name",""),"depth":d,"size":n.get("size",""),"type":n.get("type",""),"fstype":n.get("fstype") or "-","mountpoint":n.get("mountpoint") or "-","uuid":n.get("uuid") or "-"});w(n.get("children"),d+1)
+        w(json.loads(_r(["lsblk","-J","-o","NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT,UUID"]) or "{}").get("blockdevices"))
+    except Exception: pass
+    dr=_r(["df","-hT"]);pr=_r(["ps","-eo","pid,user,pcpu,pmem,comm","--sort=-pcpu"]);fs=uf();su=set(m.get("local_users") or []);u=[]
+    try: u=sorted([{"username":e.pw_name,"uid":e.pw_uid,"gid":e.pw_gid,"home":e.pw_dir,"shell":e.pw_shell,"is_source_user":e.pw_name in su,"home_exists":os.path.isdir(e.pw_dir)} for e in pwd.getpwall() if e.pw_uid==0 or e.pw_uid>=1000 or e.pw_name in su],key=lambda x:(not x["is_source_user"],x["uid"]))
+    except Exception: pass
+    return {"status":"ONLINE","use_case":"vm_image","cloud_hostname":socket.gethostname(),"cloud_kernel":platform.release(),"cloud_arch":platform.machine(),"cloud_uptime":_r(["uptime","-p"]).strip(),"rootfs_dir":RD,"ebs_mount_dir":ED+"/rootfs","ebs_mounted":os.path.ismount(ED) or os.path.isdir(os.path.join(ED,"rootfs")),"ebs_mirrored_count":sum(1 for f in fs if f["ebs_mirrored"]),"uploaded_files_count":len(fs),"total_bytes":sum(f["size_bytes"] for f in fs),"uploaded_files":fs,"selected_user_paths":m.get("selected_user_paths",[]),"lsblk_live":lr,"lsblk_rows":lrows,"df_live":dr,"df_rows":[{"filesystem":p[0],"fstype":p[1],"size":p[2],"used":p[3],"avail":p[4],"use_pct":p[5],"mountpoint":" ".join(p[6:])} for l in dr.splitlines()[1:] if len(p:=l.split())>=7],"ps_live":"\n".join(pr.splitlines()[:25]),"ps_rows":[{"pid":p[0],"user":p[1],"cpu":p[2],"mem":p[3],"command":p[4]} for l in pr.splitlines()[1:30] if len(p:=l.split(None,4))==5],"passwd_users":u,"captured_os_manifest":m}
 
-HTML_TEMPLATE = """<!DOCTYPE html>
-<html lang="es"><head><meta charset="utf-8"><title>CloudMove UC2 · SO Migrado y Explorador de Archivos</title>
-<style>
-body { font-family: system-ui, -apple-system, sans-serif; background: #0b0f19; color: #e2e8f0; margin: 0; padding: 24px; }
-.header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; border-bottom: 1px solid #1f2937; padding-bottom: 14px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; margin-top: 16px; }
-.card { background: #111827; border: 1px solid #1f2937; border-radius: 10px; padding: 16px; }
-h1 { margin: 0 0 6px 0; color: #38bdf8; font-size: 21px; }
-h2 { margin: 0 0 10px 0; color: #93c5fd; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
-pre { background: #030712; padding: 12px; border-radius: 8px; overflow-x: auto; font-size: 12px; color: #a7f3d0; border: 1px solid #1e293b; max-height: 360px; overflow-y: auto; white-space: pre-wrap; }
-.badge { display: inline-block; background: #065f46; color: #d1fae5; padding: 4px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; }
-.btn { display: inline-block; background: #0284c7; color: #fff; text-decoration: none; padding: 5px 10px; border-radius: 6px; font-size: 12px; cursor: pointer; border: none; font-weight: 600; }
-.btn:hover { background: #0369a1; }
-.btn-sec { background: #334155; color: #e2e8f0; }
-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #1f2937; }
-th { color: #94a3b8; font-weight: 600; }
-code { color: #fde68a; font-family: monospace; }
-</style></head><body>
-<div class="header">
-  <div>
-    <h1>CloudMove · Caso 2: Sistema Operativo Capturado y Archivos Reales en AWS</h1>
-    <div><span class="badge">● ONLINE · __FILES_COUNT__ Archivos Reales Subidos del SO Origen</span> &nbsp; Host Origen: <b>__HOST_NAME__</b> · Instancia Cloud: <b>__CLOUD_HOST__</b></div>
-  </div>
-  <div>
-    <a class="btn" href="/files" target="_blank">JSON /files</a>
-    <a class="btn btn-sec" href="/health" target="_blank">JSON /health</a>
-    <a class="btn btn-sec" href="/bundle.tar.gz">Descargar Bundle (.tar.gz)</a>
-  </div>
-</div>
-
-<div class="grid">
-  <div class="card">
-    <h2>1. Explorador de Archivos Reales Subidos desde tu SO (__HOST_NAME__)</h2>
-    <p style="font-size:12px;color:#94a3b8;margin-top:0;">Extraídos en <code>/opt/cloudmove/os_capture/rootfs/</code> y replicados en el volumen EBS secundario <code>/mnt/cloudmove_ebs/rootfs/</code>. Haz clic en cualquier archivo para inspeccionar su contenido real:</p>
-    <table>
-      <thead><tr><th>Archivo del SO Origen</th><th>Tamaño</th><th>SHA-256</th><th>Acción</th></tr></thead>
-      <tbody>__FILES_ROWS__</tbody>
-    </table>
-  </div>
-
-  <div class="card">
-    <h2>2. Visor en Vivo de Contenido del Archivo Seleccionado</h2>
-    <div style="margin-bottom:8px;font-size:12px;color:#cbd5e1;">Archivo activo: <code id="current-file-label">etc/os-release</code></div>
-    <pre id="file-viewer">Cargando archivo real desde el disco EC2...</pre>
-  </div>
-</div>
-
-<div class="grid">
-  <div class="card">
-    <h2>3. Discos y Volúmenes EBS Montados en Vivo en AWS (__CLOUD_HOST__)</h2>
-    <p style="font-size:12px;color:#94a3b8;margin-top:0;">Kernel Cloud: <code>__CLOUD_KERNEL__</code> · Uptime: <b>__CLOUD_UPTIME__</b> · SO Origen: <b>__OS_DISTRO__ (__OS_KERNEL__)</b></p>
-    <pre>__LSBLK_LIVE__</pre>
-  </div>
-  <div class="card">
-    <h2>4. Procesos Activos en la VM y Usuarios Restaurados</h2>
-    <p style="font-size:12px;color:#94a3b8;margin-top:0;">Usuarios locales recreados en <code>/etc/passwd</code>: <code>__LOCAL_USERS__</code></p>
-    <pre>__PS_LIVE__</pre>
-  </div>
-</div>
-
-<script>
-async function loadFile(relPath) {
-  document.getElementById('current-file-label').textContent = '/opt/cloudmove/os_capture/rootfs/' + relPath;
-  document.getElementById('file-viewer').textContent = 'Consultando ' + relPath + ' en la instancia EC2...';
-  try {
-    const res = await fetch('/files/view?path=' + encodeURIComponent(relPath));
-    const txt = await res.text();
-    document.getElementById('file-viewer').textContent = txt;
-  } catch (e) {
-    document.getElementById('file-viewer').textContent = 'Error leyendo archivo: ' + e;
-  }
+HTML=r"""<!DOCTYPE html><html lang=es><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>CloudMove AWS</title><style>
+*{box-sizing:border-box}body{font:13px/1.4 system-ui;background:#f2f3f3;color:#16191f;margin:0}
+.f,.x{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.x{justify-content:space-between}.nv{background:#232f3e;color:#fff;padding:8px 14px}
+.b{padding:4px 8px;border-radius:4px;font:700 12px system-ui;cursor:pointer;border:1px solid #aab7b8;background:#fff;color:#16191f;text-decoration:none}
+.bp{background:#ff9900;border-color:#ff9900;color:#000}.bb,.fb.a{background:#0972d3;border-color:#0972d3;color:#fff}.bg{background:#37475a;color:#fff}
+.w{max-width:1320px;margin:auto;padding:10px}.c,.c0{background:#fff;border:1px solid #d5dbdb;border-radius:5px;padding:9px;margin-bottom:8px}.c0{margin:0}
+.p{padding:2px 7px;border-radius:9px;font:700 11px system-ui;border:1px solid #d5dbdb}.ok{background:#ecfdf5;color:#037f0c;border-color:#a7f3d0}.wn{background:#fffbeb;color:#b45309;border-color:#fde68a}
+.g{display:grid;gap:8px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}.sp{grid-template-columns:1.1fr .9fr}@media(max-width:900px){.sp{grid-template-columns:1fr}}
+.d{font:11px monospace;color:#545b64;word-break:break-all}.tb{background:0;border:0;border-bottom:3px solid #0000;padding:6px 8px;font:700 12px system-ui;color:#545b64;cursor:pointer}.tb.a{color:#0972d3;border-bottom-color:#ff9900;background:#fff}
+.pn{display:none}.pn.a{display:block}.tw{overflow:auto;max-height:340px;border:1px solid #eaeded}
+table{width:100%;border-collapse:collapse;font-size:12px}th{position:sticky;top:0;background:#fafafa;text-align:left;padding:5px;border-bottom:2px solid #d5dbdb}
+td{padding:5px;border-bottom:1px solid #f0f2f2;vertical-align:top}tr.s td{background:#e7f3ff}code{font:11.5px monospace;word-break:break-all}
+.vc{margin:0;padding:8px;max-height:330px;overflow:auto;background:#0f172a;color:#e2e8f0;font:11.5px monospace}
+.ln{display:inline-block;width:22px;color:#64748b;text-align:right;padding-right:5px}
+</style></head><body><div id=nv class="nv x"></div><div class=w><div class=c id=hd></div><div id=ts class=f style="border-bottom:2px solid #d5dbdb;margin-bottom:8px"></div><div id=p0 class="pn a"></div><div id=p1 class=pn></div><div id=p2 class=pn></div><div id=p3 class=pn></div></div><script>
+let D=__INITIAL_DATA_JSON__,F=D.uploaded_files||[],CAT='all',SEL='',RAW='',NL=String.fromCharCode(10);
+const RD='/opt/cloudmove/os_capture/rootfs',ED='/mnt/cloudmove_ebs',G=x=>document.getElementById(x),M=(a,f)=>(a||[]).map(f).join('');
+const E=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])),B=b=>b<1024?b+' B':(b/1024).toFixed(1)+' KiB',K=v=>'<code>'+E(v)+'</code>';
+const T=(h,r,c)=>'<table><thead><tr>'+M(h,x=>'<th>'+x+'</th>')+'</tr></thead><tbody>'+(r.length?M(r,(w,i)=>'<tr'+(c?c(i):'')+'>'+M(w,x=>'<td>'+x+'</td>')+'</tr>'):'<tr><td colspan='+h.length+'>Sin datos</td></tr>')+'</tbody></table>';
+const C=(t,h,r,x='')=>'<div class=c><b style=display:block;margin-bottom:5px>'+t+'</b><div class=tw>'+T(h,r)+'</div>'+x+'</div>';
+const bx=(x,w,s,t,a,b)=>'<rect x='+x+' y=18 width='+w+' height=62 rx=5 fill=#fff stroke='+s+' stroke-width=1.5 /><text x='+(x+6)+' y=35 font-size=11 font-weight=700>'+E(t)+'</text><text x='+(x+6)+' y=51 font-size=10 fill=#545b64>'+E(a)+'</text><text x='+(x+6)+' y=66 font-size=10 fill='+s+' font-weight=700>'+E(b)+'</text>';
+G('nv').innerHTML='<b>CloudMove · Caso 2 AWS <span class=d style=color:#cbd5e1 id=hh></span></b><div class=f><button class="b bp" onclick=runHC()>¿Funcionó mi despliegue?</button><a class="b bg" href=/bundle.tar.gz>Bundle .tar.gz</a><a class="b bg" href=/files target=_blank>/files</a><a class="b bg" href=/health target=_blank>/health</a></div>';
+G('ts').innerHTML=M(['1. Salud','2. Explorador','3. Discos EBS','4. Usuarios y PS'],(t,i)=>'<button class="tb'+(i?'':' a')+'" onclick="sw('+i+',this)">'+t+'</button>');
+function sw(i,b){document.querySelectorAll('.pn,.tb').forEach(x=>x.classList.remove('a'));G('p'+i).classList.add('a');b.classList.add('a')}
+function sC(c,b){CAT=c;document.querySelectorAll('.fb').forEach(x=>x.classList.remove('a'));b.classList.add('a');rF()}
+function draw(h,f,ms){
+  const m=D.captured_os_manifest||{},os=m.os||{},tot=F.reduce((a,x)=>a+(x.size_bytes||0),0),ebs=!!D.ebs_mounted,mir=F.filter(x=>x.ebs_mirrored).length,exp=Math.max(F.length,(m.uploaded_os_files||[]).length);
+  G('hh').textContent=(m.name||'OS')+' -> '+(D.cloud_hostname||'aws');
+  G('hd').innerHTML='<div class=x style=margin-bottom:6px><div class=f>'+M([[h,h?'Despliegue Exitoso':'Validando'],[f,'Archivos '+F.length+'/'+exp+' ('+B(tot)+')'],[ebs,ebs?'EBS OK ('+mir+')':'RootFS nvme0n1']],x=>'<span class="p '+(x[0]?'ok':'wn')+'">'+x[1]+'</span>')+'</div><span class=d>'+E(D._t||'Verificado')+'</span></div><div class=g>'+M([[h,'/health',h?'200 · '+ms+' ms':'...'],[f,'/files',f?'200 · '+F.length+' arch':'...'],[F.length>0,'RootFS',RD],[ebs,'EBS nvme1n1',ebs?ED+'/rootfs':'Solo raíz']],c=>'<div class="c0 f" style="background:'+(c[0]?'#f6fef9;border-color:#a7f3d0':'#fafafa')+'"><b style=color:'+(c[0]?'#037f0c':'#b45309')+'>'+(c[0]?'OK':'...')+'</b><div><b>'+c[1]+'</b><div class=d>'+E(c[2])+'</div></div></div>')+'</div>';
+  G('p0').innerHTML='<div class=g style=margin-bottom:8px>'+M([['Host',D.cloud_hostname,m.name||'OS'],['Kernel',os.distro||'Linux',D.cloud_kernel],['Uptime',D.cloud_uptime||'Activo','80/3000/8000'],['Archivos',F.length+'/'+exp,B(tot)]],x=>'<div class=c0><div class=d><b>'+x[0]+'</b></div><b>'+E(x[1])+'</b><div class=d>'+E(x[2])+'</div></div>')+'</div><div class=c><b style=display:block;margin-bottom:6px>Trazabilidad y Topología EBS (Archify)</b><div class=g style=margin-bottom:7px>'+M([['Origen','/etc/*, /home/*, /var/log/*'],['RootFS nvme0n1',RD+'/'],['EBS nvme1n1',ED+'/rootfs/']],x=>'<div class=c0 style=background:#f8fafc><b>'+x[0]+'</b><br>'+K(x[1])+'</div>')+'</div><div style=overflow-x:auto><svg viewBox="0 0 790 88" style=width:100%;min-width:500px;display:block>'+bx(2,140,'#545b64','SO Origen',m.name||'Host',F.length+' arch')+'<path d="M142 49H170l-5-4m5 4-5 4" stroke=#0972d3 stroke-width=2 fill=none /><rect x=174 y=4 width=390 height=80 rx=6 fill=#f2f8fd stroke=#0972d3 stroke-dasharray="4 3"/><text x=184 y=15 font-size=10.5 font-weight=700 fill=#0972d3>EC2 ('+E(D.cloud_hostname)+')</text>'+bx(184,182,'#ff9900','RootFS nvme0n1','/opt/.../os_capture/rootfs',':3000/:8000')+bx(380,174,ebs?'#037f0c':'#aab7b8','EBS nvme1n1',ED+'/rootfs',ebs?'OK ('+mir+')':'Pendiente')+'<path d="M564 49H592l-5-4m5 4-5 4" stroke=#0972d3 stroke-width=2 fill=none />'+bx(596,190,'#037f0c','API /etc/passwd','/health · /files',(D.passwd_users||[]).filter(u=>u.is_source_user).length+' users OK')+'</svg></div></div>';
+  if(!G('fq'))G('p1').innerHTML='<div class=c><div class=x style=margin-bottom:6px><b>Explorador de Archivos</b><span id=fsb class=p>0</span></div><div class=f style=margin-bottom:7px><input id=fq style="padding:5px;border:1px solid #879596;border-radius:4px;flex:1" placeholder="Buscar ruta o SHA..." oninput=rF()>'+M([['all','Todos'],['config','/etc'],['user','/home'],['logs','/var']],(x,i)=>'<button class="b fb'+(i?'':' a')+'" onclick="sC(\''+x[0]+'\',this)">'+x[1]+'</button>')+'</div><div class="g sp"><div class=tw id=ftw onclick="var b=event.target.closest(\'[data-r]\');if(b)loadF(b.dataset.r)"></div><div style=border-radius:5px;overflow:hidden><div class=x style="padding:6px 9px;background:#1e293b;color:#fff"><div><b id=vo></b><div class=d style=color:#94a3b8 id=vp></div></div><div class=f><button class=b onclick="if(RAW)navigator.clipboard?.writeText(RAW)">Copiar</button><a id=vr class="b bb" target=_blank>Raw</a></div></div><pre class=vc id=vb></pre></div></div></div>';
+  G('p2').innerHTML=C('Discos (lsblk)',['Dev','Size','Type','FS','Mount','UUID'],(D.lsblk_rows||[]).map(r=>[K(' '.repeat(r.depth*2)+r.name),'<b>'+E(r.size)+'</b>',E(r.type),K(r.fstype),K(r.mountpoint),K(r.uuid)]))+C('Uso FS (df -hT)',['FS','Type','Size','Used','Avail','Uso','Mount'],(D.df_rows||[]).map(r=>[K(r.filesystem),E(r.fstype),E(r.size),E(r.used),E(r.avail),'<b>'+E(r.use_pct)+'</b><div style=height:4px;background:#e5e7eb><div style="height:100%;background:#0972d3;width:'+E(r.use_pct)+'"></div></div>',K(r.mountpoint)]),'<details style=margin-top:6px><summary style=cursor:pointer;color:#0972d3;font-weight:700>CLI raw</summary><pre class=vc>'+E((D.lsblk_live||'')+NL+(D.df_live||''))+'</pre></details>');
+  G('p3').innerHTML=C('Cuentas /etc/passwd',['User','UID/GID','Home','Shell','Estado'],(D.passwd_users||[]).map(u=>['<b>'+K(u.username)+'</b>',K(u.uid+'/'+u.gid),K(u.home),K(u.shell),(u.is_source_user?'<span class="p ok">Origen</span>':'<span class=p>EC2</span>')+(u.home_exists?' Home':'')]))+C('Procesos (ps)',['PID','User','CPU','MEM','Cmd'],(D.ps_rows||[]).map(p=>[K(p.pid),K(p.user),E(p.cpu)+'%',E(p.mem)+'%','<b>'+E(p.command)+'</b>']));
+  rF();
 }
-loadFile('etc/os-release');
-</script>
-</body></html>"""
+function rF(){
+  const q=(G('fq').value||'').trim().toLowerCase(),lst=F.filter(f=>(CAT==='all'||f.category===CAT)&&(!q||f.path.toLowerCase().includes(q)||f.sha256.includes(q)));
+  G('fsb').textContent=lst.length+'/'+F.length+' ('+B(lst.reduce((a,f)=>a+(f.size_bytes||0),0))+')';
+  G('ftw').innerHTML=T(['Origen','AWS RootFS / EBS','Tam','SHA','Ver'],lst.map(f=>['<b>'+K(f.origin_path)+'</b>',K(f.rootfs_path)+(f.ebs_mirrored?'<div style=color:#037f0c>EBS: '+K(f.ebs_path)+'</div>':''),B(f.size_bytes),K(f.sha256.slice(0,8)),'<button class="b bb" style="padding:2px 6px" data-r="'+E(f.path)+'">Ver</button>']),i=>(SEL===lst[i].path?' class=s':''));
+}
+function hi(t,p){return M(t.split(NL),(l,i)=>{let h=E(l);if(p.endsWith('.json'))h=h.replace(/"([^"]+)":/g,'<span style=color:#38bdf8>"$1"</span>:');else if(h.trim()[0]=='#')h='<span style=color:#94a3b8>'+h+'</span>';else if(/^\w+=/.test(h))h=h.replace(/^([^=]+)=(.*)$/,'<span style=color:#38bdf8>$1</span>=<span style=color:#86efac>$2</span>');return '<div><span class=ln>'+(i+1)+'</span>'+h+'</div>'})}
+async function loadF(rp){
+  SEL=rp;rF();G('vo').textContent='/'+rp;G('vp').textContent=RD+'/'+rp+' | '+ED+'/rootfs/'+rp;G('vr').href='/files/view?path='+encodeURIComponent(rp);G('vb').textContent='Cargando...';
+  try{RAW=await(await fetch('/files/view?path='+encodeURIComponent(rp))).text();G('vb').innerHTML=hi(RAW,rp)}catch(e){G('vb').textContent='Error: '+e}
+}
+async function runHC(){
+  const t0=performance.now();
+  try{const[hr,fr]=await Promise.all([fetch('/health'),fetch('/files')]);const ms=Math.round(performance.now()-t0);if(hr.ok)D=await hr.json();if(fr.ok){const fd=await fr.json();if(fd.files)F=fd.files}D._t=new Date().toLocaleTimeString()+' ('+ms+' ms)';draw(hr.ok,fr.ok,ms)}catch(e){draw(false,false,0)}
+}
+draw(true,true,0);if(F.length)loadF(F[0].path);runHC();
+</script></body></html>"""
 
-class Handler(http.server.BaseHTTPRequestHandler):
+class H(http.server.BaseHTTPRequestHandler):
+    def _w(self,c,t,b,cd=""):
+        b=b.encode("utf-8") if isinstance(b,str) else b;self.send_response(c);self.send_header("Content-Type",t);self.send_header("Access-Control-Allow-Origin","*")
+        if cd: self.send_header("Content-Disposition",cd)
+        self.end_headers();self.wfile.write(b)
     def do_GET(self):
         try:
-            parsed = urllib.parse.urlparse(self.path)
-            path = parsed.path
-            qs = urllib.parse.parse_qs(parsed.query)
+            u=urllib.parse.urlparse(self.path);p=u.path;q=urllib.parse.parse_qs(u.query)
+            if p=="/bundle.tar.gz" and os.path.isfile(BP):
+                with open(BP,"rb") as f: self._w(200,"application/gzip",f.read(),'attachment;filename="os_real_files_bundle.tar.gz"');return
+            if p=="/files": fl=uf();self._w(200,"application/json; charset=utf-8",json.dumps({"status":"OK","rootfs_dir":RD,"ebs_mount_dir":ED+"/rootfs","total_files":len(fl),"total_bytes":sum(f["size_bytes"] for f in fl),"files":fl},separators=(",",":"),ensure_ascii=False));return
+            if p=="/files/view":
+                rel=(q.get("path") or ["etc/os-release"])[0].lstrip("/");sf=os.path.realpath(os.path.join(RD,rel))
+                if not sf.startswith(os.path.realpath(RD)) or not os.path.isfile(sf): self._w(404,"text/plain",f"No encontrado: {rel}");return
+                with open(sf,"rb") as f: self._w(200,"text/plain; charset=utf-8",f.read());return
+            d=tel()
+            if p.startswith(("/health","/api/")): self._w(200,"application/json; charset=utf-8",json.dumps(d,separators=(",",":"),ensure_ascii=False));return
+            self._w(200,"text/html; charset=utf-8",HTML.replace("__INITIAL_DATA_JSON__",json.dumps(d,separators=(",",":"),ensure_ascii=False).replace("<",r"\u003c")))
+        except Exception as exc: self._w(500,"text/plain",f"Error: {exc}")
 
-            if path == "/bundle.tar.gz" and os.path.isfile(BUNDLE_PATH):
-                with open(BUNDLE_PATH, "rb") as f:
-                    raw = f.read()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/gzip")
-                self.send_header("Content-Disposition", 'attachment; filename="os_real_files_bundle.tar.gz"')
-                self.send_header("Content-Length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
-                return
-
-            if path == "/files":
-                files_list = list_uploaded_files()
-                body = json.dumps({
-                    "status": "OK",
-                    "rootfs_dir": ROOTFS_DIR,
-                    "ebs_mount_dir": EBS_MOUNT_DIR + "/rootfs",
-                    "total_files": len(files_list),
-                    "files": files_list,
-                }, indent=2, ensure_ascii=False).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(body)
-                return
-
-            if path == "/files/view":
-                req_rel = (qs.get("path") or ["etc/os-release"])[0].lstrip("/")
-                safe_full = os.path.realpath(os.path.join(ROOTFS_DIR, req_rel))
-                if not safe_full.startswith(os.path.realpath(ROOTFS_DIR)) or not os.path.isfile(safe_full):
-                    self.send_response(404)
-                    self.send_header("Content-Type", "text/plain; charset=utf-8")
-                    self.end_headers()
-                    self.wfile.write(f"Archivo no encontrado: {req_rel}".encode("utf-8"))
-                    return
-                with open(safe_full, "rb") as f:
-                    content = f.read()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(content)
-                return
-
-            data = get_live_telemetry()
-            if path.startswith("/health") or path.startswith("/api/"):
-                body = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(body)
-                return
-
-            m = data.get("captured_os_manifest", {})
-            os_info = m.get("os", {})
-            rows_html = []
-            for fmeta in data.get("uploaded_files", []):
-                rp = fmeta["path"]
-                rows_html.append(
-                    f"<tr><td><code>{rp}</code></td>"
-                    f"<td>{fmeta['size_bytes']} B</td>"
-                    f"<td><code>{fmeta['sha256'][:10]}</code></td>"
-                    f"<td><button class='btn' onclick=\\"loadFile('{rp}')\\">Ver Contenido</button> "
-                    f"<a class='btn btn-sec' href='{fmeta['view_url']}' target='_blank'>Raw</a></td></tr>"
-                )
-
-            page = (
-                HTML_TEMPLATE
-                .replace("__FILES_COUNT__", str(data.get("uploaded_files_count", 0)))
-                .replace("__HOST_NAME__", str(m.get("name", "live-os")))
-                .replace("__CLOUD_HOST__", str(data.get("cloud_hostname", "")))
-                .replace("__CLOUD_KERNEL__", str(data.get("cloud_kernel", "")))
-                .replace("__CLOUD_UPTIME__", str(data.get("cloud_uptime", "")))
-                .replace("__OS_DISTRO__", str(os_info.get("distro", "Linux")))
-                .replace("__OS_KERNEL__", str(os_info.get("kernel", "")))
-                .replace("__LOCAL_USERS__", ", ".join(m.get("local_users", [])))
-                .replace("__LSBLK_LIVE__", str(data.get("lsblk_live", "")) + "\\n" + str(data.get("df_live", "")))
-                .replace("__PS_LIVE__", str(data.get("ps_live", "")))
-                .replace("__FILES_ROWS__", "".join(rows_html))
-            )
-            body = page.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(body)
-        except Exception as exc:
-            err_msg = f"Error interno en portal CloudMove UC2: {exc}".encode("utf-8")
-            self.send_response(500)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(err_msg)
-
-def serve_port(port):
-    server = http.server.ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    server.serve_forever()
-
-if __name__ == "__main__":
-    for p in (80, 3000, 8000):
-        t = threading.Thread(target=serve_port, args=(p,), daemon=True)
-        t.start()
+if __name__=="__main__":
+    for pt in (80,3000,8000): threading.Thread(target=lambda x:http.server.ThreadingHTTPServer(("0.0.0.0",x),H).serve_forever(),args=(pt,),daemon=True).start()
     threading.Event().wait()
 '''
 
-    user_data_script = f"""#!/usr/bin/env bash
-# ==============================================================================
-# CloudMove Use Case 2 — Autonomous OS Capture Bootstrap & Live Telemetry Portal
-# Captured Host: {manifest.get('name', 'live-os')} | SHA-256: {manifest.get('sha256', '')[:16]}...
-# ==============================================================================
+    def _build_uc2_user_data(files_dict: Dict[str, str], manifest_json_txt: str) -> str:
+        files_json_txt = json.dumps(files_dict, separators=(",", ":"), ensure_ascii=False)
+        return f"""#!/usr/bin/env bash
 set -uo pipefail
 exec > >(tee -a /var/log/cloudmove-os-bootstrap.log) 2>&1
-
-echo "[CloudMove UC2] Inicializando reconstrucción y verificación del Sistema Operativo capturado..."
-mkdir -p /opt/cloudmove/os_capture/rootfs
-
-# 1. Persistir manifiesto completo del SO capturado (discos, UUIDs, /etc, procesos, servicios)
+mkdir -p /opt/cloudmove/os_capture/rootfs /mnt/cloudmove_ebs
 cat << 'EOF_MANIFEST' > /opt/cloudmove/os_capture/image_manifest.json
-{compact_os_json}
+{manifest_json_txt}
 EOF_MANIFEST
-
-# 2. Extraer paquete real de archivos capturados del SO origen (/etc, /home, inventarios dpkg/lsblk/ps)
-cat << 'EOF_BUNDLE_B64' | base64 -d > /opt/cloudmove/os_capture/os_real_files_bundle.tar.gz
-{b64_os_files_bundle}
-EOF_BUNDLE_B64
-tar -xzf /opt/cloudmove/os_capture/os_real_files_bundle.tar.gz -C /opt/cloudmove/os_capture/rootfs || true
-echo "[CloudMove UC2] Archivos reales del SO origen extraídos en /opt/cloudmove/os_capture/rootfs"
-
-# 3. Aplicar parámetros de kernel (sysctl) capturados del host origen
+cat << 'EOF_FILES_JSON' > /opt/cloudmove/os_capture/os_files_map.json
+{files_json_txt}
+EOF_FILES_JSON
+python3 - << 'PY_EXTRACT'
+import json,os,tarfile
+R="/opt/cloudmove/os_capture/rootfs"
+fm=json.load(open("/opt/cloudmove/os_capture/os_files_map.json",encoding="utf-8"))
+for rel,txt in fm.items():
+    d=os.path.realpath(os.path.join(R,rel.lstrip("/")))
+    if not d.startswith(os.path.realpath(R)): continue
+    os.makedirs(os.path.dirname(d),exist_ok=True)
+    with open(d,"w",encoding="utf-8") as o: o.write(txt)
+with tarfile.open("/opt/cloudmove/os_capture/os_real_files_bundle.tar.gz","w:gz") as tf:
+    for rel in fm:
+        p=os.path.join(R,rel.lstrip("/"))
+        if os.path.isfile(p): tf.add(p,arcname=rel.lstrip("/"))
+PY_EXTRACT
 cat << 'EOF_SYSCTL' > /etc/sysctl.d/99-cloudmove-migrated.conf
 {sysctl_lines}
 EOF_SYSCTL
 sysctl --system >/dev/null 2>&1 || true
-
-# 4. Reconstruir cuentas de usuario locales detectadas en el SO de origen y restaurar sus archivos
-for USERNAME in {users_csv}; do
-    if ! id "$USERNAME" >/dev/null 2>&1; then
-        useradd -m -s /bin/bash "$USERNAME" >/dev/null 2>&1 || true
-        echo "[CloudMove UC2] Usuario local restaurado: $USERNAME"
-    fi
+for U in {users_csv}; do
+    id "$U" >/dev/null 2>&1 || useradd -m -s /bin/bash "$U" >/dev/null 2>&1 || true
+    [ -d "/opt/cloudmove/os_capture/rootfs/home/$U" ] && [ -d "/home/$U" ] && cp -rn "/opt/cloudmove/os_capture/rootfs/home/$U/"* "/home/$U/" 2>/dev/null && chown -R "$U:$U" "/home/$U" 2>/dev/null || true
 done
-if [ -d "/opt/cloudmove/os_capture/rootfs/home/lacastrilp" ] && [ -d "/home/lacastrilp" ]; then
-    cp -r /opt/cloudmove/os_capture/rootfs/home/lacastrilp/* /home/lacastrilp/ 2>/dev/null || true
-    chown -R lacastrilp:lacastrilp /home/lacastrilp 2>/dev/null || true
-fi
-
-# 5. Montar volumen EBS secundario (si está adjunto) en /mnt/cloudmove_ebs y replicar archivos del SO
-mkdir -p /mnt/cloudmove_ebs
-for DEV_CANDIDATE in /dev/nvme1n1 /dev/xvdf /dev/sdf; do
-    if [ -b "$DEV_CANDIDATE" ]; then
-        if ! blkid "$DEV_CANDIDATE" >/dev/null 2>&1; then
-            mkfs.ext4 -F -L CLOUDMOVE_OS "$DEV_CANDIDATE" >/dev/null 2>&1 || true
-        fi
-        mount "$DEV_CANDIDATE" /mnt/cloudmove_ebs 2>/dev/null || true
-        mkdir -p /mnt/cloudmove_ebs/rootfs
-        cp -r /opt/cloudmove/os_capture/rootfs/* /mnt/cloudmove_ebs/rootfs/ 2>/dev/null || true
+for D in /dev/nvme1n1 /dev/xvdf /dev/sdf; do
+    if [ -b "$D" ]; then
+        blkid "$D" >/dev/null 2>&1 || mkfs.ext4 -F -L CLOUDMOVE_OS "$D" >/dev/null 2>&1 || true
+        mount "$D" /mnt/cloudmove_ebs 2>/dev/null || true
+        mkdir -p /mnt/cloudmove_ebs/rootfs && cp -r /opt/cloudmove/os_capture/rootfs/* /mnt/cloudmove_ebs/rootfs/ 2>/dev/null || true
         cp /opt/cloudmove/os_capture/image_manifest.json /mnt/cloudmove_ebs/ 2>/dev/null || true
-        echo "[CloudMove UC2] Volumen EBS secundario ($DEV_CANDIDATE) montado en /mnt/cloudmove_ebs con archivos del SO."
         break
     fi
 done
-
-# 6. Crear portal interactivo de telemetría y explorador de archivos del SO en vivo (Puertos 80, 3000 y 8000)
 cat << 'EOF_SERVER' > /opt/cloudmove/os_capture/telemetry_server.py
 {telemetry_server_py}
 EOF_SERVER
-
 cat << 'EOF_UNIT' > /etc/systemd/system/cloudmove-os-telemetry.service
 [Unit]
-Description=CloudMove Use Case 2 Migrated OS Verification & Telemetry Portal
+Description=CloudMove UC2 Telemetry
 After=network.target
-
 [Service]
-Type=simple
 ExecStart=/usr/bin/python3 /opt/cloudmove/os_capture/telemetry_server.py
 Restart=always
 RestartSec=3
-
 [Install]
 WantedBy=multi-user.target
 EOF_UNIT
-
-systemctl daemon-reload
-systemctl enable --now cloudmove-os-telemetry.service
-echo "[CloudMove UC2] Portal y explorador de archivos del SO migrado activo en puertos 80, 3000 y 8000."
+systemctl daemon-reload && systemctl enable --now cloudmove-os-telemetry.service
 """
+
+    user_data_script = _build_uc2_user_data(bundled_files_contents, compact_os_json)
+    trim_order = [
+        "var/log/cloudmove_source_dpkg_packages.txt",
+        "var/log/cloudmove_source_processes_ports.txt",
+        "var/log/cloudmove_source_lsblk_df.txt",
+        "home/lacastrilp/CapstoneProject_TI/README.md",
+        "etc/nsswitch.conf",
+        "etc/sysctl.conf",
+        "etc/crontab",
+        "etc/group",
+    ]
+    for trim_key in trim_order:
+        if len(base64.b64encode(gzip.compress(user_data_script.encode("utf-8")))) <= 15900:
+            break
+        if trim_key in bundled_files_contents:
+            bundled_files_contents[trim_key] = bundled_files_contents[trim_key][:220] + "\n# [Compactado EC2 16 KB]"
+            user_data_script = _build_uc2_user_data(bundled_files_contents, compact_os_json)
+
+    protected = {
+        "etc/fstab",
+        "etc/os-release",
+        "etc/passwd",
+        "etc/hosts",
+        "var/log/cloudmove_selected_paths_map.json",
+        "home/lacastrilp/archivos_usuario_origen.txt",
+    } | {p.lstrip("/") for p in selected_paths}
+    for longest_k in sorted(bundled_files_contents, key=lambda k: (k in protected, -len(bundled_files_contents[k]))):
+        if len(base64.b64encode(gzip.compress(user_data_script.encode("utf-8")))) <= 15900:
+            break
+        if len(bundled_files_contents[longest_k]) > 600:
+            bundled_files_contents[longest_k] = bundled_files_contents[longest_k][:600] + "\n# [Recortado]"
+            user_data_script = _build_uc2_user_data(bundled_files_contents, compact_os_json)
 
     files = dict(iac_bundle["files"])
     files["user_data.sh"] = user_data_script

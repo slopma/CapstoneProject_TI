@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { apiFetch } from "../../utils/apiClient";
 import { getSessionCredentials, saveSessionCredentials } from "../../utils/credentialVault";
 import AwsCloudAuditPanel from "../audit/AwsCloudAuditPanel";
+import Case2AwsValidationView from "./Case2AwsValidationView";
 
 const STATUS_BADGE_STYLE = {
   IDLE: { bg: "#e2e8f0", fg: "#334155", label: "EN ESPERA (IDLE)" },
@@ -89,7 +90,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
   const [showStateResources, setShowStateResources] = useState(true);
   const [confirmDestroy, setConfirmDestroy] = useState(false);
   const [copiedText, setCopiedText] = useState("");
-  const [consultTab, setConsultTab] = useState("resources"); // "resources" | "endpoints" | "disks_users" | "processes_ports" | "files_services"
+  const [consultTab, setConsultTab] = useState("resources"); // "resources" | "uc2_validation" | "endpoints" | "aws_audit"
   const [liveHostProbe, setLiveHostProbe] = useState(null);
   const [probingLiveOs, setProbingLiveOs] = useState(false);
   const [instanceHealth, setInstanceHealth] = useState(null);
@@ -97,6 +98,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
 
   const logContainerRef = useRef(null);
   const prevRunningRef = useRef(false);
+  const autoSwitchedUc2IpRef = useRef(null);
 
   // Build credentials dictionary if using form mode
   const getActiveCredentials = useCallback(() => {
@@ -356,6 +358,13 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
 
   const isVmCase = job?.use_case === "vm_image";
   const srcEnv = job?.source_environment || {};
+
+  useEffect(() => {
+    if (isVmCase && publicIp && autoSwitchedUc2IpRef.current !== publicIp) {
+      autoSwitchedUc2IpRef.current = publicIp;
+      setConsultTab("uc2_validation");
+    }
+  }, [isVmCase, publicIp]);
 
   // Parse Terraform Plan / Dry-Run & Live Apply progress directly from logs
   const parsedPlanInfo = React.useMemo(() => {
@@ -992,44 +1001,29 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
               >
                 1. Recursos Terraform ({parsedPlanInfo.resources.length})
               </button>
-              <button
-                type="button"
-                className={`cm-btn sm ${consultTab === "endpoints" ? "primary" : "secondary"}`}
-                onClick={() => setConsultTab("endpoints")}
-              >
-                2. Cómo Consultar los Datos (Endpoints & CLI)
-              </button>
-              {isVmCase && (
-                <>
-                  <button
-                    type="button"
-                    className={`cm-btn sm ${consultTab === "disks_users" ? "primary" : "secondary"}`}
-                    onClick={() => setConsultTab("disks_users")}
-                  >
-                    3. Discos ({(srcEnv.disks || []).length}) y Usuarios ({(srcEnv.local_users || []).length})
-                  </button>
-                  <button
-                    type="button"
-                    className={`cm-btn sm ${consultTab === "processes_ports" ? "primary" : "secondary"}`}
-                    onClick={() => setConsultTab("processes_ports")}
-                  >
-                    4. Procesos ({(srcEnv.running_processes || []).length}) y Puertos ({(srcEnv.listening_ports || []).length})
-                  </button>
-                  <button
-                    type="button"
-                    className={`cm-btn sm ${consultTab === "files_services" ? "primary" : "secondary"}`}
-                    onClick={() => setConsultTab("files_services")}
-                  >
-                    5. Archivos del SO (/etc, /var, /home) y Servicios ({(srcEnv.systemd_services || []).length})
-                  </button>
-                </>
+              {isVmCase ? (
+                <button
+                  type="button"
+                  className={`cm-btn sm ${consultTab === "uc2_validation" ? "primary" : "secondary"}`}
+                  onClick={() => setConsultTab("uc2_validation")}
+                >
+                  2. Validación AWS: Salud, Archivos, EBS y Usuarios
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className={`cm-btn sm ${consultTab === "endpoints" ? "primary" : "secondary"}`}
+                  onClick={() => setConsultTab("endpoints")}
+                >
+                  2. Cómo Consultar los Datos (Endpoints & CLI)
+                </button>
               )}
               <button
                 type="button"
                 className={`cm-btn sm ${consultTab === "aws_audit" ? "primary" : "secondary"}`}
                 onClick={() => setConsultTab("aws_audit")}
               >
-                Auditoría de Cuenta AWS (Consultar y Eliminar Recursos)
+                {isVmCase ? "3." : "3."} Auditoría de Cuenta AWS (Consultar y Eliminar Recursos)
               </button>
             </div>
 
@@ -1144,8 +1138,22 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
               </div>
             )}
 
-            {/* PESTAÑA 2: CÓMO CONSULTAR LOS DATOS CREADOS (ENDPOINTS CLOUD Y CONSULTA LOCAL) */}
-            {consultTab === "endpoints" && (
+            {/* PESTAÑA 2 (CASO 2): VALIDACIÓN DE DESPLIEGUE, ARCHIVOS EN AWS, DISCOS EBS Y USUARIOS */}
+            {consultTab === "uc2_validation" && isVmCase && (
+              <Case2AwsValidationView
+                job={job}
+                publicIp={publicIp}
+                primaryInstance={primaryInst}
+                outputsMap={outputsMap}
+                onCopy={handleCopy}
+                onProbeLocalHost={handleProbeLiveOsData}
+                probingLocalHost={probingLiveOs}
+                localHostProbe={liveHostProbe}
+              />
+            )}
+
+            {/* PESTAÑA 2 (CASO 1): CÓMO CONSULTAR LOS DATOS CREADOS (ENDPOINTS CLOUD Y CONSULTA LOCAL) */}
+            {consultTab === "endpoints" && !isVmCase && (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {/* Monitor de Salud en Tiempo Real de la Instancia AWS */}
                 {publicIp && (
@@ -1419,21 +1427,15 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                 {/* Nota de arranque Cloud-Init */}
                 <div
                   style={{
-                    backgroundColor: "#fefce8",
-                    border: "1px solid #fef08a",
+                    backgroundColor: "#f8fafc",
+                    border: "1px solid #d5dbdb",
                     borderRadius: 6,
                     padding: "8px 12px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
                     fontSize: 12.5,
-                    color: "#854d0e",
+                    color: "#545b64",
                   }}
                 >
-                  <span style={{ fontSize: 16 }}>⏳</span>
-                  <div>
-                    <strong>Tiempo de arranque de la instancia:</strong> Tras completar Terraform, la máquina en AWS tarda <strong>2 a 3 minutos</strong> en instalar Docker y arrancar los contenedores en segundo plano. Asegúrate de ingresar con <code>http://</code> (sin HTTPS) o desactivar temporalmente el modo Solo HTTPS de Firefox.
-                  </div>
+                  <strong>Tiempo de arranque de la instancia:</strong> Tras completar Terraform, la máquina en AWS tarda <strong>2 a 3 minutos</strong> en iniciar los servicios en segundo plano. Ingresa con <code>http://</code> (sin TLS).
                 </div>
 
                 {/* Comandos de Consulta Rápida (Funciona tanto en Dry-Run local como en Cloud) */}
@@ -1496,204 +1498,7 @@ curl -Iv http://${publicIp || "<IP_PUBLICA_EC2>"}:8000/docs`}
               </div>
             )}
 
-            {/* PESTAÑA 3: DISCOS, PARTICIONES (LSBLK) Y USUARIOS LOCALES */}
-            {consultTab === "disks_users" && isVmCase && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <div style={{ backgroundColor: "#ffffff", padding: 12, borderRadius: 6, border: "1px solid #cbd5e1" }}>
-                  <strong style={{ fontSize: 13, color: "#0f172a", display: "block", marginBottom: 8 }}>
-                    Discos y Particiones Capturados del SO (Mapeados a <code>aws_ebs_volume</code> + <code>root_block_device</code>):
-                  </strong>
-                  <div style={{ overflowX: "auto" }}>
-                    <table className="cm-table" style={{ margin: 0, fontSize: 12.5 }}>
-                      <thead>
-                        <tr>
-                          <th>Dispositivo / Partición</th>
-                          <th>Punto de Montaje</th>
-                          <th>Sistema de Archivos</th>
-                          <th>UUID Preservado en /etc/fstab</th>
-                          <th>Tamaño / Uso</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(srcEnv.disks || []).flatMap((d) =>
-                          (d.partitions || []).map((p, idx) => (
-                            <tr key={`${d.device}-${idx}`}>
-                              <td>
-                                <strong><code>{p.device || p.name || `${d.device}p${idx + 1}`}</code></strong>
-                              </td>
-                              <td>
-                                <code>{p.mount_point || "[SWAP / RAW]"}</code>
-                              </td>
-                              <td>
-                                <code>{p.filesystem || "ext4"}</code>
-                              </td>
-                              <td>
-                                <code>{p.uuid || "UUID verificado"}</code>
-                              </td>
-                              <td>
-                                <strong>{p.size_gib ?? d.size_gib} GiB</strong>
-                                {p.used_gib ? ` (${p.used_gib} GiB usados)` : ""}
-                              </td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <div style={{ backgroundColor: "#ffffff", padding: 12, borderRadius: 6, border: "1px solid #cbd5e1" }}>
-                  <strong style={{ fontSize: 13, color: "#0f172a", display: "block", marginBottom: 6 }}>
-                    Cuentas de Usuario Locales Capturadas (Restauradas vía <code>user_data.sh</code>):
-                  </strong>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {(srcEnv.local_users || ["root"]).map((u) => (
-                      <span key={u} className="cm-badge info" style={{ fontSize: 12 }}>
-                        <code>{u}</code>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* PESTAÑA 4: PROCESOS CORRIENDO (PS AUX) Y PUERTOS ACTIVOS (SS -TULPN) */}
-            {consultTab === "processes_ports" && isVmCase && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <div style={{ backgroundColor: "#ffffff", padding: 12, borderRadius: 6, border: "1px solid #cbd5e1" }}>
-                  <strong style={{ fontSize: 13, color: "#0f172a", display: "block", marginBottom: 6 }}>
-                    Puertos TCP/UDP en Escucha Detectados en el SO y Abiertos en <code>aws_security_group.app_sg</code> ({(srcEnv.listening_ports || []).length}):
-                  </strong>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {(srcEnv.listening_ports || [22, 80, 443, 3000, 8000]).map((port) => (
-                      <span key={port} className="cm-badge observed" style={{ fontSize: 12 }}>
-                        TCP <code>:{port}</code>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                <div style={{ backgroundColor: "#ffffff", padding: 12, borderRadius: 6, border: "1px solid #cbd5e1" }}>
-                  <strong style={{ fontSize: 13, color: "#0f172a", display: "block", marginBottom: 8 }}>
-                    Procesos Activos Capturados en el Sistema Operativo ({(srcEnv.running_processes || []).length} procesos):
-                  </strong>
-                  <div style={{ maxHeight: 260, overflowY: "auto" }}>
-                    <table className="cm-table" style={{ margin: 0, fontSize: 12 }}>
-                      <thead>
-                        <tr>
-                          <th>PID</th>
-                          <th>Usuario</th>
-                          <th>Proceso</th>
-                          <th>CPU %</th>
-                          <th>MEM %</th>
-                          <th>Comando Completo</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(srcEnv.running_processes || []).slice(0, 35).map((proc, pIdx) => (
-                          <tr key={`${proc.pid}-${pIdx}`}>
-                            <td><code>{proc.pid}</code></td>
-                            <td><code>{proc.user}</code></td>
-                            <td><strong>{proc.name}</strong></td>
-                            <td>{proc.cpu_percent}%</td>
-                            <td>{proc.mem_percent}%</td>
-                            <td><code style={{ fontSize: 11.5 }}>{proc.command}</code></td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* PESTAÑA 5: ARCHIVOS DEL SO (/ETC, /OPT, /VAR, /HOME) Y SERVICIOS SYSTEMD */}
-            {consultTab === "files_services" && isVmCase && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                <div style={{ backgroundColor: "#f0fdf4", padding: 12, borderRadius: 6, border: "1px solid #86efac" }}>
-                  <strong style={{ fontSize: 13, color: "#14532d", display: "block", marginBottom: 6 }}>
-                    Archivos Reales Subidos de tu SO a la VM en AWS (<code>/opt/cloudmove/os_capture/rootfs</code> y EBS <code>/mnt/cloudmove_ebs/rootfs</code>):
-                  </strong>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                    {[
-                      "etc/os-release",
-                      "etc/fstab",
-                      "etc/hostname",
-                      "etc/hosts",
-                      "etc/passwd",
-                      "etc/crontab",
-                      "home/lacastrilp/archivos_usuario_origen.txt",
-                      "home/lacastrilp/CapstoneProject_TI/README.md",
-                      "var/log/cloudmove_source_lsblk_df.txt",
-                      "var/log/cloudmove_source_dpkg_packages.txt",
-                      "var/log/cloudmove_source_processes_ports.txt",
-                    ].map((relPath) =>
-                      publicIp ? (
-                        <a
-                          key={relPath}
-                          href={`http://${publicIp}:3000/files/view?path=${encodeURIComponent(relPath)}`}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="cm-badge observed"
-                          style={{ textDecoration: "none", fontSize: 12, cursor: "pointer" }}
-                        >
-                          <code>/{relPath}</code> ↗
-                        </a>
-                      ) : (
-                        <span key={relPath} className="cm-badge neutral" style={{ fontSize: 12 }}>
-                          <code>/{relPath}</code>
-                        </span>
-                      )
-                    )}
-                  </div>
-                </div>
-
-                <div style={{ backgroundColor: "#ffffff", padding: 12, borderRadius: 6, border: "1px solid #cbd5e1" }}>
-                  <strong style={{ fontSize: 13, color: "#0f172a", display: "block", marginBottom: 8 }}>
-                    Inventario de Directorios y Archivos Críticos del Sistema Operativo:
-                  </strong>
-                  <div style={{ overflowX: "auto" }}>
-                    <table className="cm-table" style={{ margin: 0, fontSize: 12 }}>
-                      <thead>
-                        <tr>
-                          <th>Directorio del SO</th>
-                          <th>Archivos</th>
-                          <th>Subcarpetas</th>
-                          <th>Muestra de Archivos / Componentes Capturados</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(srcEnv.filesystem_inventory || srcEnv.filesystem_summary || []).map((dir) => (
-                          <tr key={dir.path}>
-                            <td><strong><code>{dir.path}</code></strong></td>
-                            <td>{dir.files_count ?? 0}</td>
-                            <td>{dir.subdirs_count ?? 0}</td>
-                            <td>
-                              <code>{(dir.sample_entries || []).slice(0, 8).join(", ") || "Directorio verificado"}</code>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <div style={{ backgroundColor: "#ffffff", padding: 12, borderRadius: 6, border: "1px solid #cbd5e1" }}>
-                  <strong style={{ fontSize: 13, color: "#0f172a", display: "block", marginBottom: 8 }}>
-                    Servicios <code>systemd</code> Habilitados ({(srcEnv.systemd_services || []).length}) y Paquetes ({srcEnv.installed_packages_summary?.total_count || 0} instalados):
-                  </strong>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                    {(srcEnv.systemd_services || []).slice(0, 30).map((svc) => (
-                      <span key={svc.name} className="cm-badge neutral" style={{ fontSize: 11.5 }}>
-                        <code>{svc.name}</code> ({svc.active_state || "enabled"})
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* PESTAÑA AUDITORÍA DE CUENTA AWS EN VIVO */}
+            {/* PESTAÑA 3: AUDITORÍA DE CUENTA AWS EN VIVO */}
             {consultTab === "aws_audit" && (
               <AwsCloudAuditPanel
                 onAuditCompleted={fetchTerraformStatus}
