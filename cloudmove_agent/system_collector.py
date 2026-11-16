@@ -426,6 +426,254 @@ def detect_local_databases() -> List[Dict[str, Any]]:
     return dbs
 
 
+def collect_running_processes(limit: int = 80) -> List[Dict[str, Any]]:
+    """Collect active running processes sorted by memory/CPU utilization."""
+    procs: List[Dict[str, Any]] = []
+    try:
+        res = subprocess.run(
+            ["ps", "-eo", "pid,ppid,user,%cpu,%mem,rss,stat,comm,args", "--sort=-%mem"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if res.returncode == 0:
+            lines = res.stdout.splitlines()[1:]
+            for line in lines[:limit]:
+                parts = line.strip().split(None, 8)
+                if len(parts) >= 8:
+                    pid_s, ppid_s, user, cpu_s, mem_s, rss_s, stat, comm = parts[:8]
+                    cmdline = parts[8] if len(parts) > 8 else comm
+                    try:
+                        pid = int(pid_s)
+                        ppid = int(ppid_s)
+                    except ValueError:
+                        continue
+                    try:
+                        cpu_pct = float(cpu_s)
+                    except ValueError:
+                        cpu_pct = 0.0
+                    try:
+                        mem_pct = float(mem_s)
+                    except ValueError:
+                        mem_pct = 0.0
+                    try:
+                        rss_mb = round(int(rss_s) / 1024.0, 2)
+                    except ValueError:
+                        rss_mb = 0.0
+
+                    procs.append({
+                        "pid": pid,
+                        "ppid": ppid,
+                        "user": user,
+                        "cpu_percent": cpu_pct,
+                        "mem_percent": mem_pct,
+                        "rss_mb": rss_mb,
+                        "state": stat,
+                        "name": comm,
+                        "cmdline": cmdline[:220],
+                    })
+    except Exception:
+        pass
+    return procs
+
+
+_SKIP_DIR_NAMES = {
+    ".cache",
+    "node_modules",
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".npm",
+    ".cargo",
+    ".rustup",
+    ".local",
+    ".mozilla",
+    ".thunderbird",
+    "Trash",
+    "snap",
+    ".vscode",
+    ".cursor",
+    ".gemini",
+}
+
+
+def _scan_dir_stats(target_dir: Path, max_files_walk: int = 2500) -> tuple[int, int]:
+    """Fast bounded directory size and file count scanner."""
+    total_bytes = 0
+    files_count = 0
+    stack = [target_dir]
+    visited = 0
+    while stack and visited < max_files_walk:
+        curr = stack.pop()
+        try:
+            with os.scandir(curr) as it:
+                for entry in it:
+                    visited += 1
+                    if visited > max_files_walk:
+                        break
+                    if entry.is_symlink():
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name in _SKIP_DIR_NAMES:
+                            continue
+                        stack.append(Path(entry.path))
+                    elif entry.is_file(follow_symlinks=False):
+                        files_count += 1
+                        try:
+                            st = entry.stat(follow_symlinks=False)
+                            blocks_bytes = getattr(st, "st_blocks", 0) * 512
+                            actual_bytes = (
+                                min(st.st_size, blocks_bytes)
+                                if blocks_bytes > 0
+                                else st.st_size
+                            )
+                            total_bytes += actual_bytes
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+    return total_bytes, files_count
+
+
+def _build_folder_node(
+    dir_path: Path,
+    category: str,
+    depth: int = 0,
+    max_depth: int = 2,
+    max_children: int = 25,
+) -> Optional[Dict[str, Any]]:
+    """Build a hierarchical folder node with child folders and files and sizes."""
+    try:
+        if not dir_path.exists() or dir_path.is_symlink():
+            return None
+        st = dir_path.stat()
+        mtime_iso = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()
+    except Exception:
+        return None
+
+    owner = "root"
+    try:
+        import pwd
+        owner = pwd.getpwuid(st.st_uid).pw_name
+    except Exception:
+        pass
+
+    if dir_path.is_file():
+        blocks_bytes = getattr(st, "st_blocks", 0) * 512
+        sz = min(st.st_size, blocks_bytes) if blocks_bytes > 0 else st.st_size
+        return {
+            "id": str(dir_path),
+            "path": str(dir_path),
+            "name": dir_path.name,
+            "type": "file",
+            "category": category,
+            "owner": owner,
+            "size_bytes": sz,
+            "size_mb": round(sz / (1024 * 1024), 2),
+            "size_gib": round(sz / (1024 ** 3), 4),
+            "files_count": 1,
+            "modified_at": mtime_iso,
+            "children": [],
+        }
+
+    children: List[Dict[str, Any]] = []
+    if depth < max_depth:
+        try:
+            entries = []
+            with os.scandir(dir_path) as it:
+                for entry in it:
+                    if entry.is_symlink():
+                        continue
+                    if entry.name.startswith(".") and entry.name not in (".env.example",):
+                        continue
+                    if entry.name in _SKIP_DIR_NAMES:
+                        continue
+                    entries.append(Path(entry.path))
+            # Sort directories first, then by name
+            entries.sort(key=lambda p: (0 if p.is_dir() else 1, p.name.lower()))
+            for child_path in entries[:max_children]:
+                child_node = _build_folder_node(
+                    child_path,
+                    category=category,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                    max_children=20,
+                )
+                if child_node:
+                    children.append(child_node)
+        except Exception:
+            pass
+
+    size_bytes, files_count = _scan_dir_stats(dir_path)
+    if children:
+        children_sum = sum(c.get("size_bytes", 0) for c in children)
+        if children_sum > size_bytes:
+            size_bytes = children_sum
+
+    return {
+        "id": str(dir_path),
+        "path": str(dir_path),
+        "name": dir_path.name or str(dir_path),
+        "type": "directory",
+        "category": category,
+        "owner": owner,
+        "size_bytes": size_bytes,
+        "size_mb": round(size_bytes / (1024 * 1024), 2),
+        "size_gib": round(size_bytes / (1024 ** 3), 4),
+        "files_count": max(files_count, len(children)),
+        "modified_at": mtime_iso,
+        "children": children,
+    }
+
+
+def collect_filesystem_tree() -> List[Dict[str, Any]]:
+    """
+    Scan the local device's user home folders and key system/application directories
+    so the user can browse their folders & files in CloudMove and select which ones
+    to migrate within the AWS EBS storage quota.
+    """
+    tree: List[Dict[str, Any]] = []
+
+    # 1. Scan all user directories under /home/*
+    home_root = Path("/home")
+    if home_root.is_dir():
+        try:
+            for user_dir in sorted(home_root.iterdir()):
+                if not user_dir.is_dir() or user_dir.is_symlink():
+                    continue
+                # Scan visible folders/files inside /home/<user> up to 4 levels deep
+                user_node = _build_folder_node(
+                    user_dir,
+                    category="user_home",
+                    depth=0,
+                    max_depth=4,
+                    max_children=30,
+                )
+                if user_node:
+                    user_node["label"] = f"Carpeta de Usuario ({user_dir.name})"
+                    tree.append(user_node)
+        except Exception:
+            pass
+
+    # 2. Scan key system & application directories (/opt, /var/www, /srv, /etc)
+    for sys_path_str, cat, label in [
+        ("/opt", "app_data", "Aplicaciones y Paquetes en /opt"),
+        ("/var/www", "app_data", "Sitios y Servicios Web en /var/www"),
+        ("/srv", "app_data", "Datos de Servicios en /srv"),
+        ("/etc", "system_config", "Configuración del Sistema Operativo en /etc"),
+    ]:
+        p = Path(sys_path_str)
+        if p.is_dir():
+            node = _build_folder_node(p, category=cat, depth=0, max_depth=1, max_children=20)
+            if node and (node.get("files_count", 0) > 0 or node.get("children")):
+                node["label"] = label
+                tree.append(node)
+
+    return tree
+
+
 def collect_system_inventory() -> Dict[str, Any]:
     """
     Gather complete system inventory scan conforming to CMIR v2.1.
@@ -433,6 +681,14 @@ def collect_system_inventory() -> Dict[str, Any]:
     """
     now = _utc_now()
     hostname = socket.gethostname()
+    try:
+        etc_hn = Path("/etc/hostname")
+        if etc_hn.is_file():
+            raw_hn = etc_hn.read_text(encoding="utf-8").strip()
+            if raw_hn and raw_hn != "localhost":
+                hostname = raw_hn
+    except Exception:
+        pass
     machine_id = get_stable_machine_id()
     cpu = collect_cpu_info()
     memory = collect_memory_info()
@@ -440,7 +696,9 @@ def collect_system_inventory() -> Dict[str, Any]:
     interfaces = collect_network_interfaces()
     listeners = collect_listening_ports()
     services = collect_system_services()
+    processes = collect_running_processes()
     databases = detect_local_databases()
+    filesystem_tree = collect_filesystem_tree()
 
     # Detect installed runtimes
     runtimes = []
@@ -473,8 +731,10 @@ def collect_system_inventory() -> Dict[str, Any]:
         "disks": disks,
         "network_interfaces": interfaces,
         "listening_ports": listeners,
-        "services": services[:100],  # bounded to prevent massive payloads
+        "services": services[:120],
+        "processes": processes,
         "runtimes": runtimes,
         "databases": databases,
+        "filesystem_tree": filesystem_tree,
         "evidence_provenance": "observed_by_cloudmove_agent",
     }

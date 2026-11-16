@@ -519,6 +519,16 @@ def probe_live_storage_devices(
                         "devices_count": len(agent_devices),
                         "agent_id": target_agent_id,
                         "agent_enrolled": True,
+                        "filesystem_tree": asset_payload.get("filesystem_tree") or [],
+                        "processes": asset_payload.get("processes") or [],
+                        "listening_ports": asset_payload.get("listening_ports") or [],
+                        "services": asset_payload.get("services") or [],
+                        "aws_storage_quota": {
+                            "free_tier_gib": 30.0,
+                            "max_single_volume_gib": 100.0,
+                            "academy_account_max_gib": 150.0,
+                            "base_os_overhead_gib": 2.5,
+                        },
                         "aws_academy_provisioning": {
                             "physical_disk_gib": p_dev_size,
                             "aws_academy_max_allowed_gib": 100,

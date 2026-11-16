@@ -59,13 +59,20 @@ if not LOG_FILE.parent.exists():
         LOG_FILE = Path.home() / ".cloudmove" / "agent.log"
         LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
+_log_handlers: List[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+try:
+    _log_handlers.append(logging.FileHandler(str(LOG_FILE), encoding="utf-8"))
+except Exception:
+    try:
+        _log_fallback = Path("/tmp/cloudmove-agent.log")
+        _log_handlers.append(logging.FileHandler(str(_log_fallback), encoding="utf-8"))
+    except Exception:
+        pass
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] [CloudMoveAgent] %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(str(LOG_FILE), encoding="utf-8"),
-    ],
+    handlers=_log_handlers,
 )
 logger = logging.getLogger("cloudmove_agent")
 
@@ -252,6 +259,8 @@ class CloudMoveAgentDaemon:
                 "interfaces": len(inventory.get("network_interfaces", [])),
                 "listeners": len(inventory.get("listening_ports", [])),
                 "services": len(inventory.get("services", [])),
+                "processes": len(inventory.get("processes", [])),
+                "filesystem_roots": len(inventory.get("filesystem_tree", [])),
                 "databases": len(inventory.get("databases", [])),
             },
             "uploaded": upload_resp,
@@ -354,11 +363,15 @@ class CloudMoveAgentDaemon:
             except Exception as exc:
                 logger.warning(f"Escaneo inicial pospuesto: {exc}")
 
+        cycle_count = 0
         while self._running:
             try:
                 if self.agent_id and self.api_key:
                     self.send_heartbeat()
                     self.poll_and_execute_tasks()
+                    cycle_count += 1
+                    if cycle_count % 3 == 0:
+                        self._task_collect_inventory()
             except Exception as exc:
                 logger.warning(f"Error en ciclo de agente: {exc}")
 

@@ -164,6 +164,13 @@ def get_discovery_collectors():
     }
 
 
+@router.get("/agent-live")
+def get_discovery_agent_live(agent_id: Optional[str] = Query(None)):
+    """Return the automatic live discovery inventory from the enrolled CloudMove agent."""
+    from app.api.routers.agents import get_live_agent_discovery
+    return get_live_agent_discovery(agent_id=agent_id)
+
+
 @router.get("/sessions")
 def list_discovery_sessions():
     """List all imported discovery sessions."""

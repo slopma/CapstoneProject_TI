@@ -420,7 +420,10 @@ systemctl daemon-reload
 systemctl enable $SERVICE_NAME
 systemctl restart $SERVICE_NAME
 
-echo "==> [OK] Agente CloudMove ($AGENT_ID) instalado y activo correctamente."
+echo "==> Sincronizando inventario inicial (carpetas, archivos, puertos y procesos) con CloudMove..."
+PYTHONPATH="$INSTALL_DIR" /usr/bin/python3 -c "from cloudmove_agent.agent_daemon import CloudMoveAgentDaemon; CloudMoveAgentDaemon()._task_collect_inventory()" >/dev/null 2>&1 || true
+
+echo "==> [OK] Agente CloudMove ($AGENT_ID) instalado, sincronizado y activo correctamente."
 systemctl status $SERVICE_NAME --no-pager || true
 """
     return Response(content=script, media_type="text/x-shellscript")
@@ -511,6 +514,18 @@ def record_heartbeat(
             nonce=req.nonce or x_agent_nonce,
             timestamp=req.timestamp or x_agent_timestamp,
         )
+        # Auto-request inventory if asset is missing filesystem_tree
+        try:
+            assets = [
+                a for a in db.list_assets()
+                if a.get("payload", {}).get("agent_id") == agent_id or a.get("id") == f"asset-{agent_id}"
+            ]
+            has_fs_tree = bool(assets and assets[0].get("payload", {}).get("filesystem_tree"))
+            if not has_fs_tree and hb_res.get("pending_tasks_count", 0) == 0:
+                db.create_agent_task(agent_id=agent_id, action="collect_inventory", parameters={}, timeout_seconds=120)
+                hb_res["pending_tasks_count"] = 1
+        except Exception:
+            pass
         return hb_res
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -518,6 +533,92 @@ def record_heartbeat(
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/live-discovery")
+def get_live_agent_discovery(agent_id: Optional[str] = Query(None)):
+    """
+    Return the complete live discovery inventory reported by the enrolled remote agent(s),
+    including folders & files (filesystem_tree), listening ports, running processes,
+    systemd services, disks/partitions, CPU/RAM, and AWS EBS storage quota limits.
+    """
+    db = get_transactional_db()
+    all_agents = db.list_agents(include_revoked=False)
+    remote_agents = [
+        a for a in all_agents
+        if (a.get("hostname") or "").lower() not in ("cloudmove-server", "localhost")
+        and a.get("ip_address") != "100.50.88.231"
+    ]
+    if not remote_agents:
+        return {
+            "agent_connected": False,
+            "agents": [],
+            "active_agent": None,
+            "inventory": None,
+            "aws_storage_quota": {
+                "free_tier_gib": 30.0,
+                "max_single_volume_gib": 100.0,
+                "academy_account_max_gib": 150.0,
+                "base_os_overhead_gib": 2.5,
+            },
+        }
+
+    # Pick requested agent or first ONLINE agent (or most recently enrolled)
+    online_list = [a for a in remote_agents if a.get("status") == "ONLINE"]
+    chosen_agent = None
+    if agent_id:
+        chosen_agent = next((a for a in remote_agents if a.get("agent_id") == agent_id), None)
+    if not chosen_agent:
+        chosen_agent = online_list[0] if online_list else remote_agents[0]
+
+    target_id = chosen_agent["agent_id"]
+    assets = [
+        a for a in db.list_assets()
+        if a.get("payload", {}).get("agent_id") == target_id or a.get("id") == f"asset-{target_id}"
+    ]
+    payload = assets[0].get("payload", {}) if assets else {}
+
+    filesystem_tree = payload.get("filesystem_tree") or []
+    total_user_files_bytes = sum(node.get("size_bytes", 0) for node in filesystem_tree)
+    total_user_files_gib = round(total_user_files_bytes / (1024 ** 3), 3)
+
+    return {
+        "agent_connected": True,
+        "agents": remote_agents,
+        "active_agent": chosen_agent,
+        "inventory": {
+            "agent_id": target_id,
+            "hostname": payload.get("hostname") or chosen_agent.get("hostname"),
+            "ip_address": payload.get("ip_address") or chosen_agent.get("ip_address"),
+            "os_name": payload.get("os_name") or chosen_agent.get("os_name"),
+            "os_version": payload.get("os_version") or chosen_agent.get("os_version"),
+            "os_release": payload.get("os_release") or "",
+            "architecture": payload.get("architecture") or chosen_agent.get("architecture"),
+            "discovered_at": payload.get("discovered_at") or chosen_agent.get("last_heartbeat_at"),
+            "cpu": payload.get("cpu") or {},
+            "memory": payload.get("memory") or {},
+            "disks": payload.get("disks") or [],
+            "network_interfaces": payload.get("network_interfaces") or [],
+            "listening_ports": payload.get("listening_ports") or [],
+            "processes": payload.get("processes") or [],
+            "services": payload.get("services") or [],
+            "runtimes": payload.get("runtimes") or [],
+            "databases": payload.get("databases") or [],
+            "filesystem_tree": filesystem_tree,
+            "filesystem_summary": {
+                "roots_count": len(filesystem_tree),
+                "total_size_bytes": total_user_files_bytes,
+                "total_size_mb": round(total_user_files_bytes / (1024 * 1024), 2),
+                "total_size_gib": total_user_files_gib,
+            },
+        },
+        "aws_storage_quota": {
+            "free_tier_gib": 30.0,
+            "max_single_volume_gib": 100.0,
+            "academy_account_max_gib": 150.0,
+            "base_os_overhead_gib": 2.5,
+        },
+    }
 
 
 @router.get("")
@@ -630,18 +731,23 @@ def ingest_agent_inventory(
         lifecycle_state="DISCOVERED",
         payload={
             "agent_id": agent_id,
+            "hostname": hostname,
             "os_name": agent.get("os_name"),
             "os_version": agent.get("os_version"),
+            "os_release": payload.get("os_release"),
             "architecture": agent.get("architecture"),
             "ip_address": agent.get("ip_address"),
             "cpu": payload.get("cpu", {}),
             "memory": payload.get("memory", {}),
             "disks": payload.get("disks", []),
+            "network_interfaces": payload.get("network_interfaces", []),
             "processes": payload.get("processes", []),
             "listening_ports": payload.get("listening_ports", []),
             "services": payload.get("services", []),
+            "runtimes": payload.get("runtimes", []),
             "databases": payload.get("databases", []) or payload.get("detected_databases", []),
             "detected_databases": payload.get("detected_databases", []),
+            "filesystem_tree": payload.get("filesystem_tree", []),
             "discovered_at": now,
         },
     )

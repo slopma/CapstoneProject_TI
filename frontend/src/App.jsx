@@ -538,6 +538,7 @@ function App() {
           <DiscoveryWorkspace
             apiUrl={getApiBase()}
             onNavigateTab={setActiveTab}
+            onQuickStartUseCase={handleQuickStartUseCase}
             onLoadCmirToCanvas={() => {
               fetchArchitecture();
               setActiveTab("architecture");

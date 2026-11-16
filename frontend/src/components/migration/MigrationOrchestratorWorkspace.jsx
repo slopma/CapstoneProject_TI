@@ -4,6 +4,10 @@ import RepositoryTreeViewer from "./RepositoryTreeViewer";
 import ExternalServicesCredentialsCard from "./ExternalServicesCredentialsCard";
 import TargetArchitectureView from "./TargetArchitectureView";
 import AutomatedCloudDeployerPanel from "./AutomatedCloudDeployerPanel";
+import UserFileSelectionPanel, {
+  loadSavedSelectedUserPaths,
+  saveSelectedUserPathsToSession,
+} from "./UserFileSelectionPanel";
 import PlannedCloudStructureGraphModal, {
   StructuredGithubEvidenceView,
   PreflightPreventiveChecksBanner,
@@ -569,8 +573,11 @@ function VmOsToCloudTransformationMap({
     },
     {
       originTitle: `Archivos del SO (/etc, /opt, /var, /home), ${usersList.length} Usuarios, ${svcsCount} Servicios y ${procsCount} Procesos`,
-      originDetail: `Usuarios: ${usersList.slice(0, 8).join(", ")} · Directorios inventariados: ${fsDirs.map((d) => d.path).join(", ") || "/etc, /home, /var"}`,
-      whyTransformed: `Reconstruye cuentas de usuario, parámetros sysctl, manifiestos del SO en /opt/cloudmove/os_capture y expone el Portal de Telemetría en Vivo (:80, :3000, :8000).`,
+      originDetail:
+        Array.isArray(manifest.selected_user_paths) && manifest.selected_user_paths.length > 0
+          ? `Rutas seleccionadas por el usuario (${manifest.selected_user_paths.length}): ${manifest.selected_user_paths.slice(0, 6).join(", ")}${manifest.selected_user_paths.length > 6 ? "..." : ""}`
+          : `Usuarios: ${usersList.slice(0, 8).join(", ")} · Directorios inventariados: ${fsDirs.map((d) => d.path).join(", ") || "/etc, /home, /var"}`,
+      whyTransformed: `Reconstruye las carpetas y archivos seleccionados por el usuario, cuentas locales, parámetros sysctl, manifiestos en /opt/cloudmove/os_capture y expone el Portal de Telemetría en Vivo (:80, :3000, :8000).`,
       strategyLabel: `Bootstrap Autónomo Cloud-Init (user_data.sh) + Servicio cloudmove-os-telemetry.service`,
       terraformResource: `user_data.sh + system_image_snapshot.tar.gz + restore_system_image.sh`,
       costEstimate: "$0 USD/mes",
@@ -711,6 +718,9 @@ export default function MigrationOrchestratorWorkspace({
   const [hostDevicesData, setHostDevicesData] = useState(null);
   const [queryingDevices, setQueryingDevices] = useState(false);
   const [selectedStorageDevice, setSelectedStorageDevice] = useState("");
+  const [selectedUserPaths, setSelectedUserPaths] = useState(
+    () => loadSavedSelectedUserPaths() || []
+  );
   const requireLiveRam = consistencyStrategy === "demo_live_ram";
   const preferContinuousReplication = consistencyStrategy === "continuous_replication";
   const [uc2PreInspection, setUc2PreInspection] = useState(null);
@@ -1072,7 +1082,10 @@ export default function MigrationOrchestratorWorkspace({
     setErrorMsg("");
     try {
       const manifestOverride = isLive
-        ? { format: uc2OutputFormat }
+        ? {
+            format: uc2OutputFormat,
+            selected_user_paths: selectedUserPaths,
+          }
         : {
             format: imageFormatOverride,
             source_file: imagePath.trim(),
@@ -1147,11 +1160,15 @@ export default function MigrationOrchestratorWorkspace({
           ? (uc2PreInspection?.manifest?.source_file || "live_system")
           : imagePath.trim();
         sourceConfig.manifest_override = isLive
-          ? { format: uc2OutputFormat }
+          ? {
+              format: uc2OutputFormat,
+              selected_user_paths: selectedUserPaths,
+            }
           : {
               format: imageFormatOverride,
               source_file: imagePath.trim(),
             };
+        sourceConfig.selected_user_paths = selectedUserPaths;
         sourceConfig.require_live_memory_state = requireLiveRam;
         sourceConfig.prefer_continuous_replication = preferContinuousReplication;
         sourceConfig.capture_live_host = isLive;
@@ -1319,8 +1336,9 @@ export default function MigrationOrchestratorWorkspace({
   useEffect(() => {
     if (newUseCase === "vm_image") {
       fetchEnrolledAgents();
+      handleQueryLiveDevices(false);
     }
-  }, [newUseCase, fetchEnrolledAgents]);
+  }, [newUseCase, fetchEnrolledAgents, handleQueryLiveDevices]);
 
   useEffect(() => {
     if (selectedJob?.use_case === "app_source" || selectedJob?.use_case === "vm_image") {
@@ -2283,10 +2301,42 @@ export default function MigrationOrchestratorWorkspace({
                     ) : (
                       <div style={{ fontSize: 14, color: "#64748b", padding: "16px 12px", textAlign: "center", backgroundColor: "#f8fafc", borderRadius: 6, border: "1px dashed #cbd5e1" }}>
                         {queryingDevices
-                          ? "Ejecutando consulta de hardware en tiempo real con lsblk..."
-                          : "Sin datos precargados. Haz clic en 'Consultar Dispositivos del Equipo en Vivo' para escanear el subsistema de almacenamiento de este equipo en tiempo real."}
+                          ? "Ejecutando consulta de hardware y carpetas en tiempo real desde el agente..."
+                          : "Haz clic en 'Paso 2: Consultar Dispositivos del Agente Remoto' arriba para cargar los discos, carpetas y archivos de tu equipo."}
                       </div>
                     )}
+
+                    {/* Selector Interactivo de Carpetas y Archivos del Usuario con Control de Cuota AWS */}
+                    <UserFileSelectionPanel
+                      filesystemTree={hostDevicesData?.filesystem_tree || []}
+                      selectedPaths={selectedUserPaths}
+                      onChangeSelectedPaths={(paths) => {
+                        setSelectedUserPaths(paths);
+                        saveSelectedUserPathsToSession(paths);
+                      }}
+                      maxAwsStorageGib={
+                        uc2Decisions.ebs_storage_sizing === "aws_academy_max_100gb"
+                          ? 100.0
+                          : uc2Decisions.ebs_storage_sizing === "full_physical_capacity"
+                          ? 150.0
+                          : 30.0
+                      }
+                      baseOsOverheadGib={2.5}
+                      awsAcademyAccountLimitGib={150.0}
+                      onUpgradeStorageProfile={(newSizing) =>
+                        setUc2Decisions((prev) => ({
+                          ...prev,
+                          ebs_storage_sizing: newSizing,
+                        }))
+                      }
+                      onRefreshAgentInventory={() => handleQueryLiveDevices(true)}
+                      refreshing={queryingDevices}
+                      hostname={
+                        hostDevicesData?.host?.hostname ||
+                        enrolledAgents[0]?.hostname ||
+                        "dispositivo-local"
+                      }
+                    />
                   </div>
 
                   {/* Formato de Salida */}
