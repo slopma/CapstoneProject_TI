@@ -36,10 +36,10 @@ import threading
 import uuid
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from app.config import PROJECT_ROOT
+from app.config import DATA_DIR, PROJECT_ROOT
 
 
-DEFAULT_SQLITE_PATH = PROJECT_ROOT / "backend" / "data" / "cloudmove_transactional.db"
+DEFAULT_SQLITE_PATH = DATA_DIR / "cloudmove_transactional.db"
 DEFAULT_OPERATOR = os.getenv("CLOUDMOVE_OPERATOR_USER", "operator")
 
 

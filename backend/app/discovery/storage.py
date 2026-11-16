@@ -7,12 +7,12 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from app.config import PROJECT_ROOT
+from app.config import DATA_DIR, PROJECT_ROOT
 from app.discovery.cmir_bridge import build_discovery_cmir_and_graph
 from app.discovery.osquery_parser import OsqueryDiscoveryParser
 
 DEFAULT_OSQUERY_JSON_PATH = PROJECT_ROOT / "docs" / "cloudmove-osquery-inventory.json"
-SESSIONS_STORAGE_DIR = PROJECT_ROOT / "backend" / "data" / "discovery_sessions"
+SESSIONS_STORAGE_DIR = DATA_DIR / "discovery_sessions"
 
 
 class DiscoverySessionStore:

@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional
 from app.adapters.aws_adapter import AWSAdapter
 from app.adapters.gcp_adapter import GCPAdapter
 from app.cmir.models import CMIR
-from app.config import PROJECT_ROOT
+from app.config import DATA_DIR, PROJECT_ROOT
 from app.dependencies.resolver import resolve_dependencies
 from app.dependencies.validator import validate_migration_subgraph
 from app.discovery.connectors import SecretRedactor
@@ -66,7 +66,7 @@ from app.persistence.transactional_db import (
 SUPPORTED_TARGET_PROVIDERS = {"aws", "gcp"}
 SUPPORTED_USE_CASES = {"app_source", "vm_image"}
 
-MIGRATIONS_STORE_PATH = PROJECT_ROOT / "backend" / "data" / "migrations_state.json"
+MIGRATIONS_STORE_PATH = DATA_DIR / "migrations_state.json"
 
 
 class MigrationState(str, Enum):

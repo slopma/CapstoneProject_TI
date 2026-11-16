@@ -2,7 +2,17 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_repo_root_cand = Path(__file__).resolve().parents[2]
+if not (_repo_root_cand / "backend").exists() and Path("/app/app").is_dir():
+    PROJECT_ROOT = Path("/app")
+else:
+    PROJECT_ROOT = _repo_root_cand
+
+DATA_DIR = (
+    PROJECT_ROOT / "data"
+    if (PROJECT_ROOT == Path("/app") and (PROJECT_ROOT / "data").is_dir())
+    else PROJECT_ROOT / "backend" / "data"
+)
 load_dotenv(PROJECT_ROOT / ".env")
 
 
