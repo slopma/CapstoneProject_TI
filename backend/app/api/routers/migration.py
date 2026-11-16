@@ -1,4 +1,5 @@
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import io
 import ipaddress
 import json
@@ -1665,9 +1666,53 @@ def _fetch_json_endpoint(url: str, timeout: float = 3.5) -> Dict[str, Any]:
         }
 
 
+def _resolve_probe_targets(
+    migration_id: Optional[str],
+    frontend_port: Optional[int],
+    backend_port: Optional[int],
+    health_path: Optional[str],
+) -> tuple[int, int, str]:
+    """Resolve target frontend port, backend port, and health endpoint for an EC2 live probe."""
+    fe_port = frontend_port
+    be_port = backend_port
+    clean_hp = (health_path or "").strip()
+
+    if migration_id:
+        try:
+            job = migration_orchestrator.get_migration(migration_id)
+            if job.get("use_case") == "vm_image":
+                return fe_port or 3000, be_port or 8000, clean_hp or "/health"
+            src_env = job.get("source_environment") or {}
+            endpoints = src_env.get("service_endpoints") or {}
+            if not endpoints and (src_env.get("components") or src_env.get("exposed_ports")):
+                from app.migration.app_migrator import _infer_service_endpoints
+
+                endpoints = _infer_service_endpoints(
+                    src_env.get("components") or [],
+                    src_env.get("exposed_ports") or [],
+                    src_env.get("health_endpoints") or ["/health"],
+                )
+            if fe_port is None and endpoints.get("frontend_port"):
+                fe_port = int(endpoints["frontend_port"])
+            if be_port is None and endpoints.get("backend_port"):
+                be_port = int(endpoints["backend_port"])
+            if not clean_hp and endpoints.get("health_endpoint"):
+                clean_hp = str(endpoints["health_endpoint"])
+        except Exception:
+            pass
+
+    if not clean_hp or not re.match(r"^/[A-Za-z0-9/_-]*$", clean_hp):
+        clean_hp = "/health"
+    return int(fe_port or 3000), int(be_port or 8000), clean_hp
+
+
 @router.get("/probe-instance-status")
 def probe_instance_status(
     ip: str = Query(..., description="Public IP address or hostname of the deployed instance"),
+    migration_id: Optional[str] = Query(None, description="Optional migration job ID to derive application ports"),
+    frontend_port: Optional[int] = Query(None, ge=1, le=65535, description="Target frontend TCP port"),
+    backend_port: Optional[int] = Query(None, ge=1, le=65535, description="Target backend API TCP port"),
+    health_path: Optional[str] = Query(None, description="Backend HTTP healthcheck path"),
 ):
     """
     Safely probes an external deployed instance endpoint from the CloudMove server.
@@ -1675,10 +1720,23 @@ def probe_instance_status(
     Avoids browser Mixed Content blocks and CORS issues.
     """
     clean_ip = _sanitize_probe_host(ip)
+    fe_port, be_port, clean_hp = _resolve_probe_targets(
+        migration_id=migration_id,
+        frontend_port=frontend_port,
+        backend_port=backend_port,
+        health_path=health_path,
+    )
 
-    ssh_ok = _probe_tcp_port(clean_ip, 22, timeout=2.0)
-    fe_probe = _probe_http_endpoint(f"http://{clean_ip}:3000", timeout=2.5)
-    be_probe = _probe_http_endpoint(f"http://{clean_ip}:8000/health", timeout=2.5)
+    fe_url = f"http://{clean_ip}:{fe_port}"
+    be_url = f"http://{clean_ip}:{be_port}{clean_hp}"
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        ssh_fut = pool.submit(_probe_tcp_port, clean_ip, 22, 2.0)
+        fe_fut = pool.submit(_probe_http_endpoint, fe_url, 2.5)
+        be_fut = pool.submit(_probe_http_endpoint, be_url, 2.5)
+        ssh_ok = ssh_fut.result()
+        fe_probe = fe_fut.result()
+        be_probe = be_fut.result()
 
     all_ready = fe_probe["online"] and be_probe["online"]
 
@@ -1696,15 +1754,15 @@ def probe_instance_status(
         "ip": clean_ip,
         "ssh": {"port": 22, "open": ssh_ok},
         "frontend": {
-            "port": 3000,
-            "url": f"http://{clean_ip}:3000",
+            "port": fe_port,
+            "url": fe_url,
             "online": fe_probe["online"],
             "status": fe_probe["status"],
             "message": fe_probe["message"],
         },
         "backend": {
-            "port": 8000,
-            "url": f"http://{clean_ip}:8000/health",
+            "port": be_port,
+            "url": be_url,
             "online": be_probe["online"],
             "status": be_probe["status"],
             "message": be_probe["message"],

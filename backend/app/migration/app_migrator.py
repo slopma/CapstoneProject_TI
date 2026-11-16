@@ -315,6 +315,170 @@ def scan_local_filesystem_tree(target_dir: Path) -> Tuple[Dict[str, Any], Dict[s
     return tree_result, manifests_content
 
 
+_COMPOSE_INTERP_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:-|:\?|-|\?)([^}]*))?\}")
+
+
+def _parse_env_defaults(
+    target_dir: Optional[Path],
+    files_map: Dict[str, str],
+) -> Dict[str, str]:
+    """Read `.env.example` and `.env` manifests in precedence order to resolve Compose variables."""
+    defaults: Dict[str, str] = {}
+    candidates: List[Tuple[int, str, str]] = []
+    for k, content in files_map.items():
+        base = k.rsplit("/", 1)[-1]
+        if base in (".env.example", ".env", ".env.local.example"):
+            depth = k.count("/")
+            # Lower rank processed first; root `.env` overrides `.env.example` and nested files.
+            priority = (2 if base == ".env" else 1) - (depth * 10)
+            candidates.append((priority, k, content))
+
+    if target_dir and target_dir.exists():
+        for fname, prio in ((".env.example", 1), (".env", 2)):
+            fpath = target_dir / fname
+            if fpath.is_file():
+                try:
+                    candidates.append((prio + 5, fname, fpath.read_text(encoding="utf-8", errors="replace")))
+                except Exception:
+                    pass
+
+    for _, _, text in sorted(candidates, key=lambda item: item[0]):
+        for raw_line in text.splitlines():
+            s = raw_line.strip()
+            if not s or s.startswith("#") or "=" not in s:
+                continue
+            key, val = s.split("=", 1)
+            key = key.strip()
+            if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+                continue
+            val = val.strip()
+            if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+                val = val[1:-1]
+            defaults[key] = val
+    return defaults
+
+
+def _resolve_compose_interpolations(text: str, env_defaults: Dict[str, str]) -> str:
+    """Resolve Docker Compose `${VAR}`, `${VAR:-default}`, and `${VAR:?msg}` placeholders."""
+    if not text or "${" not in text:
+        return text
+
+    def _sub(match: re.Match[str]) -> str:
+        var_name = match.group(1)
+        op = match.group(2)
+        fallback = match.group(3) or ""
+        if var_name in env_defaults and env_defaults[var_name] != "":
+            return env_defaults[var_name]
+        if op in (":-", "-") and fallback:
+            return fallback
+        if var_name in env_defaults:
+            return env_defaults[var_name]
+        return match.group(0)
+
+    resolved = text
+    for _ in range(3):
+        updated = _COMPOSE_INTERP_RE.sub(_sub, resolved)
+        if updated == resolved:
+            break
+        resolved = updated
+    return resolved
+
+
+def _extract_compose_service_ports(
+    sblock: str,
+    env_defaults: Dict[str, str],
+) -> Tuple[List[int], List[int]]:
+    """Extract resolved `(host_ports, container_ports)` from a Compose service block."""
+    resolved_block = _resolve_compose_interpolations(sblock, env_defaults)
+    host_ports: List[int] = []
+    container_ports: List[int] = []
+
+    for m in re.finditer(
+        r'^\s*-\s*["\']?(?:[0-9.]+:)?(\d{2,5}):(\d{2,5})(?:/[a-zA-Z]+)?["\']?\s*(?:#.*)?$',
+        resolved_block,
+        re.MULTILINE,
+    ):
+        hp, cp = int(m.group(1)), int(m.group(2))
+        if hp not in host_ports:
+            host_ports.append(hp)
+        if cp not in container_ports:
+            container_ports.append(cp)
+
+    if not container_ports:
+        ports_sec = re.search(r"^\s+ports:\s*\n((?:\s+-.*\n?)+)", resolved_block, re.MULTILINE)
+        if ports_sec:
+            for m in re.finditer(r'-\s*["\']?(\d{2,5})(?:/[a-zA-Z]+)?["\']?\s*$', ports_sec.group(1), re.MULTILINE):
+                p = int(m.group(1))
+                if p not in container_ports:
+                    container_ports.append(p)
+    return host_ports, container_ports
+
+
+def _extract_compose_depends_on(sblock: str) -> List[str]:
+    """Parse both list-style and condition-dict `depends_on` declarations."""
+    deps: List[str] = []
+    dep_sec = re.search(r"^(\s+)depends_on:\s*\n((?:\1[ \t]+.*\n?)+)", sblock, re.MULTILINE)
+    if not dep_sec:
+        return deps
+    base_indent = len(dep_sec.group(1))
+    for raw_line in dep_sec.group(2).splitlines():
+        list_m = re.match(r"^\s*-\s*([a-zA-Z0-9_.-]+)\s*$", raw_line)
+        if list_m:
+            if list_m.group(1) not in deps:
+                deps.append(list_m.group(1))
+            continue
+        dict_m = re.match(r"^(\s+)([a-zA-Z0-9_.-]+):\s*(?:#.*)?$", raw_line)
+        if dict_m and len(dict_m.group(1)) <= base_indent + 4:
+            if dict_m.group(2) not in deps:
+                deps.append(dict_m.group(2))
+    return deps
+
+
+def _infer_service_endpoints(
+    components: List[Dict[str, Any]],
+    ports: List[int],
+    health_endpoints: List[str],
+) -> Dict[str, Any]:
+    """Derive primary frontend port, backend port, and healthcheck path from discovered topology."""
+    non_db_ports = [p for p in ports if isinstance(p, int) and p not in (22, 5432, 3306, 6379, 27017, 5672)]
+
+    fe_comp = next((c for c in components if c.get("tier") == "frontend"), None)
+    be_comp = next((c for c in components if c.get("tier") == "backend"), None)
+
+    fe_port: Optional[int] = None
+    if fe_comp:
+        fe_candidates = fe_comp.get("host_ports") or fe_comp.get("container_ports") or []
+        if fe_candidates:
+            fe_port = int(fe_candidates[0])
+    if fe_port is None:
+        for preferred in (3000, 8080, 80, 5173, 4200):
+            if preferred in non_db_ports:
+                fe_port = preferred
+                break
+    if fe_port is None and non_db_ports:
+        fe_port = int(non_db_ports[0])
+
+    be_port: Optional[int] = None
+    if be_comp:
+        be_candidates = be_comp.get("host_ports") or be_comp.get("container_ports") or []
+        if be_candidates:
+            be_port = int(be_candidates[0])
+    if be_port is None:
+        for preferred in (8000, 5001, 5000, 8080, 4000):
+            if preferred in non_db_ports and preferred != fe_port:
+                be_port = preferred
+                break
+    if be_port is None:
+        other_ports = [p for p in non_db_ports if p != fe_port]
+        be_port = int(other_ports[0]) if other_ports else (fe_port if fe_port is not None else 8000)
+
+    return {
+        "frontend_port": int(fe_port if fe_port is not None else 3000),
+        "backend_port": int(be_port if be_port is not None else 8000),
+        "health_endpoint": (health_endpoints or ["/health"])[0],
+    }
+
+
 def discover_app_components_and_code(
     target_dir: Optional[Path],
     files_map: Dict[str, str],
@@ -349,6 +513,8 @@ def discover_app_components_and_code(
             except Exception:
                 pass
 
+    env_defaults = _parse_env_defaults(target_dir, files_map)
+
     if compose_keys:
         deep_insights["has_docker_compose"] = True
         deep_insights["compose_file"] = compose_keys[0]
@@ -374,34 +540,76 @@ def discover_app_components_and_code(
                     else:
                         service_blocks[current_svc].append(sline)
 
+        compose_services_meta: List[Dict[str, Any]] = []
         for sname, slines in service_blocks.items():
             sblock = "\n".join(slines)
-            ctx_m = re.search(r"context:\s*([^\s]+)", sblock)
-            df_m = re.search(r"dockerfile:\s*([^\s]+)", sblock)
-            raw_ports = re.findall(r'["\']?(\d{2,5}):(\d{2,5})["\']?', sblock)
+            ctx_m = re.search(r"^\s+context:\s*([^\s#]+)", sblock, re.MULTILINE)
+            inline_build_m = re.search(r"^\s+build:\s*([^\s#{\n]+)", sblock, re.MULTILINE)
+            has_build_dir = bool(re.search(r"^\s+build:\s*(?:$|\S)", sblock, re.MULTILINE))
+            df_m = re.search(r"dockerfile:\s*([^\s#]+)", sblock)
+            img_m = re.search(r"^\s+image:\s*([^\s#]+)", sblock, re.MULTILINE)
+            resolved_img = _resolve_compose_interpolations(img_m.group(1), env_defaults) if img_m else None
 
-            deps = []
-            deps_match = re.search(r"depends_on:\s*\n((?:\s+-\s*[^\n]+\n)+)", sblock)
-            if deps_match:
-                deps = [d.strip("- \t") for d in deps_match.group(1).splitlines() if d.strip()]
+            h_ports, c_ports = _extract_compose_service_ports(sblock, env_defaults)
+            deps = _extract_compose_depends_on(sblock)
 
-            ctx_path = ctx_m.group(1) if ctx_m else sname
-            ctx_clean = ctx_path.lstrip("./").strip("/")
+            raw_ctx = ctx_m.group(1) if ctx_m else (inline_build_m.group(1) if inline_build_m else None)
+            ctx_clean = (
+                raw_ctx.lstrip("./").strip("/") if raw_ctx and raw_ctx != "." else (
+                    "." if raw_ctx == "." else (sname if has_build_dir else None)
+                )
+            )
+            if ctx_clean is not None and not ctx_clean:
+                ctx_clean = "."
+
+            # Only treat services with a build context (or an actual local build directory)
+            # as source components; prebuilt image infrastructure services (postgres, bootstrap, redis)
+            # do not have `./<service>` build directories in the repository.
+            local_dir_exists = bool(
+                target_dir
+                and (target_dir / (ctx_clean or sname)).is_dir()
+                and any(
+                    ((target_dir / (ctx_clean or sname)) / mf).exists()
+                    for mf in ("Dockerfile", "package.json", "requirements.txt", "pyproject.toml", "pom.xml", "go.mod")
+                )
+            )
+            files_prefix = f"{(ctx_clean or sname).rstrip('/')}/"
+            in_files_map = ctx_clean == "." or any(k.startswith(files_prefix) for k in files_map)
+            is_buildable = bool(has_build_dir or local_dir_exists or (raw_ctx and in_files_map))
 
             tier = "service"
             sname_lower = sname.lower()
+            img_lower = (resolved_img or "").lower()
             if any(w in sname_lower for w in ("back", "api", "server", "srv", "backend")):
                 tier = "backend"
             elif any(w in sname_lower for w in ("front", "ui", "web", "client", "frontend")):
                 tier = "frontend"
+            elif any(w in sname_lower or w in img_lower for w in ("postgres", "mysql", "mariadb", "mongo")) or sname_lower == "db":
+                tier = "database"
+            elif any(w in sname_lower for w in ("bootstrap", "init", "seed", "migrate")):
+                tier = "init"
+            elif any(w in sname_lower or w in img_lower for w in ("redis", "rabbit", "kafka", "memcached")):
+                tier = "cache"
 
-            c_ports = [int(p[1]) for p in raw_ports] if raw_ports else []
-            h_ports = [int(p[0]) for p in raw_ports] if raw_ports else []
+            compose_services_meta.append({
+                "name": sname,
+                "tier": tier,
+                "has_build": is_buildable,
+                "image": resolved_img,
+                "host_ports": h_ports,
+                "container_ports": c_ports,
+                "depends_on": deps,
+            })
+
+            if not is_buildable:
+                continue
 
             components.append({
                 "name": sname,
                 "tier": tier,
-                "context_path": ctx_clean,
+                "has_build": True,
+                "image": resolved_img,
+                "context_path": ctx_clean or ".",
                 "dockerfile": df_m.group(1) if df_m else "Dockerfile",
                 "container_ports": c_ports,
                 "host_ports": h_ports,
@@ -417,6 +625,11 @@ def discover_app_components_and_code(
                 "alembic_enabled": False,
             })
 
+        deep_insights["compose_services"] = compose_services_meta
+        deep_insights["compose_has_own_db"] = any(
+            s["tier"] == "database" for s in compose_services_meta
+        )
+
     # 2. If no compose, detect standard subdirectories
     if not components and target_dir and target_dir.exists():
         subdirs = [d for d in target_dir.iterdir() if d.is_dir() and not d.name.startswith((".", "node_modules", "venv"))]
@@ -430,6 +643,7 @@ def discover_app_components_and_code(
                 components.append({
                     "name": sname,
                     "tier": tier,
+                    "has_build": True,
                     "context_path": sname,
                     "dockerfile": "Dockerfile" if has_df else None,
                     "container_ports": [8000] if tier == "backend" else ([80] if tier == "frontend" else [8080]),
@@ -448,36 +662,41 @@ def discover_app_components_and_code(
 
     # 3. Deep scan each component's directory & code
     for comp in components:
-        comp_dir = (target_dir / comp["context_path"]) if target_dir else None
+        ctx_rel = comp.get("context_path") or "."
+        comp_dir = (target_dir if ctx_rel == "." else (target_dir / ctx_rel)) if target_dir else None
 
         df_content = None
-        if comp_dir and (comp_dir / comp.get("dockerfile", "Dockerfile")).exists():
-            df_content = (comp_dir / comp.get("dockerfile", "Dockerfile")).read_text(encoding="utf-8", errors="replace")
+        if comp_dir and (comp_dir / (comp.get("dockerfile") or "Dockerfile")).exists():
+            df_content = (comp_dir / (comp.get("dockerfile") or "Dockerfile")).read_text(encoding="utf-8", errors="replace")
+        elif ctx_rel == ".":
+            df_content = files_map.get(comp.get("dockerfile") or "Dockerfile")
         else:
-            df_key = f"{comp['context_path']}/{comp.get('dockerfile', 'Dockerfile')}".lstrip("/")
-            df_content = files_map.get(df_key) or files_map.get(comp.get("dockerfile", "Dockerfile"))
+            df_key = f"{ctx_rel}/{comp.get('dockerfile') or 'Dockerfile'}".lstrip("/")
+            df_content = files_map.get(df_key)
 
         if df_content:
             for line in df_content.splitlines():
                 s = line.strip()
                 if s.upper().startswith("FROM "):
-                    comp["runtime"] = s.split(None, 1)[1].strip()
+                    from_img = s.split(None, 1)[1].strip().split()[0]
+                    comp["runtime"] = _resolve_compose_interpolations(from_img, env_defaults)
                 elif s.upper().startswith("EXPOSE "):
                     for tok in s.split()[1:]:
-                        p_str = tok.split("/")[0]
-                        if p_str.isdigit():
-                            p_num = int(p_str)
+                        port_str = _resolve_compose_interpolations(tok.split("/")[0], env_defaults)
+                        if port_str.isdigit():
+                            p_num = int(port_str)
                             if p_num not in comp["container_ports"]:
                                 comp["container_ports"].append(p_num)
                 elif s.upper().startswith("CMD ") or s.upper().startswith("ENTRYPOINT "):
                     comp["start_command"] = s.split(None, 1)[1].strip()
 
         py_manifest = None
-        if comp_dir:
-            if (comp_dir / "requirements.txt").exists():
-                py_manifest = (comp_dir / "requirements.txt").read_text(encoding="utf-8", errors="replace")
-        if not py_manifest:
-            py_manifest = files_map.get(f"{comp['context_path']}/requirements.txt") or files_map.get("requirements.txt")
+        if comp_dir and (comp_dir / "requirements.txt").exists():
+            py_manifest = (comp_dir / "requirements.txt").read_text(encoding="utf-8", errors="replace")
+        elif ctx_rel == ".":
+            py_manifest = files_map.get("requirements.txt")
+        else:
+            py_manifest = files_map.get(f"{ctx_rel}/requirements.txt")
 
         if py_manifest:
             comp["language"] = "Python"
@@ -496,8 +715,10 @@ def discover_app_components_and_code(
         pkg_content = None
         if comp_dir and (comp_dir / "package.json").exists():
             pkg_content = (comp_dir / "package.json").read_text(encoding="utf-8", errors="replace")
-        if not pkg_content:
-            pkg_content = files_map.get(f"{comp['context_path']}/package.json") or files_map.get("package.json")
+        elif ctx_rel == ".":
+            pkg_content = files_map.get("package.json")
+        else:
+            pkg_content = files_map.get(f"{ctx_rel}/package.json")
 
         if pkg_content:
             try:
@@ -574,15 +795,17 @@ def discover_app_components_and_code(
         frontend_comp = next((c for c in components if c["tier"] == "frontend"), None)
         backend_comp = next((c for c in components if c["tier"] == "backend"), None)
         if frontend_comp and backend_comp:
-            has_api_link = any("VITE_API_URL" in call or "API_URL" in call for call in frontend_comp["api_calls"])
-            if has_api_link or frontend_comp.get("depends_on") == [backend_comp["name"]]:
+            has_api_link = any("VITE_API_URL" in call or "API_URL" in call or "/api" in call for call in frontend_comp["api_calls"])
+            depends_on_be = backend_comp["name"] in (frontend_comp.get("depends_on") or [])
+            if has_api_link or depends_on_be:
+                be_port = (backend_comp.get("host_ports") or backend_comp.get("container_ports") or [8000])[0]
                 deep_insights["internal_service_links"].append({
                     "source": frontend_comp["name"],
                     "target": backend_comp["name"],
                     "protocol": "HTTP/REST",
-                    "port": backend_comp["container_ports"][0] if backend_comp["container_ports"] else 8000,
+                    "port": be_port,
                     "env_variable": "VITE_API_URL",
-                    "description": f"El frontend ({frontend_comp['name']}) se comunica con la API backend ({backend_comp['name']}) en el puerto {backend_comp['container_ports'][0] if backend_comp['container_ports'] else 8000}.",
+                    "description": f"El frontend ({frontend_comp['name']}) se comunica con la API backend ({backend_comp['name']}) en el puerto {be_port}.",
                 })
 
     return components, deep_insights
@@ -1266,17 +1489,20 @@ def _analyze_source_payload(
                 env_vars[k] = redact_env_value(k, v)
 
     # 5. Parse docker-compose files for services, ports, volumes, healthcheck, env vars & confirmed dependencies
+    env_defaults = _parse_env_defaults(resolved_dir, files_map)
     compose_services: List[str] = []
     compose_text_parts = [v for k, v in files_map.items() if ("compose" in k.lower() or "docker-compose" in k.lower()) and (k.endswith(".yml") or k.endswith(".yaml"))]
-    compose_text = "\n".join(compose_text_parts) if compose_text_parts else (files_map.get("docker-compose.yml") or files_map.get("docker-compose.yaml") or "")
+    compose_text = "\n".join(compose_text_parts) if compose_text_parts else (files_map.get("docker-compose.yml") or files_map.get("docker-compose.yaml") or files_map.get("compose.yaml") or "")
     if compose_text:
-        for m in re.finditer(r'-\s*["\']?(\d{2,5}):(\d{2,5})["\']?', compose_text):
+        resolved_compose_text = _resolve_compose_interpolations(compose_text, env_defaults)
+        for m in re.finditer(r'-\s*["\']?(?:[0-9.]+:)?(\d{2,5}):(\d{2,5})(?:/[a-zA-Z]+)?["\']?', resolved_compose_text):
             host_p = int(m.group(1))
             cont_p = int(m.group(2))
-            if host_p not in ports:
-                ports.append(host_p)
-            if cont_p not in ports:
-                ports.append(cont_p)
+            if host_p not in (5432, 3306, 6379, 27017, 5672):
+                if host_p not in ports:
+                    ports.append(host_p)
+                if cont_p not in ports:
+                    ports.append(cont_p)
         for m in re.finditer(r"-\s*([A-Z0-9_]+)=(.+)", compose_text):
             k, v = m.group(1).strip(), m.group(2).strip()
             env_vars[k] = redact_env_value(k, v)
@@ -1287,19 +1513,24 @@ def _analyze_source_payload(
         for svc_match in re.finditer(r"^  ([a-zA-Z0-9_-]+):\s*$", compose_text, re.MULTILINE):
             svc_name = svc_match.group(1)
             compose_services.append(svc_name)
-        for hc_m in re.finditer(r"https?://[^/\s\"']+(/[^\s\"']+)", compose_text):
-            if hc_m.group(1) not in health_endpoints:
-                health_endpoints.append(hc_m.group(1))
+        for hc_m in re.finditer(r"https?://[A-Za-z0-9._:${}-]+(/[^,\s\"']*)", resolved_compose_text):
+            cand_path = hc_m.group(1)
+            if cand_path and not cand_path.startswith("//") and "$" not in cand_path and cand_path not in health_endpoints:
+                health_endpoints.append(cand_path)
+        for hc_m in re.finditer(r"https?://[A-Za-z0-9._:${}-]+(/[A-Za-z0-9._/-]*)", compose_text):
+            cand_path = hc_m.group(1)
+            if cand_path and not cand_path.startswith("//") and cand_path not in health_endpoints:
+                health_endpoints.append(cand_path)
 
     # Incorporate discovered multi-tier components into ports, commands, and architecture definition
     if discovered_components:
         for c in discovered_components:
-            for cp in c.get("container_ports", []):
-                if cp not in ports:
-                    ports.append(cp)
             for hp in c.get("host_ports", []):
                 if hp not in ports:
                     ports.append(hp)
+            for cp in c.get("container_ports", []):
+                if cp not in ports:
+                    ports.append(cp)
             if c.get("start_command") and c["start_command"] not in start_commands:
                 start_commands.append(c["start_command"])
 
@@ -1307,7 +1538,7 @@ def _analyze_source_payload(
             backend_c = next((c for c in discovered_components if c["tier"] == "backend"), None)
             frontend_c = next((c for c in discovered_components if c["tier"] == "frontend"), None)
             if backend_c and frontend_c:
-                language = f"Python ({backend_c['name']}) + {frontend_c['language']} ({frontend_c['name']})"
+                language = f"{backend_c['language']} ({backend_c['name']}) + {frontend_c['language']} ({frontend_c['name']})"
                 framework = f"{backend_c['framework']} (Backend API) + {frontend_c['framework']} (Frontend)"
                 runtime = f"Multi-Tier Container ({backend_c['runtime']} & {frontend_c['runtime']})"
                 runtime_constraints = ">=Containerized Runtime"
@@ -1606,6 +1837,14 @@ def _analyze_source_payload(
         ],
     }
 
+    service_endpoints = _infer_service_endpoints(discovered_components, ports, health_endpoints)
+    primary_fe = service_endpoints.get("frontend_port")
+    ordered_ports = (
+        [primary_fe] + sorted(p for p in ports if p != primary_fe)
+        if primary_fe in ports
+        else sorted(ports)
+    )
+
     out = {
         "app_id": f"app-{_slug(app_name)}",
         "app_name": app_name,
@@ -1620,8 +1859,9 @@ def _analyze_source_payload(
         "runtime_constraints": runtime_constraints,
         "has_dockerfile": "Dockerfile" in files_map,
         "start_commands": start_commands or ["uvicorn app.main:app --host 0.0.0.0 --port 8080"],
-        "exposed_ports": sorted(ports),
+        "exposed_ports": ordered_ports,
         "health_endpoints": health_endpoints,
+        "service_endpoints": service_endpoints,
         "persistent_volumes": volume_paths,
         "environment_variables": list(env_vars.values()),
         "secrets_redacted_count": sum(1 for v in env_vars.values() if v["is_secret"]),

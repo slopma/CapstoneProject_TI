@@ -321,12 +321,49 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
     outputsMap.instance_public_ip?.value ||
     null;
 
+  const isVmCase = job?.use_case === "vm_image";
+  const srcEnv = job?.source_environment || {};
+
+  const appEndpoints = React.useMemo(() => {
+    if (isVmCase) {
+      return { frontendPort: 3000, backendPort: 8000, healthPath: "/health" };
+    }
+    const se = srcEnv.service_endpoints || {};
+    const comps = Array.isArray(srcEnv.components) ? srcEnv.components : [];
+    const feComp = comps.find((c) => c.tier === "frontend");
+    const beComp = comps.find((c) => c.tier === "backend");
+    const nonDbPorts = (srcEnv.exposed_ports || []).filter(
+      (p) => ![22, 5432, 3306, 6379, 27017, 5672].includes(Number(p))
+    );
+    const frontendPort =
+      Number(se.frontend_port) ||
+      Number(feComp?.host_ports?.[0] || feComp?.container_ports?.[0]) ||
+      Number(nonDbPorts[0]) ||
+      3000;
+    const backendPort =
+      Number(se.backend_port) ||
+      Number(beComp?.host_ports?.[0] || beComp?.container_ports?.[0]) ||
+      Number(nonDbPorts.find((p) => Number(p) !== frontendPort)) ||
+      (nonDbPorts.length === 1 ? Number(nonDbPorts[0]) : 8000);
+    const healthPath = se.health_endpoint || srcEnv.health_endpoints?.[0] || "/health";
+    return { frontendPort, backendPort, healthPath };
+  }, [isVmCase, srcEnv]);
+
   const handleProbeInstanceHealth = useCallback(async (targetIp) => {
     const ipToCheck = targetIp || publicIp;
     if (!ipToCheck) return;
     setProbingHealth(true);
     try {
-      const res = await apiFetch(`/api/v1/migration/probe-instance-status?ip=${encodeURIComponent(ipToCheck)}`);
+      const qs = new URLSearchParams({
+        ip: ipToCheck,
+        frontend_port: String(appEndpoints.frontendPort),
+        backend_port: String(appEndpoints.backendPort),
+        health_path: appEndpoints.healthPath,
+      });
+      if (migrationId) {
+        qs.set("migration_id", migrationId);
+      }
+      const res = await apiFetch(`/api/v1/migration/probe-instance-status?${qs.toString()}`);
       if (res.ok) {
         const data = await res.json();
         setInstanceHealth(data);
@@ -336,7 +373,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
     } finally {
       setProbingHealth(false);
     }
-  }, [publicIp]);
+  }, [publicIp, appEndpoints, migrationId]);
 
   // Auto-probe when publicIp is detected
   useEffect(() => {
@@ -356,15 +393,16 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
     return undefined;
   }, [publicIp, instanceHealth?.phase, probingHealth, handleProbeInstanceHealth]);
 
-  const isVmCase = job?.use_case === "vm_image";
-  const srcEnv = job?.source_environment || {};
-
   useEffect(() => {
     if (isVmCase && publicIp && autoSwitchedUc2IpRef.current !== publicIp) {
       autoSwitchedUc2IpRef.current = publicIp;
       setConsultTab("uc2_validation");
     }
   }, [isVmCase, publicIp]);
+
+  const liveFePort = instanceHealth?.frontend?.port ?? appEndpoints.frontendPort;
+  const liveBePort = instanceHealth?.backend?.port ?? appEndpoints.backendPort;
+  const liveHealthPath = appEndpoints.healthPath;
 
   // Parse Terraform Plan / Dry-Run & Live Apply progress directly from logs
   const parsedPlanInfo = React.useMemo(() => {
@@ -1214,7 +1252,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                       {instanceHealth?.summary ||
                         (probingHealth
                           ? "Comprobando apertura de puertos y salud de contenedores en AWS..."
-                          : "Haz clic en 'Probar Conectividad Ahora' para validar que los puertos 3000 y 8000 hayan terminado de iniciar.")}
+                          : `Haz clic en 'Probar Conectividad Ahora' para validar que los puertos ${liveFePort} y ${liveBePort} hayan terminado de iniciar.`)}
                     </div>
 
                     {instanceHealth && (
@@ -1234,7 +1272,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                           <span style={{ fontWeight: 700, color: instanceHealth.frontend?.online ? "#166534" : "#475569" }}>
                             [{instanceHealth.frontend?.online ? "OK" : "PENDIENTE"}]
                           </span>
-                          <strong>Frontend (Puerto 3000):</strong>
+                          <strong>Frontend (Puerto {liveFePort}):</strong>
                           <span>
                             {instanceHealth.frontend?.online
                               ? `En línea (HTTP ${instanceHealth.frontend?.status || 200})`
@@ -1257,7 +1295,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                           <span style={{ fontWeight: 700, color: instanceHealth.backend?.online ? "#166534" : "#475569" }}>
                             [{instanceHealth.backend?.online ? "OK" : "PENDIENTE"}]
                           </span>
-                          <strong>Backend API (Puerto 8000):</strong>
+                          <strong>Backend API (Puerto {liveBePort}):</strong>
                           <span>
                             {instanceHealth.backend?.online
                               ? `En línea (HTTP ${instanceHealth.backend?.status || 200})`
@@ -1305,7 +1343,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                           <strong>Tiempo de arranque inicial:</strong> Al lanzar una instancia en AWS, Cloud-Init tarda <strong>2 a 3 minutos</strong> en instalar Docker, clonar el repositorio y levantar los contenedores.
                         </li>
                         <li>
-                          <strong>Modo Solo HTTPS de Firefox:</strong> El navegador a menudo intenta forzar <code>https://{publicIp}:3000</code>. Asegúrate de ingresar explícitamente con <strong>http://</strong> (sin la 's'), o desactiva temporalmente el Modo Solo HTTPS para esta IP.
+                          <strong>Modo Solo HTTPS de Firefox:</strong> El navegador a menudo intenta forzar <code>https://{publicIp}:{liveFePort}</code>. Asegúrate de ingresar explícitamente con <strong>http://</strong> (sin la 's'), o desactiva temporalmente el Modo Solo HTTPS para esta IP.
                         </li>
                       </ol>
                     </div>
@@ -1325,7 +1363,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                 >
                   <div>
                     <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>
-                      {isVmCase ? "Portal Web y Explorador de Archivos del SO (Puerto 3000)" : "Aplicación Frontend (Puerto 3000)"}
+                      {isVmCase ? "Portal Web y Explorador de Archivos del SO (Puerto 3000)" : `Aplicación Frontend (Puerto ${liveFePort})`}
                     </div>
                     <div style={{ fontSize: 12, color: "#475569", marginBottom: 4 }}>
                       {isVmCase
@@ -1335,12 +1373,12 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                     {publicIp ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                         <a
-                          href={`http://${publicIp}:3000`}
+                          href={`http://${publicIp}:${liveFePort}`}
                           target="_blank"
                           rel="noreferrer"
                           style={{ fontSize: 13, fontWeight: 700, color: "#0972d3", fontFamily: "monospace" }}
                         >
-                          http://{publicIp}:3000 ↗ (Portal + Explorador)
+                          http://{publicIp}:{liveFePort} ↗ ({isVmCase ? "Portal + Explorador" : "Abrir Aplicación Web"})
                         </a>
                         {isVmCase && (
                           <a
@@ -1354,28 +1392,28 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                         )}
                       </div>
                     ) : (
-                      <code style={{ fontSize: 12, color: "#0369a1" }}>http://&lt;IP_PUBLICA_EC2&gt;:3000 (Disponible tras terraform apply)</code>
+                      <code style={{ fontSize: 12, color: "#0369a1" }}>http://&lt;IP_PUBLICA_EC2&gt;:{liveFePort} (Disponible tras terraform apply)</code>
                     )}
                   </div>
 
                   <div>
                     <div style={{ fontSize: 12, fontWeight: 700, color: "#0f172a" }}>
-                      {isVmCase ? "API JSON de Telemetría y Consultas Directas de Archivos" : "Backend API & Healthcheck (Puerto 8000)"}
+                      {isVmCase ? "API JSON de Telemetría y Consultas Directas de Archivos" : `Backend API & Healthcheck (Puerto ${liveBePort})`}
                     </div>
                     <div style={{ fontSize: 12, color: "#475569", marginBottom: 4 }}>
                       {isVmCase
                         ? "Consulta directa de telemetría JSON y lectura de archivos reales en la VM:"
-                        : "Documentación OpenAPI y sonda de salud:"}
+                        : "Endpoint API y sonda de salud:"}
                     </div>
                     {publicIp ? (
                       <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                         <a
-                          href={`http://${publicIp}:8000/health`}
+                          href={`http://${publicIp}:${liveBePort}${liveHealthPath}`}
                           target="_blank"
                           rel="noreferrer"
                           style={{ fontSize: 13, fontWeight: 700, color: "#0972d3", fontFamily: "monospace" }}
                         >
-                          http://{publicIp}:8000/health ↗
+                          http://{publicIp}:{liveBePort}{liveHealthPath} ↗
                         </a>
                         {isVmCase && (
                           <>
@@ -1399,7 +1437,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                         )}
                       </div>
                     ) : (
-                      <code style={{ fontSize: 12, color: "#0369a1" }}>http://&lt;IP_PUBLICA_EC2&gt;:8000/health</code>
+                      <code style={{ fontSize: 12, color: "#0369a1" }}>http://&lt;IP_PUBLICA_EC2&gt;:{liveBePort}{liveHealthPath}</code>
                     )}
                   </div>
 
@@ -1482,8 +1520,8 @@ terraform -chdir=generated/deployments/${migrationId} state list
 terraform -chdir=generated/deployments/${migrationId} output
 
 # 2. Consultar salud de los contenedores desplegados:
-curl -Iv http://${publicIp || "<IP_PUBLICA_EC2>"}:3000
-curl -Iv http://${publicIp || "<IP_PUBLICA_EC2>"}:8000/docs`}
+curl -Iv http://${publicIp || "<IP_PUBLICA_EC2>"}:${liveFePort}
+curl -Iv http://${publicIp || "<IP_PUBLICA_EC2>"}:${liveBePort}${liveHealthPath}`}
                   </pre>
 
                   {liveHostProbe?.host && (

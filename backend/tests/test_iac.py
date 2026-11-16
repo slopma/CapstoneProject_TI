@@ -278,4 +278,155 @@ def test_interactive_github_to_cloud_transformation_decisions():
     assert 'resource "aws_iam_role"' not in main_tf_custom
 
 
+def test_native_compose_yaml_env_interpolation_and_probe_endpoints(tmp_path, monkeypatch):
+    import base64
+    import gzip
+    import re
+    import subprocess
+    from fastapi.testclient import TestClient
+    from app.api.routers import migration as migration_router
+    from app.main import app
+    from app.migration.app_migrator import (
+        inspect_application_source,
+        build_application_cmir,
+        generate_app_migration_artifacts,
+    )
+
+    repo_dir = tmp_path / "bookstore-repo"
+    (repo_dir / "backend").mkdir(parents=True)
+    (repo_dir / "frontend").mkdir(parents=True)
+    (repo_dir / "database").mkdir(parents=True)
+
+    (repo_dir / "compose.yaml").write_text(
+        "services:\n"
+        "  postgres:\n"
+        "    image: ${POSTGRES_IMAGE:?POSTGRES_IMAGE is required}\n"
+        "    ports:\n"
+        "      - \"${POSTGRES_HOST_PORT:?POSTGRES_HOST_PORT is required}:5432\"\n"
+        "  bootstrap:\n"
+        "    image: ${BOOTSTRAP_IMAGE:?BOOTSTRAP_IMAGE is required}\n"
+        "    depends_on:\n"
+        "      postgres:\n"
+        "        condition: service_healthy\n"
+        "  backend:\n"
+        "    build:\n"
+        "      context: ./backend\n"
+        "    ports:\n"
+        "      - \"${BACKEND_HOST_PORT:?BACKEND_HOST_PORT is required}:${PORT:?PORT is required}\"\n"
+        "    depends_on:\n"
+        "      bootstrap:\n"
+        "        condition: service_completed_successfully\n"
+        "    healthcheck:\n"
+        "      test: [\"CMD-SHELL\", \"wget -q --spider http://localhost:$$PORT/health\"]\n"
+        "  frontend:\n"
+        "    build:\n"
+        "      context: ./frontend\n"
+        "    ports:\n"
+        "      - \"${FRONTEND_HOST_PORT:?FRONTEND_HOST_PORT is required}:${NGINX_PORT:?NGINX_PORT is required}\"\n"
+        "    depends_on:\n"
+        "      backend:\n"
+        "        condition: service_healthy\n",
+        encoding="utf-8",
+    )
+    (repo_dir / ".env.example").write_text(
+        "POSTGRES_IMAGE=postgres:17-alpine\n"
+        "BOOTSTRAP_IMAGE=postgres:17\n"
+        "FRONTEND_HOST_PORT=8080\n"
+        "BACKEND_HOST_PORT=5001\n"
+        "POSTGRES_HOST_PORT=5432\n"
+        "NGINX_PORT=80\n"
+        "PORT=5001\n"
+        "CORS_ORIGINS=http://localhost:3000,http://localhost:8080\n"
+        "DB_HOST=postgres\n"
+        "DB_NAME=bookstore\n"
+        "DB_ADMIN_USER=bookstore_admin\n"
+        "APP_DB_USER=bookstore_app\n",
+        encoding="utf-8",
+    )
+    (repo_dir / "backend" / "Dockerfile").write_text("FROM node:24-alpine\nCMD [\"npm\", \"start\"]\n", encoding="utf-8")
+    (repo_dir / "backend" / "package.json").write_text(
+        json.dumps({"name": "bookstore-backend", "dependencies": {"express": "5.1.0", "pg": "8.16.3"}}),
+        encoding="utf-8",
+    )
+    (repo_dir / "frontend" / "Dockerfile").write_text("FROM nginx:1.27-alpine\nCMD [\"nginx\", \"-g\", \"daemon off;\"]\n", encoding="utf-8")
+    (repo_dir / "frontend" / "package.json").write_text(
+        json.dumps({"name": "bookstore-frontend", "dependencies": {"react": "19.0.0", "vite": "6.0.0"}}),
+        encoding="utf-8",
+    )
+    (repo_dir / "database" / "schema.sql").write_text(
+        "CREATE TABLE public.books (book_id UUID PRIMARY KEY, title VARCHAR(255));\n",
+        encoding="utf-8",
+    )
+
+    disc = inspect_application_source(source_path=str(repo_dir), app_name_override="bookstore")
+    comp_names = [c["name"] for c in disc["components"]]
+    assert comp_names == ["backend", "frontend"]
+    assert 8080 in disc["exposed_ports"]
+    assert 5001 in disc["exposed_ports"]
+    assert disc["exposed_ports"][0] == 8080
+    assert disc["service_endpoints"] == {
+        "frontend_port": 8080,
+        "backend_port": 5001,
+        "health_endpoint": "/health",
+    }
+
+    cmir = build_application_cmir(
+        disc,
+        target_provider="aws",
+        deployment_mode="container",
+        user_decisions={
+            "compute_architecture": "single_instance_containerized",
+            "dep:dep-bookstore-postgresql": "self_hosted_container",
+        },
+    )
+    bundle = generate_app_migration_artifacts(disc, cmir, target_provider="aws")
+    assert bundle["validation"]["valid"] is True
+
+    main_tf = bundle["files"]["main.tf"]
+    sg_ports = set(re.findall(r"from_port\s*=\s*(\d+)", main_tf))
+    assert {"22", "80", "443", "5001", "5432", "8080"}.issubset(sg_ports)
+
+    raw_ud = bundle["files"]["user_data.sh"]
+    if "CLOUDMOVE HIGH-EFFICIENCY SELF-EXTRACTING BOOTSTRAP" in raw_ud:
+        m = re.search(r'echo "([A-Za-z0-9+/=]+)" \| base64 -d', raw_ud)
+        decoded_ud = gzip.decompress(base64.b64decode(m.group(1))).decode("utf-8")
+    else:
+        decoded_ud = raw_ud
+    assert "./postgres" not in decoded_ud
+    assert "./bootstrap" not in decoded_ud
+    assert 'COMPOSE_FILE="compose.yaml"' in decoded_ud
+    assert 'PRESERVE_REPO_DB="true"' in decoded_ud
+    assert "export COMPOSE_BAKE=false" in decoded_ud
+    assert "append_cors_origins" in decoded_ud
+
+    sh_file = tmp_path / "user_data_check.sh"
+    sh_file.write_text(decoded_ud, encoding="utf-8")
+    subprocess.run(["bash", "-n", str(sh_file)], check=True)
+
+    # Verify probe-instance-status accepts dynamic frontend/backend ports and preserves 3000/8000 defaults
+    monkeypatch.setattr(migration_router, "_probe_tcp_port", lambda host, port, timeout=2.0: True)
+    monkeypatch.setattr(
+        migration_router,
+        "_probe_http_endpoint",
+        lambda url, timeout=2.5: {"online": True, "status": 200, "message": "OK"},
+    )
+    client = TestClient(app)
+    res_custom = client.get(
+        "/api/v1/migration/probe-instance-status",
+        params={"ip": "54.160.10.20", "frontend_port": 8080, "backend_port": 5001, "health_path": "/health"},
+    )
+    assert res_custom.status_code == 200
+    body_custom = res_custom.json()
+    assert body_custom["frontend"]["port"] == 8080
+    assert body_custom["backend"]["port"] == 5001
+    assert body_custom["backend"]["url"] == "http://54.160.10.20:5001/health"
+    assert body_custom["all_ready"] is True
+
+    res_default = client.get("/api/v1/migration/probe-instance-status", params={"ip": "54.160.10.20"})
+    assert res_default.status_code == 200
+    assert res_default.json()["frontend"]["port"] == 3000
+    assert res_default.json()["backend"]["port"] == 8000
+
+
+
 

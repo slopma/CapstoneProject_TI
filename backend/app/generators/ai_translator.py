@@ -105,14 +105,19 @@ def prepare_ai_payload(
     if raw_components:
         for comp in raw_components:
             comp_env_keys = list((comp.get("env_vars") or {}).keys()) if isinstance(comp.get("env_vars"), dict) else []
+            c_ports = list(comp.get("host_ports") or comp.get("container_ports") or discovery_data.get("exposed_ports", [80]))
+            c_cports = list(comp.get("container_ports") or c_ports or [80])
             components_payload.append({
                 "name": comp.get("name", "service"),
                 "tier": comp.get("tier", "backend"),
+                "has_build": comp.get("has_build", True),
+                "image": comp.get("image"),
                 "context_path": comp.get("context_path", "."),
                 "type": comp.get("framework") or comp.get("language") or discovery_data.get("framework", "unknown"),
                 "runtime": comp.get("runtime") or discovery_data.get("runtime", "python:3.11-slim"),
-                "ports": comp.get("host_ports") or comp.get("container_ports") or discovery_data.get("exposed_ports", [80]),
-                "container_ports": comp.get("container_ports") or [80],
+                "ports": c_ports,
+                "host_ports": list(comp.get("host_ports") or []),
+                "container_ports": c_cports,
                 "start_command": comp.get("start_command") or (discovery_data.get("start_commands") or [""])[0],
                 "env_vars_keys": comp_env_keys or env_var_keys,
                 "has_dockerfile": bool(comp.get("dockerfile")),
@@ -121,10 +126,12 @@ def prepare_ai_payload(
         components_payload.append({
             "name": discovery_data.get("app_name", "app"),
             "tier": "fullstack",
+            "has_build": True,
             "context_path": ".",
             "type": f"{discovery_data.get('language', 'Python')} / {discovery_data.get('framework', 'FastAPI')}",
             "runtime": discovery_data.get("runtime", "python:3.11-slim"),
             "ports": discovery_data.get("exposed_ports", [8080]),
+            "host_ports": list(discovery_data.get("exposed_ports", [8080])),
             "container_ports": discovery_data.get("exposed_ports", [8080]),
             "start_command": (discovery_data.get("start_commands") or ["uvicorn app.main:app --host 0.0.0.0 --port 8080"])[0],
             "env_vars_keys": env_var_keys,
@@ -135,14 +142,20 @@ def prepare_ai_payload(
     has_docker_compose = bool(
         deep_insights.get("has_docker_compose")
         or discovery_data.get("has_docker_compose")
-        or any("docker-compose" in f for f in discovery_data.get("files_inspected", []))
+        or any("compose" in f.lower() for f in discovery_data.get("files_inspected", []))
     )
     compose_file = deep_insights.get("compose_file")
     if not compose_file:
         for f in discovery_data.get("files_inspected", []):
-            if f in ("docker-compose.prod.yml", "docker-compose.yml", "compose.yml"):
+            if f in ("docker-compose.prod.yml", "docker-compose.yml", "docker-compose.yaml", "compose.yaml", "compose.yml"):
                 compose_file = f
                 break
+
+    compose_services_meta = deep_insights.get("compose_services") or []
+    compose_has_own_db = bool(
+        deep_insights.get("compose_has_own_db")
+        or any(s.get("tier") == "database" for s in compose_services_meta)
+    )
 
     db_backups = discovery_data.get("database_backups") or deep_insights.get("database_backups") or {}
     user_decisions = discovery_data.get("user_decisions") or {}
@@ -193,6 +206,8 @@ def prepare_ai_payload(
         "has_dockerfile": bool(discovery_data.get("has_dockerfile", False)),
         "has_docker_compose": has_docker_compose,
         "compose_file": compose_file or "docker-compose.yml",
+        "compose_has_own_db": compose_has_own_db,
+        "service_endpoints": discovery_data.get("service_endpoints") or {},
         "components": components_payload,
         "external_dependencies": external_dependencies,
         "database_backups": db_backups,
@@ -314,18 +329,25 @@ CMD {cmd_str}
             "      retries: 15",
         ])
 
-    if len(components) > 1:
-        for comp in components:
+    buildable_components = [c for c in components if c.get("has_build", True) is not False]
+    if len(buildable_components) > 1:
+        used_host_ports = {5432} if include_db_container else set()
+        for comp in buildable_components:
             c_name = _slug(comp.get("name", "service"))
-            c_ctx = comp.get("context_path", ".")
-            c_ports = comp.get("ports") or [80]
-            c_cports = comp.get("container_ports") or c_ports
-            h_port = c_ports[0]
-            c_port = c_cports[0]
+            c_ctx = comp.get("context_path") or "."
+            default_c_port = 8000 if comp.get("tier") == "backend" else 80
+            default_h_port = 8000 if comp.get("tier") == "backend" else 3000
+            c_cports = comp.get("container_ports") or [default_c_port]
+            c_ports = comp.get("host_ports") or comp.get("ports") or [default_h_port]
+            c_port = int(c_cports[0])
+            h_port = int(c_ports[0])
+            while h_port in used_host_ports:
+                h_port += 1
+            used_host_ports.add(h_port)
             services_yaml_lines.extend([
                 f"  {c_name}:",
                 "    build:",
-                f"      context: ./{c_ctx}",
+                f"      context: ./{c_ctx}" if c_ctx != "." else "      context: .",
                 "      dockerfile: Dockerfile",
                 "    restart: always",
                 "    env_file:",
@@ -551,6 +573,10 @@ def generate_container_user_data_sh(ai_payload: Dict[str, Any]) -> str:
     health_ep = ai_payload.get("health_endpoint") or "/health"
     ports = ai_payload.get("exposed_ports") or [80]
     primary_port = ports[0]
+    components = ai_payload.get("components") or []
+    service_endpoints = ai_payload.get("service_endpoints") or {}
+    fe_port = int(service_endpoints.get("frontend_port") or (3000 if any(3000 in (c.get("ports") or []) for c in components) else primary_port))
+    be_port = int(service_endpoints.get("backend_port") or (8000 if any(8000 in (c.get("ports") or []) for c in components) else primary_port))
 
     db_backups = ai_payload.get("database_backups") or {}
     ext_deps = ai_payload.get("external_dependencies") or []
@@ -562,6 +588,18 @@ def generate_container_user_data_sh(ai_payload: Dict[str, Any]) -> str:
         if d.get("type") in ("database", "database_instance", "external_baas")
     )
 
+    is_supabase_baas = any(
+        "supabase" in str(d.get("engine", "")).lower() or bool(d.get("is_external_baas"))
+        for d in ext_deps
+    )
+    compose_has_own_db = bool(ai_payload.get("compose_has_own_db")) or any(
+        c.get("tier") in ("database", "init") or str(c.get("name", "")).lower() in ("postgres", "postgresql", "db", "mysql")
+        for c in components
+    )
+    needs_cloudmove_bridge = bool(is_supabase_baas and include_db_container)
+    needs_synthetic_db = bool(include_db_container and not compose_has_own_db)
+    use_repo_compose = bool(has_compose and not needs_cloudmove_bridge and not needs_synthetic_db)
+
     if (has_bkp or include_db_container) and "DATABASE_URL" not in env_keys:
         env_keys.append("DATABASE_URL")
 
@@ -569,8 +607,8 @@ def generate_container_user_data_sh(ai_payload: Dict[str, Any]) -> str:
     dockerfile_fallback = auto_container_files["Dockerfile.cloudmove"]
     compose_fallback = auto_container_files["docker-compose.cloudmove.yml"]
 
-    env_lines = [f"{k}=${{{k}:-}}" for k in env_keys] if env_keys else ["NODE_ENV=production", f"PORT={primary_port}"]
-    if include_db_container:
+    env_lines = [f"{k}=${{{k}:-}}" for k in env_keys] if env_keys else ["NODE_ENV=production", f"PORT={be_port}"]
+    if include_db_container and not (use_repo_compose and compose_has_own_db):
         env_lines.extend([
             "POSTGRES_USER=${POSTGRES_USER:-postgres}",
             "POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-CloudMoveDB2026!}",
@@ -578,9 +616,10 @@ def generate_container_user_data_sh(ai_payload: Dict[str, Any]) -> str:
         ])
     env_block = "\n".join(env_lines)
 
-    # Always use docker-compose.cloudmove.yml so the CloudMove port mappings (3000, 8000, 5432),
-    # .env files, and PostgreSQL/PostGIS `db` container are guaranteed to run consistently.
-    compose_target = "docker-compose.cloudmove.yml"
+    # Preserve the repository's native compose file (e.g. compose.yaml with postgres + bootstrap)
+    # when it already orchestrates its stack; use docker-compose.cloudmove.yml when CloudMove needs
+    # to inject synthetic containers or the Supabase-to-PostGIS bridge.
+    compose_target = compose_file if use_repo_compose else "docker-compose.cloudmove.yml"
 
     import base64, gzip
     from app.migration.app_migrator import _build_database_migration_script
@@ -596,7 +635,7 @@ def generate_container_user_data_sh(ai_payload: Dict[str, Any]) -> str:
     bridge_b64 = base64.b64encode(gzip.compress(_CLOUDMOVE_PG_SUPABASE_BRIDGE_PY.encode("utf-8"))).decode("ascii")
 
     restore_step_block = ""
-    if has_bkp:
+    if has_bkp and not (use_repo_compose and compose_has_own_db):
         restore_step_block = f"""
 echo "[6/7] Iniciando contenedor de base de datos PostgreSQL/PostGIS y restaurando backup ({bkp_file})..."
 run_compose -f "$COMPOSE_FILE" up -d db || true
@@ -609,15 +648,19 @@ if [ -n "${{CLOUDMOVE_RDS_HOST:-}}" ] && [ "${{CLOUDMOVE_RDS_HOST:-}}" != "__CLO
 fi
 """
 
+    preserve_repo_db_env = "true" if (use_repo_compose and compose_has_own_db) else "false"
+
     raw_script = f"""#!/usr/bin/env bash
 # ==============================================================================
 # CLOUDMOVE AUTO-SCALING CONTAINERIZED BOOTSTRAP SCRIPT (user_data.sh)
 # Application : {app_name}
 # Repository  : {repo_url} (ref: {git_ref}, commit: {commit_sha})
 # Architecture: High-Availability Containerized Node (ALB + Auto Scaling Group)
+# Compose Mode: {compose_target} ({'Native Repo Compose' if use_repo_compose else 'CloudMove Orchestrated Compose'})
 # DB Backup   : {bkp_file if has_bkp else 'N/A'} ({'Auto-Restore Enabled' if has_bkp else 'No local dump'})
 # ==============================================================================
 set -euo pipefail
+export COMPOSE_BAKE=false
 exec > >(tee /var/log/cloudmove-user-data.log | logger -t cloudmove-user-data -s 2>/dev/console) 2>&1
 
 run_compose() {{
@@ -642,6 +685,22 @@ set_env_var() {{
       echo "" >> "$file"
       echo "${{key}}=${{val}}" >> "$file"
     fi
+  fi
+}}
+
+append_cors_origins() {{
+  local file="$1"
+  local pub_ip="$2"
+  if [ -f "$file" ] && grep -q "^CORS_ORIGINS=" "$file" && [ -n "$pub_ip" ] && [ "$pub_ip" != "localhost" ]; then
+    local cur_val
+    cur_val=$(grep "^CORS_ORIGINS=" "$file" | head -n 1 | cut -d'=' -f2-)
+    for origin in "http://${{pub_ip}}" "http://${{pub_ip}}:80" "http://${{pub_ip}}:{fe_port}" "http://${{pub_ip}}:8080" "http://${{pub_ip}}:3000"; do
+      case ",$cur_val," in
+        *",$origin,"*) ;;
+        *) cur_val="${{cur_val:+${{cur_val}},}}$origin" ;;
+      esac
+    done
+    set_env_var "$file" "CORS_ORIGINS" "$cur_val"
   fi
 }}
 
@@ -689,51 +748,83 @@ ACTIVE_DB_HOST="${{DB_HOST:-db}}"
 ACTIVE_DB_USER="${{POSTGRES_USER:-postgres}}"
 ACTIVE_DB_PASSWORD="${{DB_PASSWORD:-${{POSTGRES_PASSWORD:-$(openssl rand -hex 16 2>/dev/null || date +%s%N | sha256sum | head -c 24)}}}}"
 
+for DIR_TARGET in /opt/{app_slug} /opt/{app_slug}/*; do
+  if [ -d "$DIR_TARGET" ] && [ ! -f "$DIR_TARGET/.env" ]; then
+    if [ -f "$DIR_TARGET/.env.example" ]; then
+      cp "$DIR_TARGET/.env.example" "$DIR_TARGET/.env"
+    elif [ -f "$DIR_TARGET/.env.local.example" ]; then
+      cp "$DIR_TARGET/.env.local.example" "$DIR_TARGET/.env"
+    fi
+  fi
+done
+
 if [ ! -f /opt/{app_slug}/.env ]; then
   cat << 'EOF_ENV' > /opt/{app_slug}/.env
 {env_block}
 EOF_ENV
 fi
 
-# Asegurar que las variables de base de datos y VITE_API_URL apunten a la instancia EC2 actual y al motor PostgreSQL/PostGIS en AWS
+PRESERVE_REPO_DB="{preserve_repo_db_env}"
 for ENV_TARGET in /opt/{app_slug}/.env /opt/{app_slug}/*/.env; do
   if [ -f "$ENV_TARGET" ]; then
-    set_env_var "$ENV_TARGET" "VITE_API_URL" "http://${{PUBLIC_IP}}:8000"
-    set_env_var "$ENV_TARGET" "POSTGRES_USER" "$ACTIVE_DB_USER"
-    set_env_var "$ENV_TARGET" "POSTGRES_PASSWORD" "$ACTIVE_DB_PASSWORD"
-    set_env_var "$ENV_TARGET" "POSTGRES_DB" "${{POSTGRES_DB:-postgres}}"
-    set_env_var "$ENV_TARGET" "DB_HOST" "$ACTIVE_DB_HOST"
-    set_env_var "$ENV_TARGET" "DB_PORT" "5432"
-    set_env_var "$ENV_TARGET" "DB_NAME" "${{POSTGRES_DB:-postgres}}"
-    set_env_var "$ENV_TARGET" "DB_USER" "$ACTIVE_DB_USER"
-    set_env_var "$ENV_TARGET" "DB_PASSWORD" "$ACTIVE_DB_PASSWORD"
-    set_env_var "$ENV_TARGET" "DATABASE_URL" "postgresql://${{ACTIVE_DB_USER}}:${{ACTIVE_DB_PASSWORD}}@${{ACTIVE_DB_HOST}}:5432/${{POSTGRES_DB:-postgres}}"
+    append_cors_origins "$ENV_TARGET" "$PUBLIC_IP"
+    if [ "$PRESERVE_REPO_DB" != "true" ]; then
+      set_env_var "$ENV_TARGET" "VITE_API_URL" "http://${{PUBLIC_IP}}:{be_port}"
+      set_env_var "$ENV_TARGET" "POSTGRES_USER" "$ACTIVE_DB_USER"
+      set_env_var "$ENV_TARGET" "POSTGRES_PASSWORD" "$ACTIVE_DB_PASSWORD"
+      set_env_var "$ENV_TARGET" "POSTGRES_DB" "${{POSTGRES_DB:-postgres}}"
+      set_env_var "$ENV_TARGET" "DB_HOST" "$ACTIVE_DB_HOST"
+      set_env_var "$ENV_TARGET" "DB_PORT" "5432"
+      set_env_var "$ENV_TARGET" "DB_NAME" "${{POSTGRES_DB:-postgres}}"
+      set_env_var "$ENV_TARGET" "DB_USER" "$ACTIVE_DB_USER"
+      set_env_var "$ENV_TARGET" "DB_PASSWORD" "$ACTIVE_DB_PASSWORD"
+      set_env_var "$ENV_TARGET" "DATABASE_URL" "postgresql://${{ACTIVE_DB_USER}}:${{ACTIVE_DB_PASSWORD}}@${{ACTIVE_DB_HOST}}:5432/${{POSTGRES_DB:-postgres}}"
+    else
+      if grep -q "^VITE_API_URL=" "$ENV_TARGET"; then
+        set_env_var "$ENV_TARGET" "VITE_API_URL" "http://${{PUBLIC_IP}}:{be_port}"
+      fi
+      if [ -n "${{CLOUDMOVE_RDS_HOST:-}}" ] && [ "${{CLOUDMOVE_RDS_HOST:-}}" != "__CLOUDMOVE_RDS_HOST__" ]; then
+        set_env_var "$ENV_TARGET" "DB_HOST" "$CLOUDMOVE_RDS_HOST"
+        set_env_var "$ENV_TARGET" "DB_SSL" "true"
+      fi
+    fi
   fi
 done
 
-echo "[5/7] Escribiendo manifiestos de contenerización CloudMove (Dockerfile / Docker Compose con PostGIS)..."
+echo "[5/7] Preparando manifiestos de contenerización CloudMove (Compose: {compose_target})..."
 if [ ! -f /opt/{app_slug}/Dockerfile ] && [ ! -f /opt/{app_slug}/Dockerfile.cloudmove ]; then
   cat << 'EOF_DF' > /opt/{app_slug}/Dockerfile.cloudmove
 {dockerfile_fallback.rstrip()}
 EOF_DF
 fi
 
-cat << 'EOF_COMPOSE' > /opt/{app_slug}/docker-compose.cloudmove.yml
+if [ "{str(use_repo_compose).lower()}" != "true" ] || [ ! -f "/opt/{app_slug}/{compose_target}" ]; then
+  cat << 'EOF_COMPOSE' > /opt/{app_slug}/docker-compose.cloudmove.yml
 {compose_fallback.rstrip()}
 EOF_COMPOSE
-
-if [ -f "/opt/{app_slug}/backend/requirements.txt" ]; then
-  grep -q "^websockets" "/opt/{app_slug}/backend/requirements.txt" || echo -e "\nwebsockets==12.0" >> "/opt/{app_slug}/backend/requirements.txt"
 fi
 
-if [ -f "/opt/{app_slug}/backend/src/utils/supaBaseClient.py" ]; then
-  echo "  -> Inyectando adaptador CloudMove BaaS-to-PostgreSQL (psycopg2 + PostGIS) en backend/src/utils/supaBaseClient.py..."
-  echo "{bridge_b64}" | base64 -d | gzip -d > "/opt/{app_slug}/backend/src/utils/supaBaseClient.py"
+if [ "{str(needs_cloudmove_bridge).lower()}" = "true" ]; then
+  if [ -f "/opt/{app_slug}/backend/requirements.txt" ]; then
+    grep -q "^websockets" "/opt/{app_slug}/backend/requirements.txt" || echo -e "\\nwebsockets==12.0" >> "/opt/{app_slug}/backend/requirements.txt"
+  fi
+  if [ -f "/opt/{app_slug}/backend/src/utils/supaBaseClient.py" ]; then
+    echo "  -> Inyectando adaptador CloudMove BaaS-to-PostgreSQL (psycopg2 + PostGIS) en backend/src/utils/supaBaseClient.py..."
+    echo "{bridge_b64}" | base64 -d | gzip -d > "/opt/{app_slug}/backend/src/utils/supaBaseClient.py"
+  fi
 fi
 
 COMPOSE_FILE="{compose_target}"
+if [ ! -f "$COMPOSE_FILE" ]; then
+  for CAND in compose.yaml compose.yml docker-compose.prod.yml docker-compose.yml docker-compose.cloudmove.yml; do
+    if [ -f "$CAND" ]; then
+      COMPOSE_FILE="$CAND"
+      break
+    fi
+  done
+fi
 {restore_step_block}
-echo "[6.5/7] Construyendo e iniciando contenedores de aplicación (Backend + Frontend + PostGIS) con reinicio automático..."
+echo "[6.5/7] Construyendo e iniciando contenedores de aplicación mediante $COMPOSE_FILE con reinicio automático..."
 run_compose -f "$COMPOSE_FILE" up -d --build
 docker builder prune -af || true
 
@@ -749,9 +840,9 @@ if [ -z "$CUR_IP" ]; then
   CUR_IP=$(curl -sS -m 3 http://169.254.169.254/latest/meta-data/public-ipv4 || curl -sS -m 5 https://checkip.amazonaws.com | tr -d '[:space:]' || true)
 fi
 if [ -n "$CUR_IP" ]; then
-  FE_CID=$(docker ps --filter publish=3000 -q | head -n 1)
+  FE_CID=$(docker ps --filter publish={fe_port} -q | head -n 1)
   if [ -n "$FE_CID" ]; then
-    docker exec "$FE_CID" sh -c "sed -i -E 's|http://[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+:8000|http://${{CUR_IP}}:8000|g' /usr/share/nginx/html/assets/*.js 2>/dev/null || true"
+    docker exec "$FE_CID" sh -c "sed -i -E 's|http://[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+:{be_port}|http://${{CUR_IP}}:{be_port}|g' /usr/share/nginx/html/assets/*.js 2>/dev/null || true"
   fi
 fi
 EOF_SYNC_IP
@@ -780,7 +871,7 @@ EOF_SYSTEMD
 systemctl daemon-reload
 systemctl enable {app_slug}-containers.service
 
-echo "[OK] Despliegue contenerizado de '{app_name}' activo. Puertos: {ports}, Health Check: {health_ep}"
+echo "[OK] Despliegue contenerizado de '{app_name}' activo. Puertos: {ports}, Frontend: {fe_port}, Backend: {be_port}, Health Check: {health_ep}"
 """
     # Safety guard: AWS EC2 API limits uncompressed user_data to 16,384 bytes (16 KB).
     # If the script exceeds 15,360 bytes (15 KB), wrap it as a self-extracting gzipped bootstrap
