@@ -21,6 +21,7 @@ from pathlib import Path
 import tarfile
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from app.persistence.transactional_db import get_transactional_db
@@ -577,16 +578,12 @@ def record_heartbeat(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/live-discovery")
-def get_live_agent_discovery(
-    request: Request,
-    agent_id: Optional[str] = Query(None),
-):
-    """
-    Return the complete live discovery inventory reported by the enrolled remote agent(s),
-    including folders & files (filesystem_tree), listening ports, running processes,
-    systemd services, disks/partitions, CPU/RAM, and AWS EBS storage quota limits.
-    """
+def build_live_agent_discovery_payload(
+    server_url: Optional[str] = None,
+    agent_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build live discovery payload from enrolled agent telemetry and assets."""
+    base_url = (server_url or os.getenv("CLOUDMOVE_API_URL", "https://digitalcafeluna.store")).rstrip("/")
     db = get_transactional_db()
     all_agents = db.list_agents(include_revoked=False)
     remote_agents = [
@@ -628,8 +625,7 @@ def get_live_agent_discovery(
     total_user_files_gib = round(total_user_files_bytes / (1024 ** 3), 3)
 
     chosen_version = chosen_agent.get("version") or "2.1.0"
-    server_url = _get_server_url(request)
-    upgrade_cmd = f"curl -sSL {server_url}/api/v1/agents/install.sh | sudo bash -s -- --upgrade"
+    upgrade_cmd = f"curl -sSL {base_url}/api/v1/agents/install.sh | sudo bash -s -- --upgrade"
 
     return {
         "agent_connected": True,
@@ -673,6 +669,22 @@ def get_live_agent_discovery(
             "base_os_overhead_gib": 2.5,
         },
     }
+
+
+@router.get("/live-discovery")
+def get_live_agent_discovery(
+    request: Request,
+    agent_id: Optional[str] = Query(None),
+):
+    """
+    Return the complete live discovery inventory reported by the enrolled remote agent(s),
+    including folders & files (filesystem_tree), listening ports, running processes,
+    systemd services, disks/partitions, CPU/RAM, and AWS EBS storage quota limits.
+    """
+    return build_live_agent_discovery_payload(
+        server_url=_get_server_url(request),
+        agent_id=agent_id,
+    )
 
 
 @router.get("")
@@ -831,7 +843,8 @@ async def upload_agent_stage_chunk(
     from app.migration.uc2_staging import save_stage_chunk
 
     try:
-        return save_stage_chunk(
+        return await run_in_threadpool(
+            save_stage_chunk,
             stage_id=stage_id,
             chunk_index=chunk_index,
             total_chunks=total_chunks,

@@ -647,6 +647,8 @@ export default function MigrationOrchestratorWorkspace({
   const [selectedJob, setSelectedJob] = useState(null);
   const [persistenceStatus, setPersistenceStatus] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [inspecting, setInspecting] = useState(false);
+  const [refreshingJobs, setRefreshingJobs] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [statusBanner, setStatusBanner] = useState("");
   const [confirmAction, setConfirmAction] = useState(null); // { endpoint, body, title, description }
@@ -735,10 +737,16 @@ export default function MigrationOrchestratorWorkspace({
   }, []);
 
   const fetchJobs = useCallback(
-    async (selectId = null) => {
+    async (selectId = null, manual = false) => {
+      if (manual) setRefreshingJobs(true);
       try {
-        const res = await apiFetch("/api/v1/migration/jobs");
-        if (!res.ok) return;
+        const res = await apiFetch("/api/v1/migration/jobs", { timeoutMs: 20000 });
+        if (!res.ok) {
+          if (manual) {
+            setErrorMsg(`Error HTTP ${res.status} al actualizar la lista de planes de migración.`);
+          }
+          return;
+        }
         const data = await res.json();
         const list = (data.jobs || []).filter(
           (j) => j.use_case === "app_source" || j.use_case === "vm_image"
@@ -762,8 +770,12 @@ export default function MigrationOrchestratorWorkspace({
             return next;
           });
         }
-      } catch {
-        // Ignore network error if backend is restarting
+      } catch (err) {
+        if (manual) {
+          setErrorMsg(err.message || "No se pudo conectar con el servidor al actualizar los planes.");
+        }
+      } finally {
+        if (manual) setRefreshingJobs(false);
       }
     },
     [initialJobId, onActiveJobChange]
@@ -947,21 +959,30 @@ export default function MigrationOrchestratorWorkspace({
 
   const handleQueryLiveDevices = useCallback(async (forced = false) => {
     setQueryingDevices(true);
+    if (forced) setErrorMsg("");
     try {
       await fetchEnrolledAgents();
       const endpoint = forced
         ? "/api/v1/migration/use-case-2/probe-devices"
         : "/api/v1/migration/use-case-2/devices";
-      const res = await apiFetch(endpoint, forced ? { method: "POST" } : {});
+      const res = await apiFetch(endpoint, {
+        ...(forced ? { method: "POST" } : {}),
+        timeoutMs: 25000,
+      });
       if (res.ok) {
         const data = await res.json();
         setHostDevicesData(data);
         if (data.primary_boot_device?.path) {
           setSelectedStorageDevice(data.primary_boot_device.path);
         }
+      } else if (forced) {
+        const err = await res.json().catch(() => ({}));
+        setErrorMsg(err.detail || `Error HTTP ${res.status} consultando dispositivos del agente.`);
       }
-    } catch {
-      // Ignore transient errors
+    } catch (err) {
+      if (forced) {
+        setErrorMsg(err.message || "No se pudo consultar los dispositivos del agente remoto.");
+      }
     } finally {
       setQueryingDevices(false);
     }
@@ -1000,7 +1021,7 @@ export default function MigrationOrchestratorWorkspace({
 
   // Pre-inspection handler for Case 1 (Steps 1–4 before creating or executing plan)
   const handleInspectUseCase1 = async () => {
-    setLoading(true);
+    setInspecting(true);
     setErrorMsg("");
     try {
       const payload = {
@@ -1018,6 +1039,7 @@ export default function MigrationOrchestratorWorkspace({
 
       const res = await apiFetch("/api/v1/migration/use-case-1/inspect", {
         method: "POST",
+        timeoutMs: 60000,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
@@ -1038,7 +1060,7 @@ export default function MigrationOrchestratorWorkspace({
     } catch (err) {
       setErrorMsg(err.message);
     } finally {
-      setLoading(false);
+      setInspecting(false);
     }
   };
 
@@ -1049,7 +1071,7 @@ export default function MigrationOrchestratorWorkspace({
       setErrorMsg("Introduzca la ruta absoluta o relativa de la imagen de disco (.vmdk, .qcow2, .raw, .vhdx) a inspeccionar.");
       return;
     }
-    setLoading(true);
+    setInspecting(true);
     setErrorMsg("");
     try {
       const activeAgentId = hostDevicesData?.agent_id || enrolledAgents[0]?.agent_id || undefined;
@@ -1065,6 +1087,7 @@ export default function MigrationOrchestratorWorkspace({
           };
       const res = await apiFetch("/api/v1/migration/use-case-2/inspect", {
         method: "POST",
+        timeoutMs: 60000,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           image_path: isLive ? "live_system" : imagePath.trim(),
@@ -1109,7 +1132,7 @@ export default function MigrationOrchestratorWorkspace({
     } catch (err) {
       setErrorMsg(err.message);
     } finally {
-      setLoading(false);
+      setInspecting(false);
     }
   };
 
@@ -1407,10 +1430,10 @@ export default function MigrationOrchestratorWorkspace({
             <button
               type="button"
               className="cm-btn secondary"
-              onClick={() => fetchJobs()}
-              disabled={loading}
+              onClick={() => fetchJobs(null, true)}
+              disabled={loading || inspecting || refreshingJobs}
             >
-              Actualizar
+              {refreshingJobs ? "Actualizando..." : "Actualizar"}
             </button>
             <button
               type="button"
@@ -2453,9 +2476,11 @@ export default function MigrationOrchestratorWorkspace({
                 type="button"
                 className="cm-btn"
                 onClick={handleInspectUseCase1}
-                disabled={loading}
+                disabled={loading || inspecting}
               >
-                Paso Previo: Inspeccionar Evidencias y Dependencias de la App
+                {inspecting
+                  ? "Inspeccionando aplicación..."
+                  : "Paso Previo: Inspeccionar Evidencias y Dependencias de la App"}
               </button>
             )}
 
@@ -2466,10 +2491,15 @@ export default function MigrationOrchestratorWorkspace({
                 onClick={handleInspectUseCase2}
                 disabled={
                   loading ||
+                  inspecting ||
                   (uc2SourceMode === "live_capture" && !(agentTokenData?.token || enrolledAgents.length > 0))
                 }
               >
-                {uc2SourceMode === "live_capture"
+                {inspecting
+                  ? uc2SourceMode === "live_capture"
+                    ? "Capturando SO y evaluando..."
+                    : "Verificando cabecera binaria..."
+                  : uc2SourceMode === "live_capture"
                   ? "Paso 3A: Capturar SO del Agente Remoto y Evaluar Viabilidad AWS"
                   : "Paso Previo: Verificar Cabecera Binaria y SHA-256 (`qemu-img`)"}
               </button>
@@ -2481,6 +2511,7 @@ export default function MigrationOrchestratorWorkspace({
               onClick={handleCreateMigration}
               disabled={
                 loading ||
+                inspecting ||
                 (newUseCase === "vm_image" &&
                   uc2SourceMode === "live_capture" &&
                   !(agentTokenData?.token || enrolledAgents.length > 0))

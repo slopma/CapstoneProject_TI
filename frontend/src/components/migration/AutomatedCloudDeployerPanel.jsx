@@ -96,10 +96,18 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
   const [probingLiveOs, setProbingLiveOs] = useState(false);
   const [instanceHealth, setInstanceHealth] = useState(null);
   const [probingHealth, setProbingHealth] = useState(false);
+  const [refreshingStatus, setRefreshingStatus] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [clearingLogs, setClearingLogs] = useState(false);
 
   const logContainerRef = useRef(null);
   const prevRunningRef = useRef(false);
   const autoSwitchedUc2IpRef = useRef(null);
+  const pollFailuresRef = useRef(0);
+  const onDeploymentCompletedRef = useRef(onDeploymentCompleted);
+  useEffect(() => {
+    onDeploymentCompletedRef.current = onDeploymentCompleted;
+  }, [onDeploymentCompleted]);
 
   // Build credentials dictionary if using form mode
   const getActiveCredentials = useCallback(() => {
@@ -119,29 +127,58 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
   }, [authMode, awsAccessKeyId, awsSecretAccessKey, awsRegion, awsSessionToken]);
 
   // Fetch current Terraform status, logs, and tfstate resources from backend
-  const fetchTerraformStatus = useCallback(async () => {
+  const fetchTerraformStatus = useCallback(async (isManual = false) => {
     if (!migrationId) return;
+    if (isManual) setRefreshingStatus(true);
     try {
-      const res = await apiFetch(`/api/v1/migration/jobs/${migrationId}/terraform/status`);
-      if (!res.ok) return;
+      const res = await apiFetch(`/api/v1/migration/jobs/${migrationId}/terraform/status`, {
+        timeoutMs: 15000,
+      });
+      if (!res.ok) {
+        pollFailuresRef.current += 1;
+        const errBody = await res.json().catch(() => ({}));
+        const errText = errBody.detail || `Error HTTP ${res.status} consultando estado de Terraform.`;
+        if (isManual || res.status === 404 || pollFailuresRef.current >= 3) {
+          prevRunningRef.current = false;
+          setTfStatus((prev) => ({
+            ...prev,
+            is_running: false,
+            status: prev.status === "RUNNING" ? "FAILED" : prev.status,
+            error: errText,
+          }));
+        }
+        return;
+      }
+      pollFailuresRef.current = 0;
       const data = await res.json();
       setTfStatus(data);
 
       // Detect transition from running -> finished
       if (prevRunningRef.current && !data.is_running) {
-        if (data.status === "SUCCESS" && typeof onDeploymentCompleted === "function") {
+        if (data.status === "SUCCESS" && typeof onDeploymentCompletedRef.current === "function") {
           try {
-            onDeploymentCompleted(data);
+            onDeploymentCompletedRef.current(data);
           } catch (cbErr) {
             console.warn("onDeploymentCompleted callback warning:", cbErr);
           }
         }
       }
       prevRunningRef.current = Boolean(data.is_running);
-    } catch {
-      // Ignore transient network errors while polling
+    } catch (err) {
+      pollFailuresRef.current += 1;
+      if (isManual || pollFailuresRef.current >= 3) {
+        prevRunningRef.current = false;
+        setTfStatus((prev) => ({
+          ...prev,
+          is_running: false,
+          status: prev.status === "RUNNING" ? "FAILED" : prev.status,
+          error: err.message || "El backend no respondió al consultar el estado de Terraform.",
+        }));
+      }
+    } finally {
+      if (isManual) setRefreshingStatus(false);
     }
-  }, [migrationId, onDeploymentCompleted]);
+  }, [migrationId]);
 
   // Initial fetch when job changes
   useEffect(() => {
@@ -183,14 +220,23 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
       if (creds) saveSessionCredentials(creds);
       const res = await apiFetch("/api/v1/migration/credentials/verify-cloud", {
         method: "POST",
+        timeoutMs: 25000,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           provider: job?.target_provider || "aws",
           credentials: creds,
         }),
       });
-      const data = await res.json();
-      setCallerIdentity(data);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setCallerIdentity({
+          valid: false,
+          provider: job?.target_provider || "aws",
+          error: data.error || data.detail || `Error HTTP ${res.status} verificando credenciales STS.`,
+        });
+      } else {
+        setCallerIdentity(data);
+      }
     } catch (err) {
       setCallerIdentity({
         valid: false,
@@ -230,6 +276,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
     try {
       const res = await apiFetch(`/api/v1/migration/jobs/${migrationId}/terraform/command`, {
         method: "POST",
+        timeoutMs: 30000,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action,
@@ -237,7 +284,21 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
           async_exec: true,
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const errDetail = data.error || data.detail || `Error HTTP ${res.status} ejecutando 'terraform ${action}'.`;
+        prevRunningRef.current = false;
+        setTfStatus((prev) => ({
+          ...prev,
+          is_running: false,
+          active_command: null,
+          status: "FAILED",
+          error: errDetail,
+          logs: [...(prev.logs || []), `[ERROR HTTP ${res.status}] ${errDetail}`],
+        }));
+        return;
+      }
+      pollFailuresRef.current = 0;
       setTfStatus(data);
       prevRunningRef.current = Boolean(data.is_running);
     } catch (err) {
@@ -245,6 +306,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
       setTfStatus((prev) => ({
         ...prev,
         is_running: false,
+        active_command: null,
         status: "FAILED",
         error: `Error al invocar comando Terraform: ${err.message}`,
         logs: [...(prev.logs || []), `[ERROR DE COMUNICACIÓN] ${err.message}`],
@@ -254,30 +316,45 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
 
   // Cancel active Terraform command immediately
   const handleCancelExecution = async () => {
-    if (!migrationId) return;
+    if (!migrationId || cancelling) return;
+    setCancelling(true);
     try {
       const res = await apiFetch(`/api/v1/migration/jobs/${migrationId}/terraform/cancel`, {
         method: "POST",
+        timeoutMs: 15000,
       });
       if (res.ok) {
         const data = await res.json();
         setTfStatus(data);
         prevRunningRef.current = false;
+      } else {
+        const errBody = await res.json().catch(() => ({}));
+        setTfStatus((prev) => ({
+          ...prev,
+          is_running: false,
+          error: errBody.detail || `Error HTTP ${res.status} al cancelar Terraform.`,
+        }));
       }
     } catch (err) {
       setTfStatus((prev) => ({
         ...prev,
+        is_running: false,
+        error: err.message,
         logs: [...(prev.logs || []), `[ERROR AL CANCELAR] ${err.message}`],
       }));
+    } finally {
+      setCancelling(false);
     }
   };
 
   // Clear persisted and in-memory Terraform logs
   const handleClearLogs = async () => {
-    if (!migrationId) return;
+    if (!migrationId || clearingLogs) return;
+    setClearingLogs(true);
     try {
       const res = await apiFetch(`/api/v1/migration/jobs/${migrationId}/terraform/logs`, {
         method: "DELETE",
+        timeoutMs: 15000,
       });
       if (res.ok) {
         const data = await res.json();
@@ -285,6 +362,8 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
       }
     } catch {
       setTfStatus((prev) => ({ ...prev, logs: [] }));
+    } finally {
+      setClearingLogs(false);
     }
   };
 
@@ -860,17 +939,17 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
             type="button"
             className="cm-btn"
             onClick={handleCancelExecution}
-            disabled={!isRunning && !tfStatus.is_locked}
+            disabled={cancelling || (!isRunning && !tfStatus.is_locked)}
             style={{
               backgroundColor: isRunning ? "#dc2626" : "#f1f5f9",
               color: isRunning ? "#ffffff" : "#475569",
               border: isRunning ? "1px solid #b91c1c" : "1px solid #cbd5e1",
               fontWeight: 700,
-              cursor: isRunning || tfStatus.is_locked ? "pointer" : "not-allowed",
+              cursor: !cancelling && (isRunning || tfStatus.is_locked) ? "pointer" : "not-allowed",
             }}
             title="Envía SIGTERM/SIGKILL al proceso Terraform en curso y libera bloqueos de estado"
           >
-            Cancelar Ejecución Activa
+            {cancelling ? "Cancelando..." : "Cancelar Ejecución Activa"}
           </button>
 
           <button
@@ -990,10 +1069,11 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
             <button
               type="button"
               className="cm-btn sm secondary"
-              onClick={fetchTerraformStatus}
+              onClick={() => fetchTerraformStatus(true)}
+              disabled={refreshingStatus}
               title="Recarga el estado actual de terraform.tfstate y los logs desde el servidor"
             >
-              ↻ Actualizar Vista
+              {refreshingStatus ? "⟳ Actualizando..." : "↻ Actualizar Vista"}
             </button>
             <button
               type="button"
@@ -1007,7 +1087,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
           </div>
         </div>
 
-        {tfStatus.status === "FAILED" && (tfStatus.error_diagnosis || tfStatus.error) && (
+        {(tfStatus.error_diagnosis || tfStatus.error) && (
           <div
             style={{
               marginTop: 12,
@@ -1732,7 +1812,7 @@ curl -Iv http://${publicIp || "<IP_PUBLICA_EC2>"}:${liveBePort}${liveHealthPath}
             <button
               type="button"
               onClick={handleClearLogs}
-              disabled={isRunning || logsList.length === 0}
+              disabled={clearingLogs || isRunning || logsList.length === 0}
               style={{
                 backgroundColor: "#334155",
                 color: "#fca5a5",
@@ -1743,7 +1823,7 @@ curl -Iv http://${publicIp || "<IP_PUBLICA_EC2>"}:${liveBePort}${liveHealthPath}
                 cursor: "pointer",
               }}
             >
-              Limpiar
+              {clearingLogs ? "Limpiando..." : "Limpiar"}
             </button>
           </div>
         </div>

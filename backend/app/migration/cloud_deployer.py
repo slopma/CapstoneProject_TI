@@ -10,11 +10,13 @@ Supports both AWS and GCP targets.
 import json
 import os
 import re
+import selectors
 import shutil
 import signal
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -139,7 +141,7 @@ class CloudDeploymentRunner:
         if not (default_root / "backend").exists() and Path("/app/generated").exists():
             default_root = Path("/app")
         self.workspace_root = workspace_root or default_root
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._active_processes: Dict[str, subprocess.Popen] = {}
         self._active_commands: Dict[str, str] = {}
         self._cancelled_flags: Dict[str, bool] = {}
@@ -172,7 +174,7 @@ class CloudDeploymentRunner:
     def resolve_job_dir(self, migration_id: str, job: Optional[Dict[str, Any]] = None) -> Path:
         """
         Locate or create the persistent Terraform working directory for a migration job.
-        Prioritizes existing directories with a `terraform.tfstate` file.
+        Prioritizes existing directories with a `terraform.tfstate` file under mounted storage.
         """
         candidates = [
             Path("generated/deployments") / migration_id,
@@ -193,7 +195,10 @@ class CloudDeploymentRunner:
             if cand.exists() and (cand / "main.tf").exists():
                 return cand
 
-        default_dir = self.workspace_root / "generated" / "deployments" / migration_id
+        if Path("/app/generated").is_dir():
+            default_dir = Path("/app/generated/deployments") / migration_id
+        else:
+            default_dir = self.workspace_root / "generated" / "deployments" / migration_id
         default_dir.mkdir(parents=True, exist_ok=True)
         return default_dir
 
@@ -478,35 +483,111 @@ class CloudDeploymentRunner:
 
         try:
             assert proc.stdout is not None
-            for raw_line in iter(proc.stdout.readline, ""):
-                if not raw_line:
-                    break
-                self._append_log(migration_id, job_dir, raw_line)
-                collected_lines.append(raw_line.rstrip("\r\n"))
+            try:
+                fd = proc.stdout.fileno()
+                os.set_blocking(fd, False)
+            except Exception:
+                fd = None
 
-                with self._lock:
-                    if self._cancelled_flags.get(migration_id):
-                        cancelled = True
+            if fd is None:
+                for raw_line in iter(proc.stdout.readline, ""):
+                    if not raw_line:
                         break
+                    self._append_log(migration_id, job_dir, raw_line)
+                    collected_lines.append(raw_line.rstrip("\r\n"))
+                    with self._lock:
+                        if self._cancelled_flags.get(migration_id):
+                            cancelled = True
+                            break
+                    if time.time() - start_ts > timeout_sec:
+                        self._append_log(
+                            migration_id,
+                            job_dir,
+                            f"[TIMEOUT] El comando superó el tiempo límite ({timeout_sec}s). Abortando proceso...",
+                        )
+                        self._terminate_process(proc)
+                        return {
+                            "returncode": 124,
+                            "cancelled": False,
+                            "error": f"Tiempo de espera agotado ({timeout_sec}s)",
+                            "output": "\n".join(collected_lines[-200:]),
+                        }
+            else:
+                selector = selectors.DefaultSelector()
+                selector.register(proc.stdout, selectors.EVENT_READ)
+                buf = ""
+                try:
+                    eof = False
+                    while not eof:
+                        with self._lock:
+                            if self._cancelled_flags.get(migration_id):
+                                cancelled = True
+                                break
 
-                if time.time() - start_ts > timeout_sec:
-                    self._append_log(
-                        migration_id,
-                        job_dir,
-                        f"[TIMEOUT] El comando superó el tiempo límite ({timeout_sec}s). Abortando proceso...",
-                    )
-                    self._terminate_process(proc)
-                    return {
-                        "returncode": 124,
-                        "cancelled": False,
-                        "error": f"Tiempo de espera agotado ({timeout_sec}s)",
-                        "output": "\n".join(collected_lines[-200:]),
-                    }
+                        if time.time() - start_ts > timeout_sec:
+                            self._append_log(
+                                migration_id,
+                                job_dir,
+                                f"[TIMEOUT] El comando superó el tiempo límite ({timeout_sec}s). Abortando proceso...",
+                            )
+                            self._terminate_process(proc)
+                            return {
+                                "returncode": 124,
+                                "cancelled": False,
+                                "error": f"Tiempo de espera agotado ({timeout_sec}s)",
+                                "output": "\n".join(collected_lines[-200:]),
+                            }
 
-            proc.wait(timeout=10)
+                        events = selector.select(timeout=0.25)
+                        if not events:
+                            if proc.poll() is not None:
+                                try:
+                                    chunk = os.read(fd, 65536).decode("utf-8", errors="replace")
+                                except BlockingIOError:
+                                    chunk = ""
+                                if chunk:
+                                    buf += chunk
+                                eof = True
+                            continue
+
+                        for key, _ in events:
+                            try:
+                                raw_bytes = os.read(key.fileobj.fileno(), 65536)
+                            except BlockingIOError:
+                                continue
+                            if not raw_bytes:
+                                eof = True
+                                break
+                            buf += raw_bytes.decode("utf-8", errors="replace")
+                            while "\n" in buf:
+                                line_part, buf = buf.split("\n", 1)
+                                self._append_log(migration_id, job_dir, line_part)
+                                collected_lines.append(line_part.rstrip("\r"))
+
+                    if buf.strip():
+                        for tail_line in buf.splitlines():
+                            self._append_log(migration_id, job_dir, tail_line)
+                            collected_lines.append(tail_line.rstrip("\r"))
+                finally:
+                    selector.close()
+
+            if not cancelled and proc.poll() is None:
+                proc.wait(timeout=10)
         except Exception as exc:
             self._append_log(migration_id, job_dir, f"[WARN] Interrupción leyendo stream del proceso: {exc}")
         finally:
+            if proc.poll() is None:
+                self._terminate_process(proc)
+            else:
+                try:
+                    proc.wait(timeout=2)
+                except Exception:
+                    pass
+            try:
+                if proc.stdout:
+                    proc.stdout.close()
+            except Exception:
+                pass
             with self._lock:
                 self._active_processes.pop(migration_id, None)
                 if self._cancelled_flags.get(migration_id):
@@ -725,18 +806,22 @@ class CloudDeploymentRunner:
         asynchronously (streaming logs in background thread) or synchronously.
         """
         clean_action = action.lower().strip()
+        already_active_cmd: Optional[str] = None
         with self._lock:
             proc = self._active_processes.get(migration_id)
             if proc and proc.poll() is None:
-                active_cmd = self._active_commands.get(migration_id)
-                return {
-                    "success": False,
-                    "already_running": True,
-                    "error": f"Ya hay un comando Terraform en ejecución ('{active_cmd}'). Cancélalo o espera a que finalice.",
-                    **self.get_terraform_status(migration_id, job_dir),
-                }
-            self._cancelled_flags[migration_id] = False
-            self._active_commands[migration_id] = clean_action
+                already_active_cmd = self._active_commands.get(migration_id)
+            else:
+                self._cancelled_flags[migration_id] = False
+                self._active_commands[migration_id] = clean_action
+
+        if already_active_cmd is not None:
+            return {
+                "success": False,
+                "already_running": True,
+                "error": f"Ya hay un comando Terraform en ejecución ('{already_active_cmd}'). Cancélalo o espera a que finalice.",
+                **self.get_terraform_status(migration_id, job_dir),
+            }
 
         self.materialize_job_files(job_dir, artifacts_files=artifacts_files, secrets=secrets)
 
@@ -1213,6 +1298,15 @@ class CloudDeploymentRunner:
             })
         return workspaces
 
+    @staticmethod
+    def _boto_config(read_timeout: int = 10):
+        from botocore.config import Config as BotocoreConfig
+        return BotocoreConfig(
+            connect_timeout=5,
+            read_timeout=read_timeout,
+            retries={"max_attempts": 2},
+        )
+
     def _get_boto3_session(self, credentials: Optional[Dict[str, str]] = None):
         import boto3
         env = self._build_env(credentials)
@@ -1251,7 +1345,8 @@ class CloudDeploymentRunner:
         workspaces = self.list_all_workspaces()
         try:
             session, region = self._get_boto3_session(credentials)
-            sts = session.client("sts")
+            cfg = self._boto_config(read_timeout=10)
+            sts = session.client("sts", config=cfg)
             caller = sts.get_caller_identity()
             account_id = caller.get("Account", "")
             caller_arn = caller.get("Arn", "")
@@ -1268,7 +1363,7 @@ class CloudDeploymentRunner:
             }
 
         try:
-            ec2 = session.client("ec2", region_name=region)
+            ec2 = session.client("ec2", region_name=region, config=cfg)
 
             # 1. EC2 Instances
             inst_resp = ec2.describe_instances()
@@ -1277,6 +1372,7 @@ class CloudDeploymentRunner:
             instance_name_by_id: Dict[str, str] = {}
             control_plane_instance_ids = set()
             control_plane_vpc_ids = set()
+            probe_targets: List[tuple[int, str]] = []
 
             for resv in inst_resp.get("Reservations", []):
                 for inst in resv.get("Instances", []):
@@ -1302,14 +1398,12 @@ class CloudDeploymentRunner:
                     if pub_ip and state_name == "running":
                         live_ip_by_instance_id[iid] = pub_ip
 
-                    fe_online = False
-                    be_online = False
-                    if state_name == "running" and pub_ip and not is_cp:
-                        fe_online = _quick_tcp(pub_ip, 3000, 1.0)
-                        be_online = _quick_tcp(pub_ip, 8000, 1.0)
-
                     launch_time = inst.get("LaunchTime")
                     launch_iso = launch_time.isoformat() if hasattr(launch_time, "isoformat") else str(launch_time or "")
+
+                    idx = len(instances)
+                    if state_name == "running" and pub_ip and not is_cp:
+                        probe_targets.append((idx, pub_ip))
 
                     instances.append({
                         "instance_id": iid,
@@ -1327,12 +1421,25 @@ class CloudDeploymentRunner:
                         "cmir_id": tags_dict.get("CMIR_ID", ""),
                         "cmir_type": tags_dict.get("CMIR_Type", ""),
                         "is_control_plane": is_cp,
-                        "frontend_online": fe_online,
-                        "backend_online": be_online,
+                        "frontend_online": False,
+                        "backend_online": False,
                         "frontend_url": f"http://{pub_ip}:3000" if pub_ip and not is_cp else ("https://digitalcafeluna.store" if is_cp else None),
                         "backend_url": f"http://{pub_ip}:8000/health" if pub_ip and not is_cp else ("https://digitalcafeluna.store/api/v1/health" if is_cp else None),
                         "docs_url": f"http://{pub_ip}:8000/docs" if pub_ip and not is_cp else None,
                     })
+
+            if probe_targets:
+                with ThreadPoolExecutor(max_workers=min(6, len(probe_targets) * 2)) as pool:
+                    fut_map = {
+                        idx: (
+                            pool.submit(_quick_tcp, pub_ip, 3000, 1.0),
+                            pool.submit(_quick_tcp, pub_ip, 8000, 1.0),
+                        )
+                        for idx, pub_ip in probe_targets
+                    }
+                    for idx, (fe_f, be_f) in fut_map.items():
+                        instances[idx]["frontend_online"] = fe_f.result()
+                        instances[idx]["backend_online"] = be_f.result()
 
             # Sort instances: running first, then control plane / CloudMove managed
             instances.sort(key=lambda x: (x["state"] != "running", x["is_control_plane"], x["name"]))
@@ -1777,6 +1884,9 @@ class CloudDeploymentRunner:
             "i-08505f55cdbb4cfb5",
             "i-03b7025356f0c982c",
             "vol-0a1466af76ba0d220",
+            "vol-031fa80d944fcf9c0",
+            "vpc-0fa2bb3d7c63f4949",
+            "sg-049bddb21452324da",
             "44.216.47.253",
             "100.50.88.231",
             "deploy/aws",
@@ -1789,7 +1899,7 @@ class CloudDeploymentRunner:
 
         try:
             session, region = self._get_boto3_session(credentials)
-            ec2 = session.client("ec2", region_name=region)
+            ec2 = session.client("ec2", region_name=region, config=self._boto_config(read_timeout=15))
         except Exception as exc:
             return {"success": False, "error": f"Error de autenticación AWS: {str(exc)}"}
 
@@ -1870,9 +1980,21 @@ class CloudDeploymentRunner:
             except Exception as e:
                 actions_log.append(f"Aviso Route Tables: {str(e)}")
 
-            # 5. Delete custom Security Groups
+            # 5. Delete custom Security Groups (revoke cross-SG rules first to prevent DependencyViolation)
             try:
                 sgs = ec2.describe_security_groups(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]).get("SecurityGroups", [])
+                for sg in sgs:
+                    sg_id = sg["GroupId"]
+                    try:
+                        if sg.get("IpPermissions"):
+                            ec2.revoke_security_group_ingress(GroupId=sg_id, IpPermissions=sg["IpPermissions"])
+                    except Exception:
+                        pass
+                    try:
+                        if sg.get("IpPermissionsEgress"):
+                            ec2.revoke_security_group_egress(GroupId=sg_id, IpPermissions=sg["IpPermissionsEgress"])
+                    except Exception:
+                        pass
                 for sg in sgs:
                     if sg.get("GroupName") == "default":
                         continue
@@ -1881,6 +2003,16 @@ class CloudDeploymentRunner:
                     actions_log.append(f"Security Group eliminado: {sg_id}")
             except Exception as e:
                 actions_log.append(f"Aviso Security Groups: {str(e)}")
+
+            # 5b. Delete non-default Network ACLs
+            try:
+                nacls = ec2.describe_network_acls(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}]).get("NetworkAcls", [])
+                for nacl in nacls:
+                    if not nacl.get("IsDefault") and nacl.get("NetworkAclId"):
+                        ec2.delete_network_acl(NetworkAclId=nacl["NetworkAclId"])
+                        actions_log.append(f"Network ACL eliminada: {nacl['NetworkAclId']}")
+            except Exception as e:
+                actions_log.append(f"Aviso Network ACLs: {str(e)}")
 
             # 6. Delete VPC
             try:

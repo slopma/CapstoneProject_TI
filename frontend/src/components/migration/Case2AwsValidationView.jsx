@@ -104,6 +104,7 @@ export default function Case2AwsValidationView({
   const [activeTab, setActiveTab] = useState("summary");
   const [validation, setValidation] = useState(null);
   const [validating, setValidating] = useState(false);
+  const [validationError, setValidationError] = useState("");
   const [lastCheckedAt, setLastCheckedAt] = useState(null);
   const [showPathHelp, setShowPathHelp] = useState(false);
 
@@ -126,15 +127,21 @@ export default function Case2AwsValidationView({
   const runLiveValidation = useCallback(async () => {
     if (!publicIp) return;
     setValidating(true);
+    setValidationError("");
     try {
-      const res = await apiFetch(`/api/v1/migration/probe-uc2-validation?ip=${encodeURIComponent(publicIp)}`);
+      const res = await apiFetch(`/api/v1/migration/probe-uc2-validation?ip=${encodeURIComponent(publicIp)}`, {
+        timeoutMs: 20000,
+      });
       if (res.ok) {
         const data = await res.json();
         setValidation(data);
         setLastCheckedAt(new Date().toLocaleTimeString());
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setValidationError(err.detail || `Error HTTP ${res.status} validando endpoints de EC2.`);
       }
-    } catch {
-      // Keep previous validation state if transient timeout occurs
+    } catch (err) {
+      setValidationError(err.message || "No se pudo consultar la instancia EC2 en AWS.");
     } finally {
       setValidating(false);
     }
@@ -1189,6 +1196,12 @@ export default function Case2AwsValidationView({
             </button>
           </div>
         </div>
+
+        {validationError && (
+          <AwsAlert type="warning" title="Estado de conectividad con EC2" onDismiss={() => setValidationError("")}>
+            {validationError}
+          </AwsAlert>
+        )}
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 8 }}>
           {diagnosticItems.map((item) => (

@@ -55,26 +55,79 @@ export async function resolveHealthyApiBase() {
 }
 
 export async function apiFetch(path, options = {}) {
+  const { timeoutMs = 45000, signal: externalSignal, ...fetchOptions } = options || {};
   const basesToTry = [
     cachedApiBase,
     ...CANDIDATE_API_BASES.filter((b) => b !== cachedApiBase),
   ];
 
-  let lastError = null;
+  // Deduplicate candidate URLs that resolve to the exact same endpoint in the browser
+  const attemptedTargets = [];
+  const seenResolvedUrls = new Set();
   for (const base of basesToTry) {
+    const targetUrl = buildUrl(base, path);
+    let resolvedHref = targetUrl;
+    if (typeof window !== "undefined" && window.location?.origin) {
+      try {
+        resolvedHref = new URL(targetUrl, window.location.origin).href;
+      } catch {
+        resolvedHref = targetUrl;
+      }
+    }
+    if (seenResolvedUrls.has(resolvedHref)) continue;
+    seenResolvedUrls.add(resolvedHref);
+    attemptedTargets.push({ base, targetUrl });
+  }
+
+  let lastError = null;
+  let lastBadGatewayRes = null;
+  for (const { base, targetUrl } of attemptedTargets) {
+    const controller = new AbortController();
+    let timedOut = false;
+    const onExternalAbort = () => controller.abort();
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        controller.abort();
+      } else {
+        externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+      }
+    }
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+          }, timeoutMs)
+        : null;
+
     try {
-      const targetUrl = buildUrl(base, path);
-      const res = await fetch(targetUrl, options);
+      const res = await fetch(targetUrl, {
+        ...fetchOptions,
+        signal: controller.signal,
+      });
       if (res.status === 502 || res.status === 504) {
+        lastBadGatewayRes = res;
         continue;
       }
       cachedApiBase = base;
       return res;
     } catch (err) {
-      lastError = err;
+      if (timedOut) {
+        lastError = new Error(
+          `Tiempo de espera agotado (${Math.round(timeoutMs / 1000)}s) esperando respuesta del servidor.`
+        );
+      } else {
+        lastError = err;
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+      if (externalSignal) {
+        externalSignal.removeEventListener("abort", onExternalAbort);
+      }
     }
   }
+  if (lastBadGatewayRes) return lastBadGatewayRes;
   if (lastError) throw lastError;
-  return fetch(buildUrl(cachedApiBase, path), options);
+  throw new Error("No fue posible conectar con el backend de CloudMove.");
 }
 

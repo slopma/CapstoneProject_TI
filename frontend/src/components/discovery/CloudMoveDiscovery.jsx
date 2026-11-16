@@ -1,7 +1,17 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { getApiBase, buildUrl } from "../../utils/apiClient";
+import { getApiBase, buildUrl, apiFetch } from "../../utils/apiClient";
 
 const AGENT_URL = "http://127.0.0.1:8765";
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 4000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export default function CloudMoveDiscovery({
   apiBaseUrl = "",
@@ -20,7 +30,7 @@ export default function CloudMoveDiscovery({
   const loadCatalog = useCallback(async () => {
     // 1. Intentar primero con el agente local desacoplado en 127.0.0.1:8765
     try {
-      const res = await fetch(`${AGENT_URL}/catalog`);
+      const res = await fetchWithTimeout(`${AGENT_URL}/catalog`, {}, 2500);
       if (res.ok) {
         const data = await res.json();
         setCatalogData(data);
@@ -32,21 +42,16 @@ export default function CloudMoveDiscovery({
     }
 
     // 2. Fallback al endpoint de catálogo del backend principal
-    const candidates = Array.from(new Set([apiBaseUrl, getApiBase(), ""].filter((c) => c !== undefined && c !== null)));
-    for (const candidate of candidates) {
-      try {
-        const url = buildUrl(candidate, "/api/v1/discovery/osquery-catalog");
-        const res = await fetch(url);
-        if (res.ok) {
-          const data = await res.json();
-          setCatalogData(data);
-          return;
-        }
-      } catch {
-        // continuar con siguiente candidato
+    try {
+      const res = await apiFetch("/api/v1/discovery/osquery-catalog", { timeoutMs: 12000 });
+      if (res.ok) {
+        const data = await res.json();
+        setCatalogData(data);
       }
+    } catch {
+      // ignore offline
     }
-  }, [apiBaseUrl]);
+  }, []);
 
   useEffect(() => {
     loadCatalog();
@@ -61,7 +66,7 @@ export default function CloudMoveDiscovery({
 
       // Intentar flujo a través del agente local desacoplado (http://127.0.0.1:8765)
       try {
-        const healthResponse = await fetch(`${AGENT_URL}/health`);
+        const healthResponse = await fetchWithTimeout(`${AGENT_URL}/health`, {}, 2500);
         if (healthResponse.ok) {
           usedStandaloneAgent = true;
           setAgentOnline(true);
@@ -81,9 +86,9 @@ export default function CloudMoveDiscovery({
               : `Descargando e instalando paquete oficial '${assetName}' para tu PC y ejecutando escaneo...`
           );
 
-          const response = await fetch(`${AGENT_URL}/discover`, {
+          const response = await fetchWithTimeout(`${AGENT_URL}/discover`, {
             method: "POST",
-          });
+          }, 30000);
           const result = await response.json();
 
           if (!response.ok) {
@@ -93,31 +98,27 @@ export default function CloudMoveDiscovery({
           setLastResult(result);
 
           // Obtener el JSON del agente (/inventory) y enviarlo al parser de CloudMove para actualizar todas las vistas
-          const invResponse = await fetch(`${AGENT_URL}/inventory`);
+          const invResponse = await fetchWithTimeout(`${AGENT_URL}/inventory`, {}, 10000);
           if (invResponse.ok) {
             const rawJsonText = await invResponse.text();
-            const candidates = Array.from(new Set([apiBaseUrl, getApiBase(), ""].filter((c) => c !== undefined && c !== null)));
-            for (const base of candidates) {
-              try {
-                const url = buildUrl(base, "/api/v1/discovery/import");
-                const importRes = await fetch(url, {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "X-Filename": `agent-osquery-${result.hostname || "pc"}.json`,
-                  },
-                  body: rawJsonText,
-                });
-                if (importRes.ok) {
-                  const sessionPayload = await importRes.json();
-                  if (onInventoryDiscovered) {
-                    onInventoryDiscovered(sessionPayload);
-                  }
-                  break;
+            try {
+              const importRes = await apiFetch("/api/v1/discovery/import", {
+                method: "POST",
+                timeoutMs: 30000,
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-Filename": `agent-osquery-${result.hostname || "pc"}.json`,
+                },
+                body: rawJsonText,
+              });
+              if (importRes.ok) {
+                const sessionPayload = await importRes.json();
+                if (onInventoryDiscovered) {
+                  onInventoryDiscovered(sessionPayload);
                 }
-              } catch {
-                // ignore
               }
+            } catch {
+              // ignore backend sync transient error
             }
           }
 
@@ -144,31 +145,10 @@ export default function CloudMoveDiscovery({
           : `Preparando e instalando '${assetName}' para este PC, ejecutando prueba funcional y generando inventario JSON...`
       );
 
-      let bridgeRes = null;
-      let lastBridgeErr = null;
-      const candidates = Array.from(new Set([apiBaseUrl, getApiBase(), ""].filter((c) => c !== undefined && c !== null)));
-      for (const base of candidates) {
-        try {
-          const url = buildUrl(base, "/api/v1/discovery/collect-device");
-          const r = await fetch(url, {
-            method: "POST",
-          });
-          if (r.status === 502 || r.status === 504) {
-            bridgeRes = r;
-            continue;
-          }
-          bridgeRes = r;
-          if (r.ok) {
-            break;
-          }
-        } catch (err) {
-          lastBridgeErr = err;
-        }
-      }
-
-      if (!bridgeRes) {
-        throw lastBridgeErr || new TypeError("Failed to fetch");
-      }
+      const bridgeRes = await apiFetch("/api/v1/discovery/collect-device", {
+        method: "POST",
+        timeoutMs: 45000,
+      });
 
       const sessionJson = await bridgeRes.json().catch(() => ({}));
       if (!bridgeRes.ok) {

@@ -612,7 +612,8 @@ class MigrationOrchestrator:
 
         # If a deployment workspace directory already exists for this job, keep its files in sync
         try:
-            deploy_dir = Path("generated/deployments") / migration_id
+            from app.migration.cloud_deployer import cloud_deployer
+            deploy_dir = cloud_deployer.resolve_job_dir(migration_id, job)
             if deploy_dir.is_dir():
                 for fname, fcontent in (artifacts.get("files") or {}).items():
                     if fname in ("terraform.tfstate", "terraform.tfstate.backup", "terraform_execution.log", "terraform_status.json"):
@@ -1173,7 +1174,8 @@ class MigrationOrchestrator:
 
         # If a deployment workspace directory already exists for this job, keep its files in sync
         try:
-            deploy_dir = Path("generated/deployments") / migration_id
+            from app.migration.cloud_deployer import cloud_deployer
+            deploy_dir = cloud_deployer.resolve_job_dir(migration_id, job)
             if deploy_dir.is_dir():
                 for fname, fcontent in (artifacts.get("files") or {}).items():
                     if fname in ("terraform.tfstate", "terraform.tfstate.backup", "terraform_execution.log", "terraform_status.json"):

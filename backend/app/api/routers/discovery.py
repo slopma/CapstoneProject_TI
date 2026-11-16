@@ -6,6 +6,7 @@ import json
 import sys
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import PlainTextResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -165,10 +166,10 @@ def get_discovery_collectors():
 
 
 @router.get("/agent-live")
-def get_discovery_agent_live(agent_id: Optional[str] = Query(None)):
+def get_discovery_agent_live(request: Request, agent_id: Optional[str] = Query(None)):
     """Return the automatic live discovery inventory from the enrolled CloudMove agent."""
     from app.api.routers.agents import get_live_agent_discovery
-    return get_live_agent_discovery(agent_id=agent_id)
+    return get_live_agent_discovery(request=request, agent_id=agent_id)
 
 
 @router.get("/sessions")
@@ -298,7 +299,8 @@ async def import_discovery_inventory(request: Request, include_all_packages: boo
     digest = hashlib.sha256(json_bytes).hexdigest()
 
     try:
-        session = discovery_store.import_raw_inventory(
+        session = await run_in_threadpool(
+            discovery_store.import_raw_inventory,
             raw_data=parsed_payload,
             filename=filename,
             deduplicate_by_hash=False,
@@ -313,7 +315,7 @@ async def import_discovery_inventory(request: Request, include_all_packages: boo
             },
         ) from exc
 
-    return _build_session_response(session, include_all_packages=include_all_packages)
+    return await run_in_threadpool(_build_session_response, session, include_all_packages=include_all_packages)
 
 
 @router.get("/sessions/{session_id}")

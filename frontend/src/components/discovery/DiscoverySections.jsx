@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import ExplanationCard, { StateBadge } from "./ExplanationCard";
-import { buildUrl } from "../../utils/apiClient";
+import { apiFetch } from "../../utils/apiClient";
 
 function formatValOrMissing(val, suffix = "") {
   if (val === null || val === undefined || val === "") {
@@ -590,8 +590,7 @@ export function SoftwareSection({ software, sessionId, apiUrl }) {
         if (pkgSearch.trim()) params.set("q", pkgSearch.trim());
         if (pkgSection !== "all") params.set("section", pkgSection);
 
-        const targetUrl = buildUrl(apiUrl, `/api/v1/discovery/sessions/${sessionId}/packages?${params}`);
-        const res = await fetch(targetUrl);
+        const res = await apiFetch(`/api/v1/discovery/sessions/${sessionId}/packages?${params}`, { timeoutMs: 15000 });
         if (res.ok) {
           const data = await res.json();
           if (!cancelled) {
@@ -1521,12 +1520,10 @@ export function AwsSuggestedDiagramSection({ data, apiUrl }) {
     setPersisting(true);
     setPersistFeedback("");
     try {
-      const base = apiUrl || (typeof window !== "undefined" ? window.location.origin : "");
-      const targetUrl = buildUrl(
-        base,
-        `/api/v1/discovery/sessions/${data.session_id}/terraform?strategy=${tfStrategy}&write_files=true`
+      const res = await apiFetch(
+        `/api/v1/discovery/sessions/${data.session_id}/terraform?strategy=${tfStrategy}&write_files=true`,
+        { method: "POST", timeoutMs: 30000 }
       );
-      const res = await fetch(targetUrl, { method: "POST" });
       if (res.ok) {
         const json = await res.json();
         setPersistFeedback(

@@ -68,46 +68,31 @@ export default function DiscoveryWorkspace({
 
   const fetchWithFallback = useCallback(
     async (path, options = {}) => {
-      const candidates = Array.from(
-        new Set(
-          [apiUrl, resolvedApiBase, getApiBase(), ""].filter(
-            (c) => c !== undefined && c !== null
-          )
-        )
-      );
-      let lastError = null;
-      let lastResponse = null;
-      for (const base of candidates) {
-        try {
-          const targetUrl = buildUrl(base, path);
-          const res = await fetch(targetUrl, options);
-          if (res.status === 502 || res.status === 504) {
-            lastResponse = res;
-            continue;
-          }
-          setResolvedApiBase(base);
-          return res;
-        } catch (err) {
-          lastError = err;
-        }
-      }
-      if (lastResponse) return lastResponse;
-      throw lastError || new Error("Backend unreachable");
+      return apiFetch(path, { timeoutMs: 20000, ...options });
     },
-    [apiUrl, resolvedApiBase]
+    []
   );
 
   const loadLiveAgentDiscovery = useCallback(
     async (silent = false) => {
       if (!silent) setLoadingLiveAgent(true);
       try {
-        const res = await fetchWithFallback(`/api/v1/discovery/agent-live`);
+        const res = await fetchWithFallback(`/api/v1/discovery/agent-live`, {
+          timeoutMs: 15000,
+        });
         if (res.ok) {
           const data = await res.json();
           setLiveAgentData(data);
+        } else if (!silent) {
+          const err = await res.json().catch(() => ({}));
+          setErrorBanner(
+            err.detail || `Error HTTP ${res.status} consultando telemetría del agente en Discovery.`
+          );
         }
-      } catch {
-        // Ignore transient network errors
+      } catch (err) {
+        if (!silent) {
+          setErrorBanner(err.message || "No se pudo consultar la telemetría del agente.");
+        }
       } finally {
         if (!silent) setLoadingLiveAgent(false);
       }
