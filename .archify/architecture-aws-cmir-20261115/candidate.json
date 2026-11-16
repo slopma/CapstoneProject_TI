@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Topología CMIR v2.1 y Recursos Terraform AWS (us-east-1)",
+    "locale": "es",
+    "output": ".archify/architecture-aws-cmir-20261115/aws-cmir.html",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "users_https",
+      "type": "external",
+      "label": "Clientes y Operadores",
+      "sublabel": "HTTPS :443 / SSH :22",
+      "pos": [36, 210],
+      "size": [156, 62]
+    },
+    {
+      "id": "aws_igw",
+      "type": "cloud",
+      "label": "aws_internet_gateway",
+      "sublabel": "igw + public_rt 0.0.0.0/0",
+      "pos": [290, 70],
+      "size": [162, 62]
+    },
+    {
+      "id": "aws_sg",
+      "type": "security",
+      "label": "aws_security_group",
+      "sublabel": "app_sg (:22/:80/:443/:3000/:8000)",
+      "pos": [290, 210],
+      "size": [162, 62]
+    },
+    {
+      "id": "aws_secrets",
+      "type": "security",
+      "label": "aws_secretsmanager",
+      "sublabel": "IAM Role + KMS Secrets",
+      "pos": [290, 350],
+      "size": [162, 62]
+    },
+    {
+      "id": "aws_rds",
+      "type": "database",
+      "label": "aws_db_instance",
+      "sublabel": "PostgreSQL 15 Multi-AZ",
+      "pos": [565, 70],
+      "size": [172, 62]
+    },
+    {
+      "id": "aws_ec2",
+      "type": "backend",
+      "label": "aws_instance (EC2)",
+      "sublabel": "Ubuntu 22.04 LTS + Contenedores",
+      "pos": [565, 210],
+      "size": [172, 62]
+    },
+    {
+      "id": "aws_ebs",
+      "type": "database",
+      "label": "aws_ebs_volume (gp3)",
+      "sublabel": "Almacenamiento Cifrado KMS",
+      "pos": [565, 350],
+      "size": [172, 62]
+    },
+    {
+      "id": "app_containers",
+      "type": "messagebus",
+      "label": "Docker Compose / Systemd",
+      "sublabel": "Frontend :3000 + API :8000",
+      "pos": [845, 210],
+      "size": [172, 62]
+    },
+    {
+      "id": "aws_cloudwatch",
+      "type": "cloud",
+      "label": "Amazon CloudWatch",
+      "sublabel": "Sondas /health y Telemetría",
+      "pos": [845, 70],
+      "size": [172, 62]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1)",
+      "wraps": [
+        "aws_igw",
+        "aws_sg",
+        "aws_secrets",
+        "aws_rds",
+        "aws_ec2",
+        "aws_ebs",
+        "app_containers",
+        "aws_cloudwatch"
+      ],
+      "pad": 22
+    },
+    {
+      "kind": "security-group",
+      "label": "Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 & private_subnet 10.0.2.0/24)",
+      "wraps": [
+        "aws_rds",
+        "aws_ec2",
+        "aws_ebs",
+        "app_containers",
+        "aws_cloudwatch"
+      ],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    {
+      "from": "users_https",
+      "to": "aws_sg",
+      "label": "HTTP/S :80/:443",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "from": "aws_igw",
+      "to": "aws_sg",
+      "label": "Ruta Pública",
+      "route": "straight"
+    },
+    {
+      "from": "aws_sg",
+      "to": "aws_ec2",
+      "label": "Ingress Filtrado",
+      "variant": "security",
+      "route": "straight"
+    },
+    {
+      "from": "aws_secrets",
+      "to": "aws_ec2",
+      "label": "IAM Profile",
+      "variant": "dashed",
+      "route": "straight"
+    },
+    {
+      "from": "aws_ec2",
+      "to": "aws_rds",
+      "label": "TCP :5432",
+      "variant": "security",
+      "route": "straight"
+    },
+    {
+      "from": "aws_ec2",
+      "to": "aws_ebs",
+      "label": "Bloques gp3",
+      "route": "straight"
+    },
+    {
+      "from": "aws_ec2",
+      "to": "app_containers",
+      "label": "Bridge :3000/:8000",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "from": "app_containers",
+      "to": "aws_cloudwatch",
+      "label": "Health :8000",
+      "variant": "dashed",
+      "route": "straight"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "1. Caso 1 · Aplicación desde GitHub a AWS",
+      "items": [
+        "Aprovisiona aws_vpc (10.0.0.0/16), aws_internet_gateway y subredes Multi-AZ",
+        "Despliega contenedores en aws_instance con sincronización dinámica de IP vía IMDSv2",
+        "Gestiona variables sensibles mediante aws_secretsmanager_secret e IAM Profile"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "2. Caso 2 · Imagen de SO / Máquina Virtual a AWS",
+      "items": [
+        "Captura telemetría real mediante agente remoto inscrito con token de un solo uso",
+        "Dimensiona volúmenes aws_ebs_volume gp3 respetando las cuotas de AWS Academy",
+        "Rehidrata servicios systemd, usuarios y paquetes mediante user_data.sh"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "3. Seguridad y Gobernanza en Consola AWS",
+      "items": [
+        "Perímetro aws_security_group deduplicado sin puertos redundantes",
+        "Aislamiento estricto de la infraestructura base de CloudMove",
+        "Trazabilidad completa en main.tf, variables.tf y outputs.tf"
+      ]
+    }
+  ]
+}

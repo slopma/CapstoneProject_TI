@@ -31,10 +31,12 @@ export default function ExecutionsAndAuditWorkspace({
       ]);
       if (jobsRes && jobsRes.ok) {
         const d = await jobsRes.json();
-        const list = d.jobs || [];
+        const list = (d.jobs || []).filter(
+          (j) => j.use_case === "app_source" || j.use_case === "vm_image"
+        );
         setJobs(list);
-        if (list.length > 0 && !selectedJobId) {
-          setSelectedJobId(list[0].migration_id);
+        if (list.length > 0) {
+          setSelectedJobId((prev) => prev || list[0].migration_id);
         }
       }
       if (persRes && persRes.ok) {
@@ -43,7 +45,7 @@ export default function ExecutionsAndAuditWorkspace({
     } finally {
       setLoading(false);
     }
-  }, [selectedJobId]);
+  }, []);
 
   useEffect(() => {
     loadAuditData();
@@ -159,7 +161,7 @@ export default function ExecutionsAndAuditWorkspace({
       />
 
       <div style={{ marginBottom: 16 }}>
-        <AwsCloudAuditPanel onAuditCompleted={() => loadAuditData()} />
+        <AwsCloudAuditPanel onAuditCompleted={loadAuditData} />
       </div>
 
       {generationResult && (

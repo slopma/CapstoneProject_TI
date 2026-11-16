@@ -21,7 +21,7 @@ export const CLOUDMOVE_NAV_GROUPS = [
         tab: "migration",
         useCase: "app_source",
         label: "Caso 1 · Aplicación (GitHub)",
-        hint: "Repositorio o código fuente → Contenedores en AWS/GCP",
+        hint: "Repositorio o código fuente hacia contenedores en Amazon EC2 / ECS",
         icon: "migration",
       },
       {
@@ -29,7 +29,7 @@ export const CLOUDMOVE_NAV_GROUPS = [
         tab: "migration",
         useCase: "vm_image",
         label: "Caso 2 · Imagen de SO / VM",
-        hint: "Agente en vivo o disco VMDK/QCOW2 → Máquina virtual",
+        hint: "Agente en vivo o disco VMDK/QCOW2 hacia Amazon EC2",
         icon: "discovery",
       },
       {
@@ -58,7 +58,7 @@ export const CLOUDMOVE_NAV_GROUPS = [
       {
         id: "sources-targets",
         label: "Orígenes, agentes y destinos",
-        hint: "Inscripción de agentes remotos y conectores AWS/GCP",
+        hint: "Inscripción de agentes remotos y conectores hacia AWS",
         icon: "settings",
       },
     ],

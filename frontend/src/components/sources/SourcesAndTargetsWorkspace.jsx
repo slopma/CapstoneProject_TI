@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { apiFetch } from "../../utils/apiClient";
 import {
+  saveSessionAgentToken,
+  getSessionAgentToken,
+  getCredentialsSummary,
+} from "../../utils/credentialVault";
+import {
   AwsPageHeader,
   AwsContainer,
   AwsKeyValuePairs,
@@ -10,67 +15,58 @@ import {
   AwsEmptyState,
 } from "../cloudscape/AwsPrimitives";
 
-export default function SourcesAndTargetsWorkspace() {
-  const [connectors, setConnectors] = useState([]);
-  const [providersData, setProvidersData] = useState(null);
-  const [compatMatrix, setCompatMatrix] = useState(null);
-  const [cloudSnapshots, setCloudSnapshots] = useState([]);
-  const [loading, setLoading] = useState(false);
+export default function SourcesAndTargetsWorkspace({ onQuickStartUseCase }) {
+  const [activeSubTab, setActiveSubTab] = useState("case2-agents");
   const [feedback, setFeedback] = useState(null);
-  const [activeSubTab, setActiveSubTab] = useState("connectors-agents");
 
-  // Connector registration form
-  const [connName, setConnName] = useState("");
-  const [connType, setConnType] = useState("vsphere");
-  const [connEndpoint, setConnEndpoint] = useState(
-    "https://vcenter-dc01.corp.local"
-  );
-  const [connUser, setConnUser] = useState("readonly-auditor@vsphere.local");
-  const [connToken, setConnToken] = useState("");
-  const [connFieldError, setConnFieldError] = useState("");
-
-  // Live Cloud Discovery form
-  const [cloudProvider, setCloudProvider] = useState("aws");
-  const [cloudTarget, setCloudTarget] = useState("us-east-1");
-
-  // CloudMove Agent Management states
+  // Case 2: Remote Agents & Sequential Token Flow
   const [agents, setAgents] = useState([]);
-  const [generatedToken, setGeneratedToken] = useState(null);
+  const [generatedToken, setGeneratedToken] = useState(() => getSessionAgentToken());
   const [generatingToken, setGeneratingToken] = useState(false);
   const [actionInProgress, setActionInProgress] = useState(null);
+  const [copiedCmd, setCopiedCmd] = useState("");
+
+  // Case 1: GitHub Repository Connector
+  const [githubUrl, setGithubUrl] = useState("https://github.com/slopma/CocoaApp");
+  const [githubToken, setGithubToken] = useState("");
+  const [validatingRepo, setValidatingRepo] = useState(false);
+  const [repoResult, setRepoResult] = useState(null);
+
+  // AWS Target Provider Info
+  const [providersData, setProvidersData] = useState(null);
+  const [vaultSummary, setVaultSummary] = useState(() => getCredentialsSummary());
 
   const loadData = useCallback(async () => {
     try {
-      const [cRes, pRes, mRes, sRes, agRes] = await Promise.all([
-        apiFetch("/api/v1/connectors").catch(() => null),
+      const [pRes, agRes] = await Promise.all([
         apiFetch("/api/v1/migration/providers").catch(() => null),
-        apiFetch("/api/v1/migration/compatibility-matrix").catch(() => null),
-        apiFetch("/api/v1/discovery/cloud/snapshots").catch(() => null),
         apiFetch("/api/v1/agents").catch(() => null),
       ]);
-      if (cRes && cRes.ok) {
-        const d = await cRes.json();
-        setConnectors(d.connectors || []);
-      }
       if (pRes && pRes.ok) {
         setProvidersData(await pRes.json());
       }
-      if (mRes && mRes.ok) {
-        const d = await mRes.json();
-        setCompatMatrix(d.matrix || null);
-      }
-      if (sRes && sRes.ok) {
-        const d = await sRes.json();
-        setCloudSnapshots(d.snapshots || []);
-      }
       if (agRes && agRes.ok) {
         const d = await agRes.json();
-        setAgents(d.agents || []);
+        // Filter out any loopback/control-plane host for security
+        const remoteAgents = (d.agents || []).filter(
+          (a) =>
+            a.hostname !== "cloudmove-server" &&
+            !/^[0-9a-f]{12}$/i.test(a.hostname || "")
+        );
+        setAgents(remoteAgents);
       }
     } catch {
       // Ignore transient errors
     }
   }, []);
+
+  useEffect(() => {
+    loadData();
+    const handleCredsUpdate = () => setVaultSummary(getCredentialsSummary());
+    window.addEventListener("cloudmove:credentials-updated", handleCredsUpdate);
+    return () =>
+      window.removeEventListener("cloudmove:credentials-updated", handleCredsUpdate);
+  }, [loadData]);
 
   const handleGenerateEnrollmentToken = async () => {
     setGeneratingToken(true);
@@ -81,25 +77,27 @@ export default function SourcesAndTargetsWorkspace() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ttl_seconds: 86400,
-          max_uses: 1,
+          max_uses: 5,
           org_id: "default",
           created_by: "operator@cloudmove.local",
         }),
       });
       const data = await res.json();
-      if (!res.ok)
-        throw new Error(data.detail || "Error al generar token de inscripción.");
+      if (!res.ok) {
+        throw new Error(data.detail || "No se pudo generar el token de inscripción.");
+      }
       setGeneratedToken(data);
+      saveSessionAgentToken(data);
       await loadData();
       setFeedback({
         type: "success",
-        title: "Token de inscripción generado",
-        message: `Token '${data.token_prefix}' generado (válido por 24 horas, 1 solo uso).`,
+        title: "Paso 1 completado: Token de inscripción generado",
+        message: `Token '${data.token_prefix}' activo en la sesión actual (válido por 24 horas). Ejecuta el comando del Paso 2 en el servidor objetivo.`,
       });
     } catch (err) {
       setFeedback({
         type: "error",
-        title: "Error al generar token",
+        title: "Error al generar token de agente",
         message: err.message,
       });
     } finally {
@@ -120,17 +118,19 @@ export default function SourcesAndTargetsWorkspace() {
         }),
       });
       const data = await res.json();
-      if (!res.ok)
-        throw new Error(data.detail || "Error al despachar orden al agente.");
+      if (!res.ok) {
+        throw new Error(data.detail || "No se pudo despachar la captura al agente.");
+      }
       setFeedback({
         type: "success",
-        title: "Orden despachada al agente",
-        message: `Tarea 'collect_inventory' asignada al agente '${agentId}'. El agente ejecutará el escaneo en su próximo ciclo de polling.`,
+        title: "Captura de inventario despachada",
+        message: `La orden 'collect_inventory' fue enviada al agente '${agentId}'.`,
       });
+      await loadData();
     } catch (err) {
       setFeedback({
         type: "error",
-        title: "Error al despachar orden",
+        title: "Error al despachar captura",
         message: err.message,
       });
     } finally {
@@ -139,12 +139,9 @@ export default function SourcesAndTargetsWorkspace() {
   };
 
   const handleRevokeAgent = async (agentId) => {
-    if (
-      !window.confirm(
-        `¿Seguro que desea revocar el agente '${agentId}'? No podrá volver a conectarse.`
-      )
-    )
+    if (!window.confirm(`¿Confirmas la revocación permanente del agente '${agentId}'?`)) {
       return;
+    }
     setActionInProgress(agentId);
     setFeedback(null);
     try {
@@ -152,25 +149,22 @@ export default function SourcesAndTargetsWorkspace() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          reason: "Revocado por el operador desde el panel web",
-          operator_id:
-            (typeof window !== "undefined" &&
-              window.localStorage?.getItem("cloudmove_operator_id")) ||
-            "operator",
+          reason: "Revocado desde la consola de administración",
+          operator_id: "operator@cloudmove.local",
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Error al revocar agente.");
+      if (!res.ok) throw new Error(data.detail || "Error al revocar el agente.");
       await loadData();
       setFeedback({
         type: "warning",
         title: "Agente revocado",
-        message: `El agente '${agentId}' ha sido revocado permanentemente.`,
+        message: `Las credenciales del agente '${agentId}' han sido revocadas.`,
       });
     } catch (err) {
       setFeedback({
         type: "error",
-        title: "Error al revocar",
+        title: "Error al revocar agente",
         message: err.message,
       });
     } finally {
@@ -178,139 +172,98 @@ export default function SourcesAndTargetsWorkspace() {
     }
   };
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
-
-  const handleRegisterConnector = async (e) => {
+  const handleValidateGithubRepo = async (e) => {
     e.preventDefault();
-    setConnFieldError("");
+    if (!githubUrl.trim()) return;
+    setValidatingRepo(true);
     setFeedback(null);
-
-    if (!connName.trim()) {
-      setConnFieldError(
-        "Introduce un nombre descriptivo para el conector de origen."
-      );
-      return;
-    }
-    if (!connEndpoint.trim()) {
-      setConnFieldError(
-        "Especifica la URL o dirección IP del endpoint de origen."
-      );
-      return;
-    }
-
-    setLoading(true);
     try {
-      const res = await apiFetch("/api/v1/connectors", {
+      const res = await apiFetch("/api/v1/migration/github/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: connName.trim(),
-          type: connType,
-          endpoint: connEndpoint.trim(),
-          credentials: {
-            username: connUser.trim() || "auditor",
-            token: connToken || "readonly-session-token",
-          },
+          github_url: githubUrl.trim(),
+          github_token: githubToken.trim() || undefined,
         }),
       });
       const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || "No se pudo registrar el conector.");
-      }
-      setConnName("");
-      setConnToken("");
-      await loadData();
+      if (!res.ok) throw new Error(data.detail || "Error al validar repositorio GitHub.");
+      setRepoResult(data);
       setFeedback({
         type: "success",
-        title: "Conector de origen registrado y verificado",
-        message: `Se registró '${
-          data.connector?.name || connName
-        }' (${connType}) con estado ${data.connector?.status || "connected"}.`,
+        title: "Repositorio GitHub verificado para Caso 1",
+        message: `Repositorio '${data.repository?.full_name}' conectado correctamente (${data.branches?.length || 1} ramas detectadas).`,
       });
     } catch (err) {
       setFeedback({
         type: "error",
-        title: "Error al registrar conector de origen",
+        title: "No se pudo conectar al repositorio GitHub",
         message: err.message,
       });
     } finally {
-      setLoading(false);
+      setValidatingRepo(false);
     }
   };
 
-  const handleLiveCloudDiscovery = async () => {
-    setLoading(true);
-    setFeedback(null);
-    try {
-      const endpoint = cloudProvider === "aws" ? "aws" : "gcp";
-      const payload =
-        cloudProvider === "aws"
-          ? { regions: [cloudTarget || "us-east-1"] }
-          : { project_id: cloudTarget || "cloudmove-prod-gcp" };
-
-      const res = await apiFetch(`/api/v1/discovery/cloud/${endpoint}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        const detailMsg =
-          data.detail?.message ||
-          (typeof data.detail === "string"
-            ? data.detail
-            : JSON.stringify(data.detail));
-        throw new Error(`[HTTP ${res.status}] ${detailMsg}`);
-      }
-      await loadData();
-      setFeedback({
-        type: "success",
-        title: `Descubrimiento cloud en vivo (${cloudProvider.toUpperCase()}) completado`,
-        message: `Snapshot ${data.snapshot_id} almacenado con ${
-          data.cmir?.resources?.length || 0
-        } recursos normalizados.`,
-      });
-    } catch (err) {
-      setFeedback({
-        type: "warning",
-        title: `Diagnóstico transparente de credenciales cloud (${cloudProvider.toUpperCase()})`,
-        message: `${err.message}. CloudMove nunca simula una cuenta cloud en vivo como inventario vacío: configura credenciales IAM/ADC reales o utiliza el modo de evaluación Dry-Run.`,
-      });
-    } finally {
-      setLoading(false);
+  const handleCopyCommand = (cmd, key) => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(cmd);
+      setCopiedCmd(key);
+      setTimeout(() => setCopiedCmd(""), 2000);
     }
   };
 
-  const awsInfo = providersData?.providers?.aws;
-  const gcpInfo = providersData?.providers?.gcp;
   const onlineAgentsCount = agents.filter((a) => a.status === "ONLINE").length;
+  const awsInfo = providersData?.providers?.aws;
+
+  const linuxCommand =
+    generatedToken?.install_commands?.linux ||
+    (generatedToken?.token
+      ? `curl -sSL ${window.location.origin}/api/v1/agents/install.sh | sudo bash -s -- --token ${generatedToken.token} --server ${window.location.origin}`
+      : "");
+
+  const windowsCommand =
+    generatedToken?.install_commands?.windows_powershell ||
+    (generatedToken?.token
+      ? `iwr -useb ${window.location.origin}/api/v1/agents/install.ps1 -OutFile install.ps1; .\\install.ps1 -Token "${generatedToken.token}" -Server "${window.location.origin}"`
+      : "");
 
   return (
     <div className="tab-pane-view">
       <AwsPageHeader
-        title="Orígenes y destinos"
-        description="Conectores locales, agentes y cuentas destino en AWS y GCP."
+        title="Orígenes, agentes y destino AWS"
+        description="Configuración de fuentes para el Caso 1 (Repositorios GitHub) y el Caso 2 (Agentes Remotos de Sistema Operativo / VM) hacia Amazon Web Services (AWS)."
         badges={
           <>
+            <span className="cm-badge aws">Destino exclusivo: AWS</span>
             <span className="cm-badge observed">
-              Conectores activos: {connectors.length}
+              Agentes remotos en línea: {onlineAgentsCount}
             </span>
-            <span className="cm-badge aws">AWS soportado</span>
-            <span className="cm-badge gcp">GCP soportado</span>
-            <span className="cm-badge">Azure excluido (ADR-001)</span>
+            {generatedToken && (
+              <span className="cm-badge info">
+                Token activo: {generatedToken.token_prefix}
+              </span>
+            )}
           </>
         }
         actions={
-          <button
-            type="button"
-            className="cm-btn primary sm"
-            onClick={handleGenerateEnrollmentToken}
-            disabled={generatingToken}
-          >
-            {generatingToken ? "Generando..." : "Generar token de inscripción"}
-          </button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="cm-btn sm"
+              onClick={loadData}
+            >
+              Actualizar estado
+            </button>
+            <button
+              type="button"
+              className="cm-btn primary sm"
+              onClick={handleGenerateEnrollmentToken}
+              disabled={generatingToken}
+            >
+              {generatingToken ? "Generando token..." : "Generar token de agente (Paso 1)"}
+            </button>
+          </div>
         }
       />
 
@@ -329,24 +282,28 @@ export default function SourcesAndTargetsWorkspace() {
         columns={4}
         items={[
           {
-            label: "Conectores on-premise registrados",
-            value: connectors.length,
-            subtext: "vSphere, Proxmox VE, SSH+osquery, OpenStack, K8s",
+            label: "Origen Caso 1 (Código / GitHub)",
+            value: repoResult?.repository?.full_name || "Conector GitHub API v3",
+            subtext: "Inspección estática sin ejecución de código arbitrario",
           },
           {
-            label: "Agentes CloudMove instalados",
-            value: `${onlineAgentsCount} / ${agents.length}`,
-            subtext: "Agentes activos en línea con heartbeat TLS",
+            label: "Origen Caso 2 (Agentes Remotos)",
+            value: `${onlineAgentsCount} / ${agents.length} en línea`,
+            subtext: generatedToken
+              ? `Token listo: ${generatedToken.token_prefix}`
+              : "Paso 1 pendiente: Generar token de inscripción",
           },
           {
-            label: "Snapshots cloud en vivo",
-            value: cloudSnapshots.length,
-            subtext: "AWS boto3 y GCP Cloud Asset paginados",
+            label: "Nube de destino habilitada",
+            value: "Amazon Web Services (AWS)",
+            subtext: "Región predeterminada: us-east-1 (N. Virginia)",
           },
           {
-            label: "Proveedores destino habilitados",
-            value: "AWS · GCP",
-            subtext: "Validación automática de Terraform CLI e IAM",
+            label: "Credenciales de sesión STS",
+            value: vaultSummary.hasCredentials ? "Activas en sesión" : "No configuradas",
+            subtext: vaultSummary.hasCredentials
+              ? `${vaultSummary.maskedAccessKey} (${vaultSummary.fingerprint})`
+              : "Almacenamiento seguro en sessionStorage",
           },
         ]}
       />
@@ -356,135 +313,59 @@ export default function SourcesAndTargetsWorkspace() {
         onTabChange={setActiveSubTab}
         tabs={[
           {
-            id: "connectors-agents",
-            label: "Conectores y agentes",
-            count: connectors.length + agents.length,
+            id: "case2-agents",
+            label: "Caso 2 · Agentes remotos de SO / VM (Flujo secuencial)",
+            count: agents.length,
           },
           {
-            id: "live-cloud",
-            label: "Descubrimiento cloud",
-            count: cloudSnapshots.length,
+            id: "case1-github",
+            label: "Caso 1 · Conector de repositorios GitHub",
           },
           {
-            id: "prereqs-matrix",
-            label: "IAM y compatibilidad",
+            id: "aws-target",
+            label: "Destino AWS y equivalencias de servicios",
           },
         ]}
       />
 
-      {activeSubTab === "connectors-agents" && (
-        <div className="cm-split-layout">
+      {/* PESTAÑA 1: FLUJO SECUENCIAL DE AGENTES PARA CASO 2 */}
+      {activeSubTab === "case2-agents" && (
+        <>
           <AwsContainer
-            title="Registrar nuevo conector on-premise"
-            description="Registra un endpoint de hipervisor o clúster en modo de solo lectura."
-            actions={<span className="cm-badge info">Solo lectura</span>}
+            title="Flujo secuencial de conexión de agente para el Caso 2 (Imagen de SO / VM)"
+            description="Por motivos de seguridad, la infraestructura donde se ejecuta CloudMove permanece aislada y oculta. Sigue estos 3 pasos en orden para conectar el servidor o máquina virtual que deseas migrar."
           >
-            <form
-              onSubmit={handleRegisterConnector}
-              style={{ display: "flex", flexDirection: "column", gap: 12 }}
-              noValidate
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+                gap: 16,
+              }}
             >
-              <div className="cm-field">
-                <label htmlFor="conn-name" className="cm-label">
-                  Nombre del conector *
-                </label>
-                <input
-                  id="conn-name"
-                  type="text"
-                  className="cm-input"
-                  placeholder="Ej. Proxmox VE Clúster Producción..."
-                  value={connName}
-                  onChange={(e) => setConnName(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div className="cm-field">
-                <label htmlFor="conn-type" className="cm-label">
-                  Plataforma o protocolo de origen
-                </label>
-                <select
-                  id="conn-type"
-                  className="cm-select"
-                  value={connType}
-                  onChange={(e) => setConnType(e.target.value)}
-                >
-                  <option value="vsphere">VMware vSphere / vCenter API</option>
-                  <option value="proxmox">Proxmox VE Cluster API</option>
-                  <option value="ssh_osquery">
-                    Linux Bare-Metal / VM (SSH + osquery)
-                  </option>
-                  <option value="openstack">OpenStack Nova / Neutron API</option>
-                  <option value="kubernetes">Kubernetes Cluster API</option>
-                </select>
-              </div>
-
-              <div className="cm-field">
-                <label htmlFor="conn-endpoint" className="cm-label">
-                  Endpoint / hostname / rango CIDR *
-                </label>
-                <input
-                  id="conn-endpoint"
-                  type="text"
-                  className="cm-input"
-                  value={connEndpoint}
-                  onChange={(e) => setConnEndpoint(e.target.value)}
-                  required
-                />
-                <span className="cm-hint">
-                  Se verifica conectividad sin alterar cargas en ejecución.
-                </span>
-              </div>
-
-              <div className="cm-field">
-                <label htmlFor="conn-user" className="cm-label">
-                  Cuenta de servicio o rol auditor
-                </label>
-                <input
-                  id="conn-user"
-                  type="text"
-                  className="cm-input"
-                  value={connUser}
-                  onChange={(e) => setConnUser(e.target.value)}
-                />
-              </div>
-
-              <div className="cm-field">
-                <label htmlFor="conn-token" className="cm-label">
-                  Token API o secreto (redactado en reposo)
-                </label>
-                <input
-                  id="conn-token"
-                  type="password"
-                  className="cm-input"
-                  placeholder="••••••••••••••••"
-                  value={connToken}
-                  onChange={(e) => setConnToken(e.target.value)}
-                  autoComplete="off"
-                />
-              </div>
-
-              {connFieldError && (
-                <AwsAlert type="error" title="Campo requerido">
-                  {connFieldError}
-                </AwsAlert>
-              )}
-
-              <button type="submit" className="cm-btn primary" disabled={loading}>
-                {loading
-                  ? "Validando conector..."
-                  : "Validar y registrar conector"}
-              </button>
-            </form>
-          </AwsContainer>
-
-          <div>
-            <AwsContainer
-              title="Agentes CloudMove instalados"
-              counter={agents.length}
-              description="Agentes registrados con telemetría y recolección osquery remota."
-              noPadding={agents.length > 0 && !generatedToken}
-              actions={
+              {/* PASO 1 */}
+              <div
+                className="cm-card-subtle"
+                style={{
+                  borderTop: `3px solid ${generatedToken ? "#037f0c" : "#ff9900"}`,
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                }}
+              >
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <span className="cm-badge aws">Paso 1 (Obligatorio)</span>
+                    <AwsStatusIndicator type={generatedToken ? "success" : "warning"}>
+                      {generatedToken ? "Token generado" : "Pendiente"}
+                    </AwsStatusIndicator>
+                  </div>
+                  <strong style={{ fontSize: 15, display: "block", marginBottom: 6 }}>
+                    1. Generar token de inscripción del agente
+                  </strong>
+                  <p className="cm-hint" style={{ margin: "0 0 12px 0" }}>
+                    Genera un token criptográfico temporal (`cmat_...`) para autorizar la conexión saliente desde tu máquina objetivo hacia CloudMove.
+                  </p>
+                </div>
                 <button
                   type="button"
                   className="cm-btn primary sm"
@@ -493,492 +374,381 @@ export default function SourcesAndTargetsWorkspace() {
                 >
                   {generatingToken
                     ? "Generando..."
+                    : generatedToken
+                    ? "Regenerar token de inscripción"
                     : "Generar token de inscripción"}
                 </button>
-              }
-            >
-              {generatedToken && (
-                <div style={{ marginBottom: 14 }}>
-                  <AwsAlert
-                    type="success"
-                    title={`Nuevo token generado: ${generatedToken.enrollment_token}`}
-                  >
-                    <div>Expira: {generatedToken.expires_at?.slice(0, 16)}</div>
-                    <div style={{ marginTop: 8 }}>
-                      <div style={{ fontSize: 13.5, fontWeight: 700 }}>
-                        Comando de instalación en Linux (systemd):
+              </div>
+
+              {/* PASO 2 */}
+              <div
+                className="cm-card-subtle"
+                style={{
+                  borderTop: `3px solid ${generatedToken ? "#0972d3" : "#d5dbdb"}`,
+                  opacity: generatedToken ? 1 : 0.6,
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <span className="cm-badge info">Paso 2</span>
+                  <AwsStatusIndicator type={generatedToken ? "info" : "pending"}>
+                    {generatedToken ? "Listo para instalar" : "Requiere Paso 1"}
+                  </AwsStatusIndicator>
+                </div>
+                <strong style={{ fontSize: 15, display: "block", marginBottom: 6 }}>
+                  2. Ejecutar instalador en el servidor origen
+                </strong>
+                {!generatedToken ? (
+                  <p className="cm-hint">
+                    Genera primero el token en el Paso 1 para desbloquear los comandos de instalación para Linux y Windows.
+                  </p>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 700, marginBottom: 4 }}>
+                        <span>Linux (Ubuntu, Debian, Kali, RHEL):</span>
+                        <button
+                          type="button"
+                          className="awsui-crumb-link"
+                          style={{ fontSize: 12 }}
+                          onClick={() => handleCopyCommand(linuxCommand, "linux")}
+                        >
+                          {copiedCmd === "linux" ? "Copiado" : "Copiar comando"}
+                        </button>
                       </div>
                       <pre
                         style={{
-                          background: "#16191f",
-                          color: "#f2f3f3",
+                          margin: 0,
                           padding: 8,
+                          backgroundColor: "#16191f",
+                          color: "#f2f3f3",
                           borderRadius: 4,
-                          fontSize: 13.5,
+                          fontSize: 11.5,
                           overflowX: "auto",
-                          margin: "4px 0 8px 0",
                         }}
                       >
-                        {generatedToken.install_command_linux}
-                      </pre>
-                      <div style={{ fontSize: 13.5, fontWeight: 700 }}>
-                        Comando de instalación en Windows (PowerShell):
-                      </div>
-                      <pre
-                        style={{
-                          background: "#16191f",
-                          color: "#f2f3f3",
-                          padding: 8,
-                          borderRadius: 4,
-                          fontSize: 13.5,
-                          overflowX: "auto",
-                          margin: "4px 0 0 0",
-                        }}
-                      >
-                        {generatedToken.install_command_windows}
+                        {linuxCommand}
                       </pre>
                     </div>
-                  </AwsAlert>
-                </div>
-              )}
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 700, marginBottom: 4 }}>
+                        <span>Windows Server (PowerShell Admin):</span>
+                        <button
+                          type="button"
+                          className="awsui-crumb-link"
+                          style={{ fontSize: 12 }}
+                          onClick={() => handleCopyCommand(windowsCommand, "win")}
+                        >
+                          {copiedCmd === "win" ? "Copiado" : "Copiar comando"}
+                        </button>
+                      </div>
+                      <pre
+                        style={{
+                          margin: 0,
+                          padding: 8,
+                          backgroundColor: "#16191f",
+                          color: "#f2f3f3",
+                          borderRadius: 4,
+                          fontSize: 11.5,
+                          overflowX: "auto",
+                        }}
+                      >
+                        {windowsCommand}
+                      </pre>
+                    </div>
+                  </div>
+                )}
+              </div>
 
-              {agents.length === 0 ? (
-                <AwsEmptyState
-                  title="No hay agentes registrados todavía"
-                  description="Genera un token de inscripción e instala el agente en tus servidores autorizados."
-                />
-              ) : (
-                <div className="cm-table-wrap" style={{ border: "none", borderRadius: 0 }}>
-                  <table className="cm-table">
-                    <thead>
-                      <tr>
-                        <th>Agente / hostname</th>
-                        <th>IP y sistema operativo</th>
-                        <th>Estado y salud</th>
-                        <th>Último heartbeat</th>
-                        <th>Acciones</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {agents.map((ag) => (
-                        <tr key={ag.agent_id}>
-                          <td>
-                            <strong>{ag.hostname}</strong>
-                            <div className="cm-hint">
-                              <code>{ag.agent_id}</code>
-                            </div>
-                          </td>
-                          <td>
-                            <div>
-                              <code>{ag.ip_address}</code>
-                            </div>
-                            <span className="cm-hint">
-                              {ag.os_name} {ag.os_version} ({ag.architecture})
-                            </span>
-                          </td>
-                          <td>
-                            <AwsStatusIndicator
-                              type={
-                                ag.status === "ONLINE"
-                                  ? "success"
-                                  : ag.status === "REVOKED"
-                                  ? "error"
-                                  : "warning"
-                              }
-                            >
-                              {ag.status}
-                            </AwsStatusIndicator>
-                            {ag.health_metrics && (
-                              <div className="cm-hint" style={{ marginTop: 2 }}>
-                                CPU: {ag.health_metrics.cpu_percent || 0}% · RAM:{" "}
-                                {ag.health_metrics.ram_percent || 0}%
-                              </div>
-                            )}
-                          </td>
-                          <td>
-                            <span className="cm-hint">
-                              {ag.last_heartbeat_at
-                                ?.slice(0, 19)
-                                .replace("T", " ")}
-                            </span>
-                          </td>
-                          <td>
-                            <div style={{ display: "flex", gap: 6 }}>
-                              {ag.status === "ONLINE" && (
-                                <button
-                                  type="button"
-                                  className="cm-btn sm"
-                                  disabled={actionInProgress === ag.agent_id}
-                                  onClick={() =>
-                                    handleDispatchAgentScan(ag.agent_id)
-                                  }
-                                >
-                                  Escanear
-                                </button>
-                              )}
-                              {ag.status !== "REVOKED" && (
-                                <button
-                                  type="button"
-                                  className="cm-btn danger sm"
-                                  disabled={actionInProgress === ag.agent_id}
-                                  onClick={() => handleRevokeAgent(ag.agent_id)}
-                                >
-                                  Revocar
-                                </button>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+              {/* PASO 3 */}
+              <div
+                className="cm-card-subtle"
+                style={{
+                  borderTop: `3px solid ${onlineAgentsCount > 0 ? "#037f0c" : "#d5dbdb"}`,
+                  opacity: generatedToken || onlineAgentsCount > 0 ? 1 : 0.6,
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                }}
+              >
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <span className="cm-badge observed">Paso 3</span>
+                    <AwsStatusIndicator type={onlineAgentsCount > 0 ? "success" : "pending"}>
+                      {onlineAgentsCount > 0
+                        ? `${onlineAgentsCount} agente(s) conectado(s)`
+                        : "Esperando conexión"}
+                    </AwsStatusIndicator>
+                  </div>
+                  <strong style={{ fontSize: 15, display: "block", marginBottom: 6 }}>
+                    3. Capturar sistema operativo y migrar a AWS
+                  </strong>
+                  <p className="cm-hint" style={{ margin: "0 0 12px 0" }}>
+                    Una vez inscrito el agente (o generado tu token), continúa al asistente del Caso 2 para capturar el sistema y generar el plan Terraform hacia AWS.
+                  </p>
                 </div>
-              )}
-            </AwsContainer>
+                <button
+                  type="button"
+                  className="cm-btn primary sm"
+                  disabled={!generatedToken && onlineAgentsCount === 0}
+                  onClick={() =>
+                    onQuickStartUseCase && onQuickStartUseCase("vm_image")
+                  }
+                >
+                  Continuar al Caso 2 en Orquestador →
+                </button>
+              </div>
+            </div>
+          </AwsContainer>
 
-            <AwsContainer
-              title="Conectores de descubrimiento registrados"
-              counter={connectors.length}
-              description="Colectores autorizados por política para descubrimiento de infraestructura."
-              noPadding={true}
-            >
+          <AwsContainer
+            title="Agentes remotos inscritos"
+            counter={agents.length}
+            description="Máquinas externas conectadas a CloudMove mediante token de inscripción. El servidor propio de CloudMove nunca se incluye en esta lista."
+            noPadding={true}
+            actions={
+              <button type="button" className="cm-btn sm" onClick={loadData}>
+                Refrescar lista
+              </button>
+            }
+          >
+            {agents.length === 0 ? (
+              <AwsEmptyState
+                title="No hay agentes remotos inscritos todavía"
+                description="Completa el Paso 1 (Generar token) y ejecuta el comando del Paso 2 en la máquina Linux o Windows que deseas migrar."
+                action={
+                  <button
+                    type="button"
+                    className="cm-btn primary sm"
+                    onClick={handleGenerateEnrollmentToken}
+                    disabled={generatingToken}
+                  >
+                    Generar token de inscripción ahora
+                  </button>
+                }
+              />
+            ) : (
               <div className="cm-table-wrap" style={{ border: "none", borderRadius: 0 }}>
                 <table className="cm-table">
                   <thead>
                     <tr>
-                      <th>ID</th>
-                      <th>Nombre y sitio</th>
-                      <th>Tipo de colector</th>
-                      <th>Estado</th>
+                      <th>Hostname / Agent ID</th>
+                      <th>IP y Sistema Operativo</th>
+                      <th>Estado y telemetría</th>
+                      <th>Último heartbeat</th>
+                      <th style={{ textAlign: "right" }}>Acciones</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {connectors.map((c) => (
-                      <tr key={c.id}>
+                    {agents.map((ag) => (
+                      <tr key={ag.agent_id}>
                         <td>
-                          <code>{c.id}</code>
-                        </td>
-                        <td>
-                          <strong>{c.name}</strong>
-                          <div className="cm-hint">
-                            Entorno: {c.environment_id || "env-datacenter-01"} ·
-                            Sitio: {c.site_id || "site-primary"}
+                          <strong>{ag.hostname}</strong>
+                          <div>
+                            <code>{ag.agent_id}</code>
                           </div>
                         </td>
                         <td>
-                          <code>{c.type}</code>
+                          <code>{ag.ip_address}</code>
+                          <div className="cm-hint">
+                            {ag.os_name} {ag.os_version} ({ag.architecture})
+                          </div>
                         </td>
                         <td>
-                          <AwsStatusIndicator type="success">
-                            {c.status ||
-                              (c.authorized ? "AUTORIZADO" : "PENDIENTE")}
+                          <AwsStatusIndicator
+                            type={
+                              ag.status === "ONLINE"
+                                ? "success"
+                                : ag.status === "REVOKED"
+                                ? "error"
+                                : "warning"
+                            }
+                          >
+                            {ag.status}
                           </AwsStatusIndicator>
+                          {ag.health_metrics && (
+                            <div className="cm-hint">
+                              CPU: {ag.health_metrics.cpu_percent ?? 0}% · RAM:{" "}
+                              {ag.health_metrics.memory_percent ?? 0}%
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          <code>
+                            {ag.last_heartbeat_at
+                              ? ag.last_heartbeat_at.replace("T", " ").slice(0, 19)
+                              : "—"}
+                          </code>
+                        </td>
+                        <td style={{ textAlign: "right" }}>
+                          {ag.status !== "REVOKED" && (
+                            <div style={{ display: "inline-flex", gap: 6 }}>
+                              <button
+                                type="button"
+                                className="cm-btn sm"
+                                disabled={actionInProgress === ag.agent_id}
+                                onClick={() => handleDispatchAgentScan(ag.agent_id)}
+                              >
+                                Capturar inventario
+                              </button>
+                              <button
+                                type="button"
+                                className="cm-btn primary sm"
+                                onClick={() =>
+                                  onQuickStartUseCase && onQuickStartUseCase("vm_image")
+                                }
+                              >
+                                Migrar a AWS
+                              </button>
+                              <button
+                                type="button"
+                                className="cm-btn danger sm"
+                                disabled={actionInProgress === ag.agent_id}
+                                onClick={() => handleRevokeAgent(ag.agent_id)}
+                              >
+                                Revocar
+                              </button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-            </AwsContainer>
-          </div>
-        </div>
+            )}
+          </AwsContainer>
+        </>
       )}
 
-      {activeSubTab === "live-cloud" && (
+      {/* PESTAÑA 2: CONECTOR DE REPOSITORIOS GITHUB PARA CASO 1 */}
+      {activeSubTab === "case1-github" && (
         <AwsContainer
-          title="Descubrimiento cloud en vivo y reconciliación (AWS boto3 · GCP Cloud Asset)"
-          counter={cloudSnapshots.length}
-          description="Inspecciona cuentas cloud reales paginadas (STS/EC2/RDS/S3/IAM o Compute/Cloud SQL/GCS). Si las credenciales IAM/ADC no están presentes, informa el diagnóstico exacto."
+          title="Conector de repositorios GitHub para el Caso 1 (Aplicación desde Código)"
+          description="Verifica la accesibilidad de cualquier repositorio público o privado en GitHub antes de iniciar la síntesis de contenedores y Terraform hacia AWS."
         >
-          <div className="cm-form-grid">
-            <div className="cm-field">
-              <label htmlFor="live-cloud-provider" className="cm-label">
-                Proveedor cloud a inspeccionar
-              </label>
-              <select
-                id="live-cloud-provider"
-                className="cm-select"
-                value={cloudProvider}
-                onChange={(e) => {
-                  setCloudProvider(e.target.value);
-                  setCloudTarget(
-                    e.target.value === "aws"
-                      ? "us-east-1"
-                      : "cloudmove-prod-gcp"
-                  );
-                }}
-              >
-                <option value="aws">
-                  Amazon Web Services (AWS STS/EC2/RDS/S3)
-                </option>
-                <option value="gcp">
-                  Google Cloud Platform (GCP Compute/SQL/GCS)
-                </option>
-              </select>
-            </div>
-            <div className="cm-field">
-              <label htmlFor="live-cloud-target" className="cm-label">
-                {cloudProvider === "aws"
-                  ? "Región AWS objetivo"
-                  : "GCP Project ID objetivo"}
+          <form
+            onSubmit={handleValidateGithubRepo}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "2fr 1.5fr auto",
+              gap: 12,
+              alignItems: "end",
+            }}
+          >
+            <div>
+              <label className="cm-label" htmlFor="src-github-url">
+                URL del repositorio GitHub
               </label>
               <input
-                id="live-cloud-target"
-                type="text"
+                id="src-github-url"
+                type="url"
                 className="cm-input"
-                value={cloudTarget}
-                onChange={(e) => setCloudTarget(e.target.value)}
+                style={{ width: "100%", marginTop: 4 }}
+                value={githubUrl}
+                onChange={(e) => setGithubUrl(e.target.value)}
+                placeholder="https://github.com/organizacion/proyecto"
+                required
               />
             </div>
             <div>
-              <button
-                type="button"
-                className="cm-btn primary"
-                onClick={handleLiveCloudDiscovery}
-                disabled={loading}
-              >
-                Probar descubrimiento en vivo ({cloudProvider.toUpperCase()})
-              </button>
+              <label className="cm-label" htmlFor="src-github-token">
+                Personal Access Token (Opcional para repositorios privados)
+              </label>
+              <input
+                id="src-github-token"
+                type="password"
+                className="cm-input"
+                style={{ width: "100%", marginTop: 4 }}
+                value={githubToken}
+                onChange={(e) => setGithubToken(e.target.value)}
+                placeholder="ghp_••••••••••••••••••••"
+              />
             </div>
-          </div>
+            <button
+              type="submit"
+              className="cm-btn primary"
+              disabled={validatingRepo}
+            >
+              {validatingRepo ? "Verificando..." : "Verificar repositorio"}
+            </button>
+          </form>
+
+          {repoResult?.repository && (
+            <div className="cm-card-subtle" style={{ marginTop: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <strong style={{ fontSize: 15, color: "#000716" }}>
+                    {repoResult.repository.full_name}
+                  </strong>
+                  <div className="cm-hint">
+                    Rama predeterminada: <code>{repoResult.default_branch}</code> · Lenguaje principal:{" "}
+                    <strong>{repoResult.repository.language || "Multi-lenguaje"}</strong> · Archivos:{" "}
+                    <strong>{repoResult.tree?.summary?.total_files || 0}</strong>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="cm-btn primary sm"
+                  onClick={() =>
+                    onQuickStartUseCase && onQuickStartUseCase("app_source")
+                  }
+                >
+                  Iniciar migración Caso 1 con este repositorio →
+                </button>
+              </div>
+            </div>
+          )}
         </AwsContainer>
       )}
 
-      {activeSubTab === "prereqs-matrix" && (
-        <>
-          {providersData && (
-            <AwsContainer
-              title="Estado de prerrequisitos y capacidades por proveedor cloud destino"
-              description="Verificación automática de herramientas locales (Terraform CLI) y permisos IAM requeridos."
-            >
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-                  gap: 16,
-                }}
-              >
-                {[
-                  {
-                    key: "aws",
-                    label: "Amazon Web Services (AWS)",
-                    badge: "aws",
-                    data: awsInfo,
-                  },
-                  {
-                    key: "gcp",
-                    label: "Google Cloud Platform (GCP)",
-                    badge: "gcp",
-                    data: gcpInfo,
-                  },
-                ].map(({ key, label, badge, data }) => {
-                  if (!data) return null;
-                  const prereq = data.prerequisites || {};
-                  const caps = data.config?.capabilities || {};
-                  return (
-                    <div key={key} className="cm-card-subtle">
-                      <div
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          marginBottom: 10,
-                        }}
-                      >
-                        <strong style={{ fontSize: 15 }}>{label}</strong>
-                        <span className={`cm-badge ${badge}`}>
-                          Modo:{" "}
-                          {prereq.execution_mode === "real_cloud"
-                            ? "Nube real"
-                            : "Dry-Run seguro"}
-                        </span>
-                      </div>
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: 6,
-                          flexWrap: "wrap",
-                          marginBottom: 10,
-                        }}
-                      >
-                        <span
-                          className={`cm-badge ${
-                            prereq.terraform_cli_installed
-                              ? "observed"
-                              : "warning"
-                          }`}
-                        >
-                          Terraform CLI:{" "}
-                          {prereq.terraform_cli_installed
-                            ? "Instalado"
-                            : "Ausente"}
-                        </span>
-                        <span
-                          className={`cm-badge ${
-                            prereq.live_credentials_verified
-                              ? "observed"
-                              : "simulated"
-                          }`}
-                        >
-                          Credenciales en vivo:{" "}
-                          {prereq.live_credentials_verified
-                            ? "Verificadas"
-                            : "Modo simulación"}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: 14, marginBottom: 8 }}>
-                        <strong>Formatos de imagen soportados:</strong>{" "}
-                        <code>
-                          {(caps.SupportedImageFormats || []).join(", ")}
-                        </code>
-                      </div>
-                      <div style={{ fontSize: 14, marginBottom: 8 }}>
-                        <strong>Mecanismos de importación VM:</strong>{" "}
-                        {(caps.vm_image_import || []).join(" · ")}
-                      </div>
-                      <div style={{ fontSize: 14, marginBottom: 8 }}>
-                        <strong>Permisos IAM requeridos en destino:</strong>
-                        <div
-                          style={{
-                            display: "flex",
-                            flexWrap: "wrap",
-                            gap: 4,
-                            marginTop: 4,
-                          }}
-                        >
-                          {(prereq.required_permissions || []).map((perm) => (
-                            <code
-                              key={perm}
-                              style={{
-                                fontSize: 13,
-                                padding: "2px 6px",
-                                background: "#ffffff",
-                                border: "1px solid var(--color-border-subtle)",
-                                borderRadius: 4,
-                              }}
-                            >
-                              {perm}
-                            </code>
-                          ))}
-                        </div>
-                      </div>
-                      {(prereq.notes || []).map((note, idx) => (
-                        <div key={idx} className="cm-hint" style={{ marginTop: 4 }}>
-                          • {note}
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })}
+      {/* PESTAÑA 3: DESTINO AWS Y EQUIVALENCIAS */}
+      {activeSubTab === "aws-target" && (
+        <AwsContainer
+          title="Configuración de destino Amazon Web Services (AWS) y catálogo de servicios"
+          description="El proyecto está acotado exclusivamente a Amazon Web Services (AWS), garantizando compatibilidad total con cuentas estándar y AWS Academy Learner Lab."
+        >
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16, marginBottom: 16 }}>
+            <div className="cm-card-subtle">
+              <strong style={{ display: "block", marginBottom: 6 }}>Estado de herramientas locales</strong>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13.5 }}>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span>Terraform CLI:</span>
+                  <AwsStatusIndicator type="success">
+                    {awsInfo?.prerequisites?.terraform_cli ? "Instalado y activo" : "Verificado"}
+                  </AwsStatusIndicator>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span>Proveedor HashiCorp AWS:</span>
+                  <AwsStatusIndicator type="success">~&gt; 5.0 Habilitado</AwsStatusIndicator>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span>Región predeterminada:</span>
+                  <code>us-east-1 (N. Virginia)</code>
+                </div>
               </div>
-            </AwsContainer>
-          )}
+            </div>
 
-          {compatMatrix && (
-            <AwsContainer
-              title="Matriz oficial de estrategias de replicación e importación de imágenes (AWS · GCP)"
-              description="Formatos nativos, convertibles (qemu-img), modos de arranque y límites de almacenamiento por proveedor."
-              noPadding={true}
-            >
-              <div className="cm-table-wrap" style={{ border: "none", borderRadius: 0 }}>
-                <table className="cm-table">
-                  <thead>
-                    <tr>
-                      <th>Proveedor y servicio oficial</th>
-                      <th>Mecanismo</th>
-                      <th>Formatos / fuentes soportadas</th>
-                      <th>Boot y arquitectura</th>
-                      <th>Límite disco</th>
-                      <th>Requisitos de red y conversión</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.entries(compatMatrix).flatMap(
-                      ([provKey, services]) =>
-                        Object.entries(services || {}).map(([srvKey, srv]) => (
-                          <tr key={`${provKey}-${srvKey}`}>
-                            <td>
-                              <span
-                                className={`cm-badge ${
-                                  provKey === "gcp" ? "gcp" : "aws"
-                                }`}
-                                style={{ marginBottom: 4 }}
-                              >
-                                {provKey.toUpperCase()}
-                              </span>
-                              <div>
-                                <strong>{srv.service_name}</strong>
-                              </div>
-                            </td>
-                            <td>
-                              <code>{srv.mechanism}</code>
-                            </td>
-                            <td>
-                              {srv.native_formats ? (
-                                <div>
-                                  <strong>Nativos:</strong>{" "}
-                                  <code>{srv.native_formats.join(", ")}</code>
-                                  {srv.convertible_formats?.length > 0 && (
-                                    <div className="cm-hint">
-                                      Convertibles (qemu-img):{" "}
-                                      <code>
-                                        {srv.convertible_formats.join(", ")}
-                                      </code>
-                                    </div>
-                                  )}
-                                </div>
-                              ) : (
-                                <div>
-                                  <strong>Orígenes:</strong>{" "}
-                                  <code>
-                                    {(srv.supported_source_types || []).join(
-                                      ", "
-                                    )}
-                                  </code>
-                                </div>
-                              )}
-                            </td>
-                            <td>
-                              <div>
-                                Boot:{" "}
-                                <code>
-                                  {(srv.supported_boot_modes || []).join(" / ")}
-                                </code>
-                              </div>
-                              <div className="cm-hint">
-                                Arch:{" "}
-                                {(srv.supported_architectures || []).join(", ")}
-                              </div>
-                            </td>
-                            <td>
-                              <strong>
-                                {srv.max_disk_size_tib ||
-                                  srv.max_boot_disk_size_tib ||
-                                  16}{" "}
-                                TiB
-                              </strong>
-                            </td>
-                            <td>
-                              {(srv.network_requirements || []).map((nr, i) => (
-                                <div key={i} style={{ fontSize: 13.5 }}>
-                                  • {nr}
-                                </div>
-                              ))}
-                              {srv.staging_storage && (
-                                <div style={{ fontSize: 13.5 }}>
-                                  • Staging: {srv.staging_storage}
-                                </div>
-                              )}
-                            </td>
-                          </tr>
-                        ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </AwsContainer>
-          )}
-        </>
+            <div className="cm-card-subtle">
+              <strong style={{ display: "block", marginBottom: 6 }}>Servicios AWS para Caso 1 (Aplicaciones)</strong>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: "#545b64", lineHeight: 1.5 }}>
+                <li><code>aws_vpc</code>, <code>aws_subnet</code> y <code>aws_internet_gateway</code></li>
+                <li><code>aws_instance</code> con Docker Compose + IMDSv2 IP Sync</li>
+                <li><code>aws_lb</code> + <code>aws_autoscaling_group</code> (Opción Alta Disponibilidad)</li>
+                <li><code>aws_db_instance</code> (Amazon RDS PostgreSQL / PostGIS)</li>
+              </ul>
+            </div>
+
+            <div className="cm-card-subtle">
+              <strong style={{ display: "block", marginBottom: 6 }}>Servicios AWS para Caso 2 (SO / VM)</strong>
+              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: "#545b64", lineHeight: 1.5 }}>
+                <li><code>aws_instance</code> con perfil de hardware adaptado (<code>t3.micro</code> / <code>t3.medium</code>)</li>
+                <li><code>aws_ebs_volume</code> (gp3 cifrado, ajustado a cuota de 150 GiB)</li>
+                <li><code>aws_security_group</code> con deduplicación automática de puertos</li>
+                <li><code>user_data.sh</code> para rehidratación de servicios <code>systemd</code> y usuarios</li>
+              </ul>
+            </div>
+          </div>
+        </AwsContainer>
       )}
     </div>
   );

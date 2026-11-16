@@ -162,7 +162,7 @@ def list_enrollment_tokens():
 
 
 @router.post("/enroll")
-def enroll_agent(req: EnrollAgentRequest):
+def enroll_agent(req: EnrollAgentRequest, request: Request):
     """
     Authenticate with an enrollment token, bind the machine's hardware identity,
     and issue a unique Agent API Key (Bearer Token) for ongoing operations.
@@ -175,9 +175,20 @@ def enroll_agent(req: EnrollAgentRequest):
             detail="Token de inscripción inválido, expirado o revocado.",
         )
 
+    eff_ip = req.ip_address or ""
+    if not eff_ip or eff_ip.startswith("127."):
+        fwd = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        real_ip = request.headers.get("x-real-ip", "").strip()
+        client_ip = request.client.host if request.client else ""
+        eff_ip = fwd or real_ip or client_ip or "10.0.0.1"
+
+    eff_host = (req.hostname or "").strip()
+    if not eff_host or eff_host.lower() in ("localhost", "localhost.localdomain"):
+        eff_host = f"remote-node-{(req.machine_id or 'host')[:8]}"
+
     enrolled = db.enroll_agent({
-        "hostname": req.hostname,
-        "ip_address": req.ip_address,
+        "hostname": eff_host,
+        "ip_address": eff_ip,
         "os_family": req.os_family,
         "os_name": req.os_name,
         "os_version": req.os_version,
@@ -297,7 +308,10 @@ mkdir -p "$INSTALL_DIR/cloudmove_agent"
 curl -sSL "$SERVER_URL/api/v1/agents/bundle.tar.gz" | tar -xz -C "$INSTALL_DIR/cloudmove_agent"
 
 echo "==> Registrando e inscribiendo el agente en $SERVER_URL..."
-HOSTNAME=$(hostname -f 2>/dev/null || hostname)
+HOST_NAME=$(cat /etc/hostname 2>/dev/null | tr -d ' \\n' || hostname -s 2>/dev/null || hostname)
+if [[ -z "$HOST_NAME" || "$HOST_NAME" == "localhost" ]]; then
+  HOST_NAME=$(hostname)
+fi
 MACHINE_ID=""
 if [[ -f /etc/machine-id ]]; then
   MACHINE_ID=$(cat /etc/machine-id | tr -d ' \\n')
@@ -307,10 +321,20 @@ fi
 
 ENROLL_PAYLOAD=$(python3 -c "
 import json, socket, platform, os
+def get_primary_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return '10.0.0.1'
+real_host = '$HOST_NAME'.strip() or platform.node() or socket.gethostname()
 data = {{
     'enrollment_token': '$ENROLLMENT_TOKEN',
-    'hostname': '$HOSTNAME',
-    'ip_address': socket.gethostbyname(socket.gethostname()) if hasattr(socket, 'gethostbyname') else '127.0.0.1',
+    'hostname': real_host,
+    'ip_address': get_primary_ip(),
     'os_family': 'linux',
     'os_name': platform.system(),
     'os_version': platform.version(),

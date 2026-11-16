@@ -10,6 +10,10 @@ import PlannedCloudStructureGraphModal, {
 } from "./PlannedCloudStructureGraphModal";
 import { apiFetch } from "../../utils/apiClient";
 import {
+  getSessionAgentToken,
+  saveSessionAgentToken,
+} from "../../utils/credentialVault";
+import {
   AwsPageHeader,
   AwsKeyValuePairs,
   AwsStatusIndicator,
@@ -55,13 +59,13 @@ const USE_CASE_CARDS = [
   {
     id: "app_source",
     title: "Caso 1 · Aplicación (GitHub / Código Fuente)",
-    subtitle: "Inspecciona repositorios GitHub o carpetas locales → contenedores gestionados y bases de datos en AWS o GCP.",
+    subtitle: "Inspecciona repositorios GitHub o carpetas locales hacia contenedores gestionados y bases de datos en Amazon Web Services (AWS).",
     badge: "Caso 1 · App",
   },
   {
     id: "vm_image",
     title: "Caso 2 · Imagen de SO / Máquina Virtual",
-    subtitle: "Captura el servidor mediante agente osquery o disco virtual (VMDK/QCOW2/RAW) → instancia EC2 o Compute Engine.",
+    subtitle: "Inscribe el agente remoto osquery o analiza un disco virtual (VMDK/QCOW2/RAW) hacia instancias Amazon EC2.",
     badge: "Caso 2 · VM / SO",
   },
 ];
@@ -88,18 +92,16 @@ function GithubToCloudTransformationSelector({
     return null;
   }
 
-  const pUpper = (targetProvider || catalog.target_provider || "aws").toUpperCase();
+  const pUpper = "AWS";
   const activeDecisions = decisions || catalog.applied_decisions || {};
 
   // Compute live preview of planned cloud resources based on activeDecisions
   const liveResourcesPreview = [
     {
       githubOrigin: "Red Base y Puertos Expuestos del Repositorio",
-      decisionLabel: `Red Virtual Aislada Multi-AZ en ${pUpper} (Automático)`,
+      decisionLabel: "Red Virtual Aislada Multi-AZ en AWS (Automático)",
       terraformResource:
-        pUpper === "GCP"
-          ? "google_compute_network.target_vpc + google_compute_subnetwork.primary_subnet"
-          : "aws_vpc.target_vpc + 4x aws_subnet (Públicas/Privadas Multi-AZ) + aws_internet_gateway.igw",
+        "aws_vpc.target_vpc + 4x aws_subnet (Públicas/Privadas Multi-AZ) + aws_internet_gateway.igw",
       reason: "Aísla los contenedores y bases de datos en una red privada segura en la nube.",
       costEstimate: "$0 USD/mes",
     },
@@ -204,13 +206,13 @@ function GithubToCloudTransformationSelector({
         targetProvider={pUpper}
       />
 
-      {/* Modal Verificador Gráfico de la Estructura AWS / GCP */}
+      {/* Modal Verificador Gráfico de la Estructura AWS */}
       <PlannedCloudStructureGraphModal
         isOpen={showGraphicalStructureModal}
         onClose={() => setShowGraphicalStructureModal(false)}
         catalog={catalog}
         decisions={activeDecisions}
-        targetProvider={targetProvider}
+        targetProvider="aws"
       />
 
       {/* Lista de elementos descubiertos en GitHub y sus opciones de transformación en la nube */}
@@ -426,7 +428,7 @@ function GithubToCloudTransformationSelector({
         })}
       </div>
 
-      {/* Tabla Resumen en Vivo de lo que se va a crear en AWS / GCP */}
+      {/* Tabla Resumen en Vivo de lo que se va a crear en AWS */}
       <div
         style={{
           backgroundColor: "#ffffff",
@@ -520,7 +522,7 @@ function VmOsToCloudTransformationMap({
 }) {
   if (!manifest) return null;
 
-  const pUpper = (targetProvider || "aws").toUpperCase();
+  const pUpper = "AWS";
   const slug = String(manifest.name || "live-os")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
@@ -542,34 +544,26 @@ function VmOsToCloudTransformationMap({
       whyTransformed: `Se adapta la red física a una VPC aislada Multi-AZ con DHCP y se abren exactamente los puertos de los servicios activos del SO.`,
       strategyLabel: `VPC Aislada Multi-AZ + Security Group con ${ports.slice(0, 20).length} Reglas TCP`,
       terraformResource:
-        pUpper === "GCP"
-          ? "google_compute_network.target_vpc + google_compute_subnetwork.primary_subnet + google_compute_firewall.allow_internal"
-          : "aws_vpc.target_vpc + 4x aws_subnet + aws_internet_gateway.igw + aws_route_table.public_rt + aws_security_group.app_sg",
+        "aws_vpc.target_vpc + 4x aws_subnet + aws_internet_gateway.igw + aws_route_table.public_rt + aws_security_group.app_sg",
       costEstimate: "$0 USD/mes",
     },
     {
       originTitle: `Sistema Operativo ${osInfo.distro || "Linux"} ${osInfo.version || ""} (Kernel ${osInfo.kernel || "amd64"})`,
       originDetail: `Arranque: ${manifest.boot_mode || "UEFI"} (${manifest.partition_scheme || "GPT"}) · ${manifest.resources?.vcpus || 4} vCPU · ${manifest.resources?.memory_mib || 8192} MiB RAM · ${pkgsCount} paquetes`,
-      whyTransformed: `Se aprovisiona una instancia cloud compatible con ${manifest.boot_mode || "UEFI"} y drivers ENA/NVMe o VirtIO.`,
+      whyTransformed: `Se aprovisiona una instancia cloud compatible con ${manifest.boot_mode || "UEFI"} y drivers ENA/NVMe.`,
       strategyLabel:
         consistencyStrategy === "continuous_replication"
-          ? `Replicación Continua por Bloques (${pUpper === "GCP" ? "GCP Migrate to VMs" : "AWS MGN"})`
-          : `Instancia VM en ${pUpper} + Snapshot Consistente Quiesced (sync)`,
-      terraformResource:
-        pUpper === "GCP"
-          ? `google_compute_instance.vm_${slug}`
-          : `aws_instance.vm_${slug} (AMI + root_block_device gp3 cifrado)`,
+          ? "Replicación Continua por Bloques (AWS MGN)"
+          : "Instancia VM en AWS + Snapshot Consistente Quiesced (sync)",
+      terraformResource: `aws_instance.vm_${slug} (AMI + root_block_device gp3 cifrado)`,
       costEstimate: "Free Tier / ~$8 USD/mes",
     },
     {
       originTitle: `Disco Físico / Virtual ${primaryDisk.device || "/dev/nvme0n1"} y Tabla ${manifest.partition_scheme || "GPT"}`,
       originDetail: `${disks.length} disco(s) (${manifest.total_provisioned_gib || 50} GiB prov. / ${manifest.total_used_gib || 15} GiB en uso) · Particiones: ${(primaryDisk.partitions || []).map((p) => `${p.mount_point || p.name} (${p.filesystem})`).join(", ")}`,
       whyTransformed: `Se estabilizan montajes en /etc/fstab por UUID y se aprovisiona almacenamiento de bloques persistente cifrado.`,
-      strategyLabel: `Volumen de Bloques Persistente Cifrado (${pUpper === "GCP" ? "Persistent Disk" : "Amazon EBS gp3"})`,
-      terraformResource:
-        pUpper === "GCP"
-          ? `google_compute_disk.disk_${slug}_1`
-          : `aws_ebs_volume.disk_${slug}_1 (size = ${primaryDisk.size_gib || manifest.total_provisioned_gib || 50} GiB, type = gp3, encrypted = true)`,
+      strategyLabel: "Volumen de Bloques Persistente Cifrado (Amazon EBS gp3)",
+      terraformResource: `aws_ebs_volume.disk_${slug}_1 (size = ${primaryDisk.size_gib || manifest.total_provisioned_gib || 50} GiB, type = gp3, encrypted = true)`,
       costEstimate: "~$0.08 USD/GiB-mes",
     },
     {
@@ -702,10 +696,14 @@ export default function MigrationOrchestratorWorkspace({
   const [validatingGithub, setValidatingGithub] = useState(false);
   const [showAdvancedGithub, setShowAdvancedGithub] = useState(false);
 
-  // Case 2 specific options
+  // Case 2 specific options & Sequential Agent Token Flow
   const [uc2SourceMode, setUc2SourceMode] = useState("live_capture"); // "file_path" | "live_capture"
   const [uc2OutputFormat, setUc2OutputFormat] = useState("QCOW2");
-  const [uc2TargetHost, setUc2TargetHost] = useState("local_host");
+  const [uc2TargetHost, setUc2TargetHost] = useState("remote_agent");
+  const [agentTokenData, setAgentTokenData] = useState(() => getSessionAgentToken());
+  const [generatingAgentToken, setGeneratingAgentToken] = useState(false);
+  const [enrolledAgents, setEnrolledAgents] = useState([]);
+  const [copiedAgentCmd, setCopiedAgentCmd] = useState("");
   const [imagePath, setImagePath] = useState("");
   const [imageFormatOverride, setImageFormatOverride] = useState("VMDK");
   const [consistencyStrategy, setConsistencyStrategy] = useState("quiesced_snapshot"); // "quiesced_snapshot" | "continuous_replication" | "demo_live_ram"
@@ -912,9 +910,63 @@ export default function MigrationOrchestratorWorkspace({
     }
   };
 
+  const fetchEnrolledAgents = useCallback(async () => {
+    try {
+      const res = await apiFetch("/api/v1/agents");
+      if (res.ok) {
+        const data = await res.json();
+        const remoteList = (data.agents || []).filter((a) => {
+          const h = String(a.hostname || "").toLowerCase();
+          const ip = String(a.ip_address || "");
+          if (
+            h === "cloudmove-server" ||
+            h === "localhost" ||
+            /^[0-9a-f]{12}$/i.test(h) ||
+            ip === "100.50.88.231"
+          ) {
+            return false;
+          }
+          return true;
+        });
+        setEnrolledAgents(remoteList);
+      }
+    } catch {
+      // Ignore transient error
+    }
+  }, []);
+
+  const handleGenerateAgentToken = async () => {
+    setGeneratingAgentToken(true);
+    setErrorMsg("");
+    try {
+      const res = await apiFetch("/api/v1/agents/enrollment-tokens", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          description: "Token de Agente Remoto — Caso 2 (Orquestador AWS)",
+          ttl_hours: 24,
+          max_uses: 10,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "No se pudo generar el token del agente.");
+      const saved = saveSessionAgentToken(data);
+      setAgentTokenData(saved || data);
+      await fetchEnrolledAgents();
+      setStatusBanner(
+        "Paso 1 completado: Token de agente remoto generado y almacenado de forma segura en la sesión del navegador. Ahora ejecuta el comando de instalación en el equipo origen (Paso 2)."
+      );
+    } catch (err) {
+      setErrorMsg(err.message);
+    } finally {
+      setGeneratingAgentToken(false);
+    }
+  };
+
   const handleQueryLiveDevices = useCallback(async (forced = false) => {
     setQueryingDevices(true);
     try {
+      await fetchEnrolledAgents();
       const endpoint = forced
         ? "/api/v1/migration/use-case-2/probe-devices"
         : "/api/v1/migration/use-case-2/devices";
@@ -931,7 +983,7 @@ export default function MigrationOrchestratorWorkspace({
     } finally {
       setQueryingDevices(false);
     }
-  }, []);
+  }, [fetchEnrolledAgents]);
 
   const handleRemediateBlocker = async (migrationId, action) => {
     setLoading(true);
@@ -1264,10 +1316,10 @@ export default function MigrationOrchestratorWorkspace({
   };
 
   useEffect(() => {
-    if (newUseCase === "vm_image" && !hostDevicesData && !queryingDevices) {
-      handleQueryLiveDevices(false);
+    if (newUseCase === "vm_image") {
+      fetchEnrolledAgents();
     }
-  }, [newUseCase, hostDevicesData, queryingDevices, handleQueryLiveDevices]);
+  }, [newUseCase, fetchEnrolledAgents]);
 
   useEffect(() => {
     if (selectedJob?.use_case === "app_source" || selectedJob?.use_case === "vm_image") {
@@ -1333,7 +1385,7 @@ export default function MigrationOrchestratorWorkspace({
       {/* Cabecera de Recurso AWS Cloudscape */}
       <AwsPageHeader
         title="Orquestador de migraciones"
-        subtitle="Crea un plan, revísalo y ejecútalo paso a paso hacia AWS o GCP."
+        subtitle="Crea un plan, revísalo y ejecútalo paso a paso hacia Amazon Web Services (AWS)."
         badges={[
           ...(persistenceStatus
             ? [
@@ -1418,7 +1470,7 @@ export default function MigrationOrchestratorWorkspace({
                 Remediación Inmediata del Bloqueador Técnico de Hipervisor:
               </div>
               <p style={{ margin: "0 0 10px 0", fontSize: 13.5, color: "#374151", lineHeight: 1.45 }}>
-                La migración de imágenes hacia AWS VM Import o GCP Image Import transfiere el estado persistente en disco tras un snapshot consistente (quiesce + sync), NO la memoria RAM volátil ni los sockets TCP abiertos. Selecciona una acción para avanzar a <strong>PLAN_READY</strong>:
+                La migración de imágenes hacia AWS VM Import transfiere el estado persistente en disco tras un snapshot consistente (quiesce + sync), NO la memoria RAM volátil ni los sockets TCP abiertos. Selecciona una acción para avanzar a <strong>PLAN_READY</strong>:
               </p>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                 <button
@@ -1435,7 +1487,7 @@ export default function MigrationOrchestratorWorkspace({
                   onClick={() => handleRemediateBlocker(selectedJob.migration_id, "switch_continuous_replication")}
                   disabled={loading}
                 >
-                  Cambiar a Replicación Continua por Bloques (AWS MGN / GCP)
+                  Cambiar a Replicación Continua por Bloques (AWS MGN)
                 </button>
               </div>
             </div>
@@ -1525,16 +1577,15 @@ export default function MigrationOrchestratorWorkspace({
 
             <div className="cm-field">
               <label htmlFor="mig-provider-select" className="cm-label">
-                Proveedor Cloud Destino (ADR-001)
+                Proveedor Cloud Destino
               </label>
               <select
                 id="mig-provider-select"
                 className="cm-select"
-                value={newProvider}
-                onChange={(e) => setNewProvider(e.target.value)}
+                value="aws"
+                onChange={() => setNewProvider("aws")}
               >
-                <option value="aws">Amazon Web Services (AWS — EC2 / ECS / RDS / MGN)</option>
-                <option value="gcp">Google Cloud Platform (GCP — GCE / Cloud Run / Cloud SQL)</option>
+                <option value="aws">Amazon Web Services (AWS — EC2 / ECS / RDS / MGN · us-east-1)</option>
               </select>
             </div>
           </div>
@@ -1748,10 +1799,10 @@ export default function MigrationOrchestratorWorkspace({
                         style={{ backgroundColor: "#ffffff" }}
                       >
                         <option value="container">
-                          Contenedor Administrado ({newProvider === "gcp" ? "GCP Cloud Run v2" : "AWS ECS Fargate"})
+                          Contenedor Administrado (AWS ECS Fargate)
                         </option>
                         <option value="vm_rehost">
-                          Rehost en VM ({newProvider === "gcp" ? "GCP Compute Engine" : "AWS EC2"})
+                          Rehost en VM (AWS EC2)
                         </option>
                       </select>
                       <span className="cm-hint">Determina la plantilla IaC generada para el proveedor seleccionado.</span>
@@ -1826,10 +1877,10 @@ export default function MigrationOrchestratorWorkspace({
                       onChange={(e) => setDeploymentMode(e.target.value)}
                     >
                       <option value="container">
-                        Contenedor Administrado ({newProvider === "gcp" ? "GCP Cloud Run v2" : "AWS ECS Fargate"})
+                        Contenedor Administrado (AWS ECS Fargate)
                       </option>
                       <option value="vm_rehost">
-                        Rehost en VM ({newProvider === "gcp" ? "GCP Compute Engine" : "AWS EC2"})
+                        Rehost en VM (AWS EC2)
                       </option>
                     </select>
                   </div>
@@ -1926,7 +1977,103 @@ export default function MigrationOrchestratorWorkspace({
 
               {uc2SourceMode === "live_capture" ? (
                 <div style={{ marginBottom: 14 }}>
-                  {/* Panel de Consulta en Vivo de Dispositivos de Almacenamiento */}
+                  {/* PASO 1 OBLIGATORIO: Generar Token de Inscripción del Agente Remoto */}
+                  <div
+                    style={{
+                      padding: "14px 16px",
+                      backgroundColor: "#ffffff",
+                      border: agentTokenData?.token || enrolledAgents.length > 0 ? "1.5px solid #0972D3" : "2px solid #f59e0b",
+                      borderRadius: 6,
+                      marginBottom: 12,
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span className="cm-badge" style={{ backgroundColor: "#0972D3", color: "#ffffff", fontWeight: 700, fontSize: 12 }}>
+                            PASO 1 DE 3 · OBLIGATORIO
+                          </span>
+                          <strong style={{ fontSize: 14, color: "#000716" }}>
+                            Generar Token de Inscripción del Agente Remoto
+                          </strong>
+                          {agentTokenData?.token ? (
+                            <span className="cm-badge observed">
+                              Token Activo en Sesión ({agentTokenData.fingerprint || "sha256"})
+                            </span>
+                          ) : enrolledAgents.length > 0 ? (
+                            <span className="cm-badge observed">
+                              {enrolledAgents.length} Agente(s) Remoto(s) Conectado(s)
+                            </span>
+                          ) : (
+                            <span className="cm-badge warning">
+                              Pendiente — Genera el token primero
+                            </span>
+                          )}
+                        </div>
+                        <p style={{ margin: "4px 0 0 0", fontSize: 13, color: "#414d5c" }}>
+                          El flujo del Caso 2 es estrictamente secuencial: genera primero el token de inscripción (<code>cmat_...</code>) para vincular el servidor o máquina virtual remota antes de ejecutar la captura y migración.
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        className="cm-btn primary sm"
+                        onClick={handleGenerateAgentToken}
+                        disabled={generatingAgentToken}
+                      >
+                        {generatingAgentToken
+                          ? "Generando Token..."
+                          : agentTokenData?.token
+                          ? "Regenerar Token del Agente"
+                          : "Paso 1: Generar Token del Agente Remoto"}
+                      </button>
+                    </div>
+
+                    {agentTokenData?.token && (
+                      <div
+                        style={{
+                          marginTop: 10,
+                          padding: "10px 12px",
+                          backgroundColor: "#f8fafc",
+                          border: "1px solid #cbd5e1",
+                          borderRadius: 4,
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
+                          <span style={{ fontSize: 12.5, fontWeight: 700, color: "#0f172a" }}>
+                            Token generado: <code>{agentTokenData.token}</code>
+                          </span>
+                          <button
+                            type="button"
+                            className="cm-btn sm secondary"
+                            onClick={() => {
+                              const installCmd = `curl -fsSL "${window.location.origin}/api/v1/agents/install.sh?token=${agentTokenData.token}" | sudo bash`;
+                              navigator.clipboard.writeText(installCmd);
+                              setCopiedAgentCmd("install");
+                              setTimeout(() => setCopiedAgentCmd(""), 2500);
+                            }}
+                          >
+                            {copiedAgentCmd === "install" ? "Comando Copiado" : "Copiar Comando de Instalación Linux/macOS"}
+                          </button>
+                        </div>
+                        <pre
+                          style={{
+                            margin: 0,
+                            padding: "8px 10px",
+                            backgroundColor: "#0f172a",
+                            color: "#e2e8f0",
+                            borderRadius: 4,
+                            fontSize: 12,
+                            overflowX: "auto",
+                          }}
+                        >
+                          {`curl -fsSL "${typeof window !== "undefined" ? window.location.origin : ""}/api/v1/agents/install.sh?token=${agentTokenData.token}" | sudo bash`}
+                        </pre>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* PASO 2: Panel de Consulta en Vivo de Dispositivos del Agente Remoto */}
                   <div
                     style={{
                       padding: "14px 16px",
@@ -1934,23 +2081,25 @@ export default function MigrationOrchestratorWorkspace({
                       border: "1px solid #86efac",
                       borderRadius: 8,
                       marginBottom: 14,
+                      opacity: agentTokenData?.token || enrolledAgents.length > 0 ? 1 : 0.55,
+                      pointerEvents: agentTokenData?.token || enrolledAgents.length > 0 ? "auto" : "none",
                     }}
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 10 }}>
                       <div>
                         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          <span className="cm-badge" style={{ backgroundColor: "#14532d", color: "#ffffff", fontSize: 12.5, fontWeight: 700 }}>DISCOS REALES</span>
+                          <span className="cm-badge" style={{ backgroundColor: "#14532d", color: "#ffffff", fontSize: 12.5, fontWeight: 700 }}>PASO 2 DE 3 · TELEMETRÍA REMOTA</span>
                           <span style={{ fontWeight: 700, fontSize: 13.5, color: "#14532d" }}>
-                            Dispositivos y Particiones del Host Detectados en Vivo
+                            Dispositivos y Particiones del Equipo Origen Remoto
                           </span>
                           {hostDevicesData?.queried_at && (
                             <span className="cm-badge observed" style={{ fontSize: 12.5 }}>
-                              Consulta Ejecutada: {new Date(hostDevicesData.queried_at).toLocaleTimeString()} · Sin Datos Precargados
+                              Consulta Ejecutada: {new Date(hostDevicesData.queried_at).toLocaleTimeString()}
                             </span>
                           )}
                         </div>
                         <p style={{ margin: "3px 0 0 0", fontSize: 13.5, color: "#475569" }}>
-                          CloudMove ejecuta <code>lsblk</code> y consultas directas al subsistema de archivos para relevar el disco físico y particiones donde corre la aplicación.
+                          Una vez ejecutado el agente en el servidor origen, consulta su topología de discos y particiones remotas (el servidor donde se ejecuta CloudMove permanece oculto por seguridad).
                         </p>
                       </div>
 
@@ -1959,14 +2108,14 @@ export default function MigrationOrchestratorWorkspace({
                           type="button"
                           className="cm-btn secondary sm"
                           onClick={() => handleQueryLiveDevices(true)}
-                          disabled={queryingDevices}
+                          disabled={queryingDevices || !(agentTokenData?.token || enrolledAgents.length > 0)}
                           style={{ whiteSpace: "nowrap" }}
                         >
                           {queryingDevices
-                            ? "Consultando lsblk..."
+                            ? "Consultando Agente Remoto..."
                             : hostDevicesData
-                            ? "Re-consultar Dispositivos"
-                            : "Consultar Dispositivos del Equipo en Vivo"}
+                            ? "Re-consultar Agente Remoto"
+                            : "Paso 2: Consultar Dispositivos del Agente Remoto"}
                         </button>
                         {hostDevicesData && (
                           <button
@@ -1977,7 +2126,7 @@ export default function MigrationOrchestratorWorkspace({
                               setSelectedStorageDevice("");
                             }}
                             style={{ fontSize: 13, padding: "4px 8px" }}
-                            title="Limpiar datos detectados del host"
+                            title="Limpiar datos detectados del agente"
                           >
                             Limpiar Consulta
                           </button>
@@ -1985,7 +2134,7 @@ export default function MigrationOrchestratorWorkspace({
                       </div>
                     </div>
 
-                    {hostDevicesData?.host && (
+                    {hostDevicesData?.host && hostDevicesData.host.hostname && !["cloudmove-server", "localhost", "127.0.0.1", "100.50.88.231"].includes(String(hostDevicesData.host.hostname).toLowerCase()) && !/^[0-9a-f]{12}$/i.test(String(hostDevicesData.host.hostname)) && (
                       <div
                         style={{
                           backgroundColor: "#f8fafc",
@@ -2000,11 +2149,11 @@ export default function MigrationOrchestratorWorkspace({
                           gap: 16,
                         }}
                       >
-                        <div>Host: <strong><code>{hostDevicesData.host.hostname}</code></strong></div>
+                        <div>Agente Remoto: <strong><code>{hostDevicesData.host.hostname}</code></strong></div>
                         <div>Distribución: <strong>{hostDevicesData.host.distro}</strong> ({hostDevicesData.host.version})</div>
                         <div>Kernel: <strong><code>{hostDevicesData.host.kernel}</code></strong></div>
                         <div>Arranque: <strong>{hostDevicesData.host.boot_mode} ({hostDevicesData.host.partition_scheme})</strong></div>
-                        <div>Memoria RAM: <strong>{hostDevicesData.host.ram_total_gib} GiB</strong> (Libre: {hostDevicesData.host.ram_free_gib} GiB)</div>
+                        <div>Memoria RAM: <strong>{hostDevicesData.host.ram_total_gib} GiB</strong></div>
                       </div>
                     )}
 
@@ -2133,7 +2282,7 @@ export default function MigrationOrchestratorWorkspace({
                       onChange={(e) => setUc2OutputFormat(e.target.value)}
                       style={{ backgroundColor: "#ffffff" }}
                     >
-                      <option value="QCOW2">QCOW2 (Recomendado para KVM/GCP y Staging Optimizado)</option>
+                      <option value="QCOW2">QCOW2 (Recomendado para KVM y Staging Optimizado en AWS)</option>
                       <option value="RAW">RAW (Recomendado para AWS VM Import / EBS)</option>
                       <option value="VMDK">VMDK (Compatible VMware)</option>
                     </select>
@@ -2230,7 +2379,7 @@ export default function MigrationOrchestratorWorkspace({
                       style={{ marginTop: 2 }}
                     />
                     <div>
-                      <strong>Replicación Continua a Nivel de Bloques (AWS MGN / GCP Migrate to VMs)</strong>
+                      <strong>Replicación Continua a Nivel de Bloques (AWS MGN)</strong>
                       <div style={{ color: "#475569", fontSize: 13.5, marginTop: 2 }}>
                         Replicación continua de cambios a nivel de bloque en segundo plano mientras el servidor opera, con cutover final de mínimo downtime.
                       </div>
@@ -2258,7 +2407,13 @@ export default function MigrationOrchestratorWorkspace({
             </div>
           )}
 
-          {/* Botones de Acción del Asistente */}
+          {/* Botones de Acción del Asistente (PASO 3 en Caso 2) */}
+          {newUseCase === "vm_image" && uc2SourceMode === "live_capture" && !(agentTokenData?.token || enrolledAgents.length > 0) && (
+            <div className="cm-alert warning" style={{ marginTop: 12, marginBottom: 4 }}>
+              <strong>Paso 1 Requerido:</strong> Genera primero el token del agente remoto arriba (Paso 1) para desbloquear la captura de SO y la creación del plan de migración.
+            </div>
+          )}
+
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14, alignItems: "center" }}>
             {newUseCase === "app_source" && (
               <button
@@ -2276,10 +2431,13 @@ export default function MigrationOrchestratorWorkspace({
                 type="button"
                 className="cm-btn"
                 onClick={handleInspectUseCase2}
-                disabled={loading}
+                disabled={
+                  loading ||
+                  (uc2SourceMode === "live_capture" && !(agentTokenData?.token || enrolledAgents.length > 0))
+                }
               >
                 {uc2SourceMode === "live_capture"
-                  ? "Paso Previo: Capturar SO en Vivo y Evaluar Viabilidad Cloud"
+                  ? "Paso 3A: Capturar SO del Agente Remoto y Evaluar Viabilidad AWS"
                   : "Paso Previo: Verificar Cabecera Binaria y SHA-256 (`qemu-img`)"}
               </button>
             )}
@@ -2288,11 +2446,18 @@ export default function MigrationOrchestratorWorkspace({
               type="button"
               className="cm-btn primary"
               onClick={handleCreateMigration}
-              disabled={loading}
+              disabled={
+                loading ||
+                (newUseCase === "vm_image" &&
+                  uc2SourceMode === "live_capture" &&
+                  !(agentTokenData?.token || enrolledAgents.length > 0))
+              }
             >
               {loading
                 ? "Generando evaluación y plan..."
-                : `Generar Plan de Migración Completo hacia ${newProvider.toUpperCase()}`}
+                : newUseCase === "vm_image" && uc2SourceMode === "live_capture"
+                ? "Paso 3B: Generar Plan de Migración Completo hacia AWS"
+                : "Generar Plan de Migración Completo hacia AWS"}
             </button>
           </div>
         </div>
@@ -2601,8 +2766,8 @@ export default function MigrationOrchestratorWorkspace({
                     <span className={`cm-badge ${opBadge.badgeClass}`}>
                       {opBadge.label}
                     </span>
-                    <span className={`cm-badge ${currentJob.target_provider === "gcp" ? "gcp" : "aws"}`}>
-                      {currentJob.target_provider?.toUpperCase()}
+                    <span className="cm-badge aws">
+                      AWS
                     </span>
                   </div>
                   <div className="cm-hint" style={{ marginTop: 6 }}>
@@ -2902,7 +3067,7 @@ export default function MigrationOrchestratorWorkspace({
                               Resolución / Remediación Operativa de la Arquitectura:
                             </div>
                             <p style={{ margin: "0 0 10px 0", fontSize: 13.5, color: "#374151", lineHeight: 1.45 }}>
-                              La migración hacia AWS VM Import o GCP Image Import traslada el estado persistente en disco (particiones, datos, configuración de red y servicios en /etc). La memoria RAM volátil y sockets TCP abiertos no son transferibles entre hipervisores heterogéneos sin la misma capa de virtualización y red L2 extendida. Aplica un snapshot consistente con vaciado de búferes vía <code>sync()</code> o activa la replicación continua:
+                              La migración hacia AWS VM Import traslada el estado persistente en disco (particiones, datos, configuración de red y servicios en /etc). La memoria RAM volátil y sockets TCP abiertos no son transferibles entre hipervisores heterogéneos sin la misma capa de virtualización y red L2 extendida. Aplica un snapshot consistente con vaciado de búferes vía <code>sync()</code> o activa la replicación continua:
                             </p>
                             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                               <button
@@ -2919,7 +3084,7 @@ export default function MigrationOrchestratorWorkspace({
                                 onClick={() => handleRemediateBlocker(currentJob.migration_id, "switch_continuous_replication")}
                                 disabled={loading}
                               >
-                                Activar Replicación Continua por Bloques (AWS MGN / GCP Migrate to VMs)
+                                Activar Replicación Continua por Bloques (AWS MGN)
                               </button>
                             </div>
                           </div>
@@ -3573,7 +3738,7 @@ export default function MigrationOrchestratorWorkspace({
                   </div>
                 </div>
                 <p className="cm-hint" style={{ marginTop: 0, marginBottom: 12 }}>
-                  CloudMove distingue explícitamente qué elementos del sistema operativo se preservan bit a bit en disco, cuáles se adaptan al hipervisor destino (AWS Nitro / GCP Shielded VM) y cuáles no son transferibles entre nubes (como la memoria RAM volátil en vivo).
+                  CloudMove distingue explícitamente qué elementos del sistema operativo se preservan bit a bit en disco, cuáles se adaptan al hipervisor destino (AWS Nitro) y cuáles no son transferibles entre nubes (como la memoria RAM volátil en vivo).
                 </p>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 10 }}>
                   {Object.values(fidelityDims)
@@ -4020,14 +4185,13 @@ unzip -o bundle.zip`}
 
                       <div className="cm-step-card">
                         <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
-                          Paso 3: Compilación y Publicación del Contenedor ({currentJob.target_provider === "aws" ? "Amazon ECR" : "Google Artifact Registry"})
+                          Paso 3: Compilación y Publicación del Contenedor (Amazon ECR)
                         </div>
                         <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
-                          Compila la imagen Docker etiquetada con el commit analizado (<code>{appShortSha}</code>) y súbela al registro de contenedores de la nube:
+                          Compila la imagen Docker etiquetada con el commit analizado (<code>{appShortSha}</code>) y súbela al registro de contenedores de AWS:
                         </p>
                         <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
-{currentJob.target_provider === "aws"
-  ? `# 1. Autenticar Docker con Amazon ECR:
+{`# 1. Autenticar Docker con Amazon ECR:
 AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 aws ecr create-repository --repository-name ${appSlug} --region us-east-1 || true
 aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com
@@ -4037,26 +4201,16 @@ docker build -t ${appSlug}:${appShortSha} .
 docker tag ${appSlug}:${appShortSha} $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/${appSlug}:${appShortSha}
 docker tag ${appSlug}:${appShortSha} $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/${appSlug}:latest
 docker push $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/${appSlug}:${appShortSha}
-docker push $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/${appSlug}:latest`
-  : `# 1. Autenticar con Google Artifact Registry:
-GCP_PROJECT=$(gcloud config get-value project)
-gcloud artifacts repositories create ${appSlug}-repo --repository-format=docker --location=us-central1 || true
-gcloud auth configure-docker us-central1-docker.pkg.dev
-
-# 2. Compilar y publicar imagen:
-docker build -t us-central1-docker.pkg.dev/$GCP_PROJECT/${appSlug}-repo/${appSlug}:${appShortSha} .
-docker tag us-central1-docker.pkg.dev/$GCP_PROJECT/${appSlug}-repo/${appSlug}:${appShortSha} us-central1-docker.pkg.dev/$GCP_PROJECT/${appSlug}-repo/${appSlug}:latest
-docker push us-central1-docker.pkg.dev/$GCP_PROJECT/${appSlug}-repo/${appSlug}:${appShortSha}
-docker push us-central1-docker.pkg.dev/$GCP_PROJECT/${appSlug}-repo/${appSlug}:latest`}
+docker push $AWS_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/${appSlug}:latest`}
                         </pre>
                       </div>
 
                       <div className="cm-step-card">
                         <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
-                          Paso 4: Aprovisionamiento de Infraestructura con Terraform ({currentJob.target_provider?.toUpperCase()})
+                          Paso 4: Aprovisionamiento de Infraestructura con Terraform (AWS)
                         </div>
                         <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
-                          Despliega la red VPC, subredes, balanceador ALB, clúster {currentJob.target_provider === "aws" ? "ECS Fargate" : "Cloud Run"} y base de datos {appDbEngine} {appDbVersion}:
+                          Despliega la red VPC, subredes, balanceador ALB, clúster ECS Fargate y base de datos {appDbEngine} {appDbVersion}:
                         </p>
                         <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
 {`terraform init
@@ -4067,25 +4221,20 @@ terraform apply -auto-approve`}
 
                       <div className="cm-step-card">
                         <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
-                          Paso 5: Despliegue Efectivo de la Aplicación en la Nube
+                          Paso 5: Despliegue Efectivo de la Aplicación en AWS
                         </div>
                         <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
-                          Fuerza la ejecución del contenedor en el servicio de cómputo en la nube configurando el comando de arranque (<code>{appPrimaryStartCmd}</code>):
+                          Fuerza la ejecución del contenedor en el servicio de cómputo en AWS configurando el comando de arranque (<code>{appPrimaryStartCmd}</code>):
                         </p>
                         <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
-{currentJob.target_provider === "aws"
-  ? `aws ecs update-service \\
+{`aws ecs update-service \\
     --cluster $(terraform output -raw ecs_cluster_name 2>/dev/null || echo "${appSlug}-cluster") \\
     --service $(terraform output -raw ecs_service_name 2>/dev/null || echo "${appSlug}-service") \\
     --force-new-deployment --region us-east-1
 
 aws ecs wait services-stable \\
     --cluster $(terraform output -raw ecs_cluster_name 2>/dev/null || echo "${appSlug}-cluster") \\
-    --services $(terraform output -raw ecs_service_name 2>/dev/null || echo "${appSlug}-service") --region us-east-1`
-  : `GCP_PROJECT=$(gcloud config get-value project)
-gcloud run deploy ${appSlug} \\
-    --image="us-central1-docker.pkg.dev/$GCP_PROJECT/${appSlug}-repo/${appSlug}:${appShortSha}" \\
-    --platform=managed --region=us-central1 --allow-unauthenticated --port=${appPrimaryPort}`}
+    --services $(terraform output -raw ecs_service_name 2>/dev/null || echo "${appSlug}-service") --region us-east-1`}
                         </pre>
                       </div>
 
@@ -4094,11 +4243,10 @@ gcloud run deploy ${appSlug} \\
                           Paso 6: Configuración de Variables de Entorno y Migraciones ({appDbEngine})
                         </div>
                         <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
-                          Configura las variables de entorno detectadas y ejecuta las migraciones de base de datos en la nube:
+                          Configura las variables de entorno detectadas y ejecuta las migraciones de base de datos en AWS:
                         </p>
                         <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
-{currentJob.target_provider === "aws"
-  ? `# 1. Registrar secretos en AWS Secrets Manager:
+{`# 1. Registrar secretos en AWS Secrets Manager:
 aws secretsmanager create-secret --name "${appSlug}/production" \\
     --secret-string "{\\"DATABASE_URL\\":\\"$(terraform output -raw db_endpoint 2>/dev/null)\\",\\"PORT\\":\\"${appPrimaryPort}\\",\\"ALLOWED_ORIGINS\\":\\"*\\"}" \\
     --region us-east-1 || true
@@ -4106,13 +4254,7 @@ aws secretsmanager create-secret --name "${appSlug}/production" \\
 # 2. Ejecutar migraciones en ECS Fargate:
 aws ecs run-task --cluster "${appSlug}-cluster" --task-definition "${appSlug}-task" --launch-type FARGATE \\
     --network-configuration "awsvpcConfiguration={{subnets=[$(terraform output -raw private_subnet_id 2>/dev/null)],securityGroups=[$(terraform output -raw ecs_security_group_id 2>/dev/null)],assignPublicIp=ENABLED}}" \\
-    --overrides '{"containerOverrides": [{"name": "${appSlug}", "command": ["sh", "-c", "${migrateCmd}"]}]}'`
-  : `# 1. Registrar secretos en Google Secret Manager:
-gcloud secrets create ${appSlug}-env --data-file=.env.production || true
-
-# 2. Ejecutar migraciones en Cloud Run Job:
-gcloud run jobs create ${appSlug}-migrate --image="us-central1-docker.pkg.dev/$GCP_PROJECT/${appSlug}-repo/${appSlug}:${appShortSha}" --region=us-central1 --command="sh,-c,${migrateCmd}" || true
-gcloud run jobs execute ${appSlug}-migrate --region=us-central1 --wait`}
+    --overrides '{"containerOverrides": [{"name": "${appSlug}", "command": ["sh", "-c", "${migrateCmd}"]}]}'`}
                         </pre>
                       </div>
 
@@ -4234,46 +4376,30 @@ curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/${currentJob.migration_id}/sys
                           Sube la imagen a la nube utilizando streaming directo sin saturar el almacenamiento local o sube la imagen descargada:
                         </p>
                         <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
-{currentJob.target_provider === "aws"
-  ? `# Opción A: Streaming directo bit a bit a S3 en caliente (Recomendado):
+{`# Opción A: Streaming directo bit a bit a Amazon S3 en caliente (Recomendado):
 sudo chmod +x create_full_raw_disk_clone.sh
 sudo ./create_full_raw_disk_clone.sh s3
 
 # Opción B: Subir la imagen virtual descargada:
 aws s3 mb "s3://cloudmove-vm-import-${vmSlug}-us-east-1" || true
-aws s3 cp *.qcow2 "s3://cloudmove-vm-import-${vmSlug}-us-east-1/"`
-  : `# Opción A: Streaming directo bit a bit a Google Cloud Storage:
-sudo chmod +x create_full_raw_disk_clone.sh
-sudo ./create_full_raw_disk_clone.sh gcs
-
-# Opción B: Subir la imagen virtual descargada:
-gcloud storage cp *.qcow2 "gs://cloudmove-vm-images-$(gcloud config get-value project)/"`}
+aws s3 cp *.qcow2 "s3://cloudmove-vm-import-${vmSlug}-us-east-1/"`}
                         </pre>
                       </div>
 
                       <div className="cm-step-card">
                         <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
-                          Paso 3: Registro e Importación de la Imagen en el Hipervisor Cloud (Creación de AMI / Custom Image)
+                          Paso 3: Registro e Importación de la Imagen en Amazon EC2 (Creación de AMI)
                         </div>
                         <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
-                          Importa el disco en el hipervisor cloud respetando el modo de arranque detectado (<code>{vmBootMode}</code>):
+                          Importa el disco en Amazon EC2 respetando el modo de arranque detectado (<code>{vmBootMode}</code>):
                         </p>
                         <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
-{currentJob.target_provider === "aws"
-  ? `# Ejecutar importación de AMI en AWS con modo de arranque ${vmBootMode}:
+{`# Ejecutar importación de AMI en AWS con modo de arranque ${vmBootMode}:
 aws ec2 import-image --description "Migrated ${vmDistro}" --disk-containers file:///tmp/containers.json --boot-mode ${vmBootMode} --region us-east-1
 
 # O ejecuta el script automatizado que realiza el proceso completo:
 chmod +x deploy_to_aws.sh
-./deploy_to_aws.sh`
-  : `# Importar imagen en Google Compute Engine con soporte UEFI y VirtIO:
-gcloud compute images import ${vmSlug}-image \\
-    --source-file="gs://cloudmove-vm-images-$(gcloud config get-value project)/${vmSlug}.qcow2" \\
-    --guest-os-features=UEFI_COMPATIBLE,GVNIC,VIRTIO_SCSI_MULTIQUEUE
-
-# O ejecuta el script automatizado:
-chmod +x deploy_to_gcp.sh
-./deploy_to_gcp.sh`}
+./deploy_to_aws.sh`}
                         </pre>
                       </div>
 
@@ -4282,16 +4408,12 @@ chmod +x deploy_to_gcp.sh
                           Paso 4: Montaje y Aprovisionamiento de la VM con Terraform
                         </div>
                         <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
-                          Con el identificador de la AMI o Imagen, provisiona la instancia de cómputo, VPC, subredes e IP pública:
+                          Con el identificador de la AMI, provisiona la instancia de cómputo EC2, VPC, subredes e IP pública:
                         </p>
                         <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
-{currentJob.target_provider === "aws"
-  ? `terraform init
+{`terraform init
 terraform plan -var="ami_id=$AMI_ID"
-terraform apply -auto-approve -var="ami_id=$AMI_ID"`
-  : `terraform init
-terraform plan -var="custom_image_name=${vmSlug}-image"
-terraform apply -auto-approve -var="custom_image_name=${vmSlug}-image"`}
+terraform apply -auto-approve -var="ami_id=$AMI_ID"`}
                         </pre>
                       </div>
 

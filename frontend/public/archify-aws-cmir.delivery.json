@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "92aebcdb-4be6-41b8-88c1-46ac92b33e0e",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/.archify/architecture-aws-cmir-20261115/candidate.json",
+  "output": "/home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/public/archify-aws-cmir.html",
+  "specification": {
+    "sha256": "9c05a7b4238025ac787f339810115a4f035b71d189c8cf029bc2bf8e3cc91ed1",
+    "bytes": 5042
+  },
+  "artifact": {
+    "sha256": "ae7c1fe05a4163a593f943ac6ac4635607bb322bd2b2f6336efb4a6717f1e37d",
+    "bytes": 826712
+  }
+}

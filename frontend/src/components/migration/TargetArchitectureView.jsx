@@ -1,39 +1,41 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
+import ArchifyDiagramRenderer from "../architecture/ArchifyDiagramRenderer";
+import {
+  AwsContainer,
+  AwsKeyValuePairs,
+  AwsTabs,
+  AwsStatusIndicator,
+} from "../cloudscape/AwsPrimitives";
+
+function sanitizeWorkloadName(rawName) {
+  const s = String(rawName || "").trim();
+  if (!s) return "Carga de Trabajo AWS";
+  // Mask any underlying Docker container hex ID or internal host reference
+  if (/^[0-9a-f]{12}(-live-os)?$/i.test(s) || s.includes("6dbda7b91dcd") || s.includes("60b8ba9903a7") || s.includes("cloudmove-server")) {
+    return "Servidor Objetivo (SO / VM)";
+  }
+  return s;
+}
 
 export default function TargetArchitectureView({ job }) {
   const [activeViewTab, setActiveViewTab] = useState("diagram"); // "diagram" | "tf_inventory" | "flows"
 
-  if (!job) {
-    return (
-      <div className="cm-card" style={{ padding: 40, textAlign: "center" }}>
-        <div style={{ fontSize: 44, marginBottom: 12 }}></div>
-        <h3 style={{ fontSize: 18, color: "#0f172a", marginBottom: 8, fontWeight: 700 }}>
-          Sin arquitectura objetivo activa
-        </h3>
-        <p style={{ fontSize: 14, color: "#64748b", maxWidth: 580, margin: "0 auto 16px auto", lineHeight: 1.6 }}>
-          Los diagramas de arquitectura objetivo no son fijos ni se muestran por defecto. Se generan directamente a partir del código de infraestructura <strong>Terraform (HCL)</strong> sintetizado en la sección <strong>GitHub → Nube</strong> y se adaptan a las decisiones de migración seleccionadas.
-        </p>
-        <span className="cm-badge info" style={{ padding: "6px 14px", fontSize: 13 }}>
-          Selecciona o inicia un plan de migración para generar el código Terraform y visualizar la arquitectura
-        </span>
-      </div>
-    );
-  }
-
-  const provider = (job?.target_provider || "aws").toUpperCase();
   const isVmCase = job?.use_case === "vm_image";
   const srcEnv = job?.source_environment || {};
-  const appName = srcEnv.app_name || srcEnv.name || job?.name || "Carga de Trabajo";
-  const slug = String(srcEnv.name || "live_os")
+  const appName = sanitizeWorkloadName(
+    srcEnv.app_name || srcEnv.name || job?.name || "Carga de Trabajo AWS"
+  );
+  const slug = String(appName)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
+    .replace(/^_+|_+$/g, "") || "target_workload";
+
   const decisions =
-    job.source_config?.user_decisions ||
+    job?.source_config?.user_decisions ||
     srcEnv.user_decisions ||
     srcEnv.transformation_catalog?.applied_decisions ||
-    job.user_decisions ||
-    job.decisions ||
+    job?.user_decisions ||
+    job?.decisions ||
     {};
 
   const compChoice = decisions.compute_architecture || "single_instance_containerized";
@@ -43,7 +45,7 @@ export default function TargetArchitectureView({ job }) {
     : compChoice === "ha_asg_alb_containerized" || compChoice === "ha_alb_asg";
 
   const ebsChoice = decisions.ebs_storage_sizing || "aws_academy_30gb";
-  const rawDiskGib = Number(srcEnv.total_provisioned_gib || srcEnv.disks?.[0]?.size_gib || 476);
+  const rawDiskGib = Number(srcEnv.total_provisioned_gib || srcEnv.disks?.[0]?.size_gib || 50);
   const skipExtraEbs = isVmCase && ebsChoice === "aws_academy_root_only_30gb";
   const provEbsGib =
     ebsChoice === "aws_academy_max_100gb"
@@ -69,17 +71,31 @@ export default function TargetArchitectureView({ job }) {
   const portsPolicy = decisions.security_group_ports_policy || "curated_deduplicated_ports";
 
   const isCloudDB = Object.entries(decisions).some(
-    ([k, v]) => (k.includes("database") || k.includes("supabase") || k.includes("dep:")) && v === "provision_cloud_db"
+    ([k, v]) =>
+      (k.includes("database") || k.includes("supabase") || k.includes("dep:")) &&
+      v === "provision_cloud_db"
   );
 
   const components = isVmCase
     ? [
-        { name: "cloudmove-os-telemetry", tier: "portal", framework: `Portal SO en Vivo (${srcEnv.os?.distro || "Linux"})`, container_ports: [3000], host_ports: [3000] },
-        { name: "os-manifest-api", tier: "api", framework: `Manifiesto JSON + systemd (${(srcEnv.running_processes || []).length} procesos)`, container_ports: [8000], host_ports: [8000] },
+        {
+          name: "os-portal-service",
+          tier: "portal",
+          framework: `Portal de SO (${srcEnv.os?.distro || "Linux"})`,
+          container_ports: [3000],
+          host_ports: [3000],
+        },
+        {
+          name: "os-telemetry-api",
+          tier: "api",
+          framework: `Servicios systemd (${(srcEnv.running_processes || []).length || 12} procesos)`,
+          container_ports: [8000],
+          host_ports: [8000],
+        },
       ]
     : srcEnv.components || [
-        { name: "frontend", tier: "frontend", framework: "React", container_ports: [80], host_ports: [3000] },
-        { name: "backend", tier: "backend", framework: "FastAPI", container_ports: [8000], host_ports: [8000] },
+        { name: "frontend", tier: "frontend", framework: "React / Nginx", container_ports: [80], host_ports: [3000] },
+        { name: "backend", tier: "backend", framework: "FastAPI / Python", container_ports: [8000], host_ports: [8000] },
       ];
 
   const rawVmPorts = (srcEnv.listening_ports || [80, 443, 3000, 8000]).filter(
@@ -88,493 +104,380 @@ export default function TargetArchitectureView({ job }) {
   const ports = isVmCase
     ? portsPolicy === "strict_web_ssh_only"
       ? [22, 80, 443, 3000, 8000]
-      : [22, ...Array.from(new Set([80, 443, 3000, 8000, ...rawVmPorts]))].slice(0, 16)
+      : [22, ...Array.from(new Set([80, 443, 3000, 8000, ...rawVmPorts]))].slice(0, 12)
     : srcEnv.exposed_ports || [80, 443, 3000, 8000];
 
-  // Terraform Inventory Mapping (matches the exact resources in main.tf)
   const terraformResources = isVmCase
     ? [
         { type: "aws_vpc", name: "target_vpc", layer: "Red y Aislamiento", desc: "VPC aislada 10.0.0.0/16 con DNS hostnames y DNS support habilitados" },
-        { type: "aws_internet_gateway", name: "igw", layer: "Conectividad Exterior", desc: "Puerta de enlace a Internet pública asociada a la VPC" },
-        { type: "aws_subnet", name: "public_subnet", layer: "Subred Pública A", desc: "10.0.1.0/24 (us-east-1a) con asignación de IP pública para la VM" },
+        { type: "aws_internet_gateway", name: "igw", layer: "Conectividad Exterior", desc: "Internet Gateway público asociado a aws_vpc.target_vpc" },
+        { type: "aws_subnet", name: "public_subnet", layer: "Subred Pública A", desc: "10.0.1.0/24 (us-east-1a) con asignación de IPv4 pública" },
         { type: "aws_subnet", name: "public_subnet_b", layer: "Subred Pública B", desc: "10.0.4.0/24 (us-east-1b) para redundancia Multi-AZ" },
-        { type: "aws_subnet", name: "private_subnet_a", layer: "Subred Privada A", desc: "10.0.2.0/24 (us-east-1a) para aislamiento privado" },
-        { type: "aws_subnet", name: "private_subnet_b", layer: "Subred Privada B", desc: "10.0.3.0/24 (us-east-1b) para aislamiento privado" },
-        { type: "aws_route_table", name: "public_rt", layer: "Enrutamiento", desc: "Tabla de rutas con destino 0.0.0.0/0 direccionado a aws_internet_gateway.igw" },
-        { type: "aws_route_table_association", name: "public_a", layer: "Enrutamiento", desc: "Asociación de Subred Pública A a la tabla de rutas públicas" },
-        { type: "aws_route_table_association", name: "public_b", layer: "Enrutamiento", desc: "Asociación de Subred Pública B a la tabla de rutas públicas" },
-        { type: "aws_security_group", name: "app_sg", layer: "Perímetro de Seguridad", desc: `Security Group deduplicado (SSH 22 único + puertos TCP): ${ports.join(", ")}` },
+        { type: "aws_subnet", name: "private_subnet_a", layer: "Subred Privada A", desc: "10.0.2.0/24 (us-east-1a) para aislamiento interno" },
+        { type: "aws_subnet", name: "private_subnet_b", layer: "Subred Privada B", desc: "10.0.3.0/24 (us-east-1b) para aislamiento interno" },
+        { type: "aws_route_table", name: "public_rt", layer: "Enrutamiento", desc: "Tabla de rutas 0.0.0.0/0 hacia aws_internet_gateway.igw" },
+        { type: "aws_security_group", name: "app_sg", layer: "Perímetro de Seguridad", desc: `Security Group deduplicado en puertos TCP: ${ports.join(", ")}` },
         ...(isHA
           ? [
               { type: "aws_lb", name: "app_alb", layer: "Balanceo de Carga", desc: "Application Load Balancer Multi-AZ" },
               { type: "aws_autoscaling_group", name: `vm_${slug}_asg`, layer: "Auto Scaling", desc: `Auto Scaling Group Multi-AZ (${vmInstanceType})` },
             ]
           : []),
-        { type: "aws_instance", name: `vm_${slug}`, layer: "Cómputo VM / SO", desc: `Instancia EC2 (${vmInstanceType} · ${srcEnv.boot_mode || "UEFI"}) con root_block_device ${rootVolGib} GiB gp3 cifrado y user_data.sh` },
+        { type: "aws_instance", name: `vm_${slug}`, layer: "Cómputo EC2", desc: `Instancia EC2 (${vmInstanceType} · ${srcEnv.boot_mode || "UEFI"}) con disco raíz ${rootVolGib} GiB gp3 y user_data.sh` },
         ...(!skipExtraEbs
           ? [
               {
                 type: "aws_ebs_volume",
                 name: `disk_${slug}_1`,
-                layer: "Almacenamiento de Bloques",
-                desc: `Volumen EBS gp3 cifrado de ${provEbsGib} GiB (Origen físico: ${rawDiskGib} GiB en ${srcEnv.disks?.[0]?.device || "/dev/nvme0n1"} · Compatible Pvoclabs2)`,
+                layer: "Almacenamiento EBS",
+                desc: `Volumen EBS gp3 cifrado de ${provEbsGib} GiB adjunto a la instancia`,
               },
             ]
           : []),
       ]
     : [
         { type: "aws_vpc", name: "target_vpc", layer: "Red y Aislamiento", desc: "VPC aislada 10.0.0.0/16 con DNS hostnames y DNS support habilitados" },
-        { type: "aws_internet_gateway", name: "igw", layer: "Conectividad Exterior", desc: "Puerta de enlace a Internet pública asociada a la VPC" },
-        { type: "aws_subnet", name: "public_subnet", layer: "Subred Pública A", desc: "10.0.1.0/24 (us-east-1a) con asignación de IP pública para Ingress" },
-        { type: "aws_subnet", name: "public_subnet_b", layer: "Subred Pública B", desc: "10.0.4.0/24 (us-east-1b) para redundancia Multi-AZ del balanceador" },
-        { type: "aws_subnet", name: "private_subnet_a", layer: "Subred Privada A", desc: "10.0.2.0/24 (us-east-1a) para persistencia y cómputo aislado sin IP pública" },
-        { type: "aws_subnet", name: "private_subnet_b", layer: "Subred Privada B", desc: "10.0.3.0/24 (us-east-1b) para alta disponibilidad Multi-AZ de base de datos" },
-        { type: "aws_route_table", name: "public_rt", layer: "Enrutamiento", desc: "Tabla de rutas con destino 0.0.0.0/0 direccionado a aws_internet_gateway.igw" },
-        { type: "aws_route_table_association", name: "public_a", layer: "Enrutamiento", desc: "Asociación de Subred Pública A a la tabla de rutas públicas" },
-        { type: "aws_route_table_association", name: "public_b", layer: "Enrutamiento", desc: "Asociación de Subred Pública B a la tabla de rutas públicas" },
-        { type: "aws_security_group", name: "app_sg", layer: "Perímetro de Seguridad", desc: `Security Group de la aplicación: ingress en puertos ${ports.join(", ")}` },
-        ...(isHA ? [
-          { type: "aws_security_group", name: "alb_sg", layer: "Perímetro de Seguridad", desc: "Security Group del Balanceador ALB con ingress HTTP/HTTPS (80/443)" },
-          { type: "aws_lb", name: "app_alb", layer: "Balanceo de Carga", desc: "Application Load Balancer Layer 7 distribuido en subredes públicas Multi-AZ" },
-          { type: "aws_lb_target_group", name: "app_tg", layer: "Balanceo de Carga", desc: "Target Group HTTP :80 con health check /health cada 30s" },
-          { type: "aws_lb_listener", name: "http_listener", layer: "Balanceo de Carga", desc: "Listener en puerto 80 que reenvía tráfico al Target Group" },
-          { type: "aws_launch_template", name: "compute_host_lt", layer: "Cómputo Administrado", desc: "Plantilla de lanzamiento EC2 t3.micro Ubuntu 22.04 LTS con user_data.sh" },
-          { type: "aws_autoscaling_group", name: "compute_host_asg", layer: "Cómputo Administrado", desc: "Grupo de autoescalado Multi-AZ (Min: 1, Deseado: 2, Max: 3) con auto-healing" },
-        ] : [
-          { type: "aws_instance", name: "compute_host", layer: "Cómputo Administrado", desc: "Instancia EC2 t3.micro (Ubuntu 22.04 LTS) con 2GB swapfile y Docker Host" },
-        ]),
-        { type: "aws_iam_role", name: "identity_sa", layer: "Seguridad e Identidad", desc: "Rol IAM con permisos de mínimo privilegio para lectura en Secrets Manager" },
-        { type: "aws_iam_instance_profile", name: "identity_sa_profile", layer: "Seguridad e Identidad", desc: "Perfil de instancia IAM asignado al host EC2 para bootstrapping seguro" },
-        { type: "aws_secretsmanager_secret", name: "secrets", layer: "Gestión de Secretos", desc: `Secret Manager cloudmove/production/${appName.toLowerCase()}-secrets cifrado KMS` },
-        ...(isCloudDB ? [
-          { type: "aws_db_subnet_group", name: "db_subnets", layer: "Base de Datos", desc: "Grupo de subredes privadas A y B para aislamiento total de la base de datos" },
-          { type: "aws_db_instance", name: "app_db", layer: "Base de Datos", desc: "Amazon RDS PostgreSQL 15 (db.t4g.micro, Multi-AZ, backup 7 días, cifrado KMS)" },
-        ] : [
-          { type: "external_service", name: "supabase_baas", layer: "Servicio Externo", desc: "PostgreSQL BaaS preservado externamente en Supabase sin costo de RDS redundante" },
-        ]),
-        { type: "docker_compose", name: "docker-compose.cloudmove.yml", layer: "Contenedores Multi-Tier", desc: `Malla de contenedores: ${components.map(c => c.name).join(" + ")}` },
+        { type: "aws_internet_gateway", name: "igw", layer: "Conectividad Exterior", desc: "Internet Gateway público asociado a la VPC" },
+        { type: "aws_subnet", name: "public_subnet", layer: "Subred Pública A", desc: "10.0.1.0/24 (us-east-1a) con IPv4 pública" },
+        { type: "aws_subnet", name: "public_subnet_b", layer: "Subred Pública B", desc: "10.0.4.0/24 (us-east-1b) Multi-AZ" },
+        { type: "aws_subnet", name: "private_subnet_a", layer: "Subred Privada A", desc: "10.0.2.0/24 (us-east-1a) para capa de datos" },
+        { type: "aws_subnet", name: "private_subnet_b", layer: "Subred Privada B", desc: "10.0.3.0/24 (us-east-1b) para alta disponibilidad de datos" },
+        { type: "aws_route_table", name: "public_rt", layer: "Enrutamiento", desc: "Tabla de rutas 0.0.0.0/0 hacia aws_internet_gateway.igw" },
+        { type: "aws_security_group", name: "app_sg", layer: "Perímetro de Seguridad", desc: `Security Group con reglas ingress: ${ports.join(", ")}` },
+        ...(isHA
+          ? [
+              { type: "aws_lb", name: "app_alb", layer: "Balanceo de Carga", desc: "Application Load Balancer Layer 7 Multi-AZ" },
+              { type: "aws_autoscaling_group", name: "compute_host_asg", layer: "Cómputo Administrado", desc: "Auto Scaling Group Multi-AZ (Min: 1, Max: 3)" },
+            ]
+          : [
+              { type: "aws_instance", name: "compute_host", layer: "Cómputo Administrado", desc: "Instancia EC2 Ubuntu 22.04 LTS con Docker Compose y Swap 2GB" },
+            ]),
+        { type: "aws_secretsmanager_secret", name: "secrets", layer: "Gestión de Secretos", desc: `Secret Manager cifrado KMS para ${appName}` },
+        ...(isCloudDB
+          ? [
+              { type: "aws_db_instance", name: "app_db", layer: "Base de Datos", desc: "Amazon RDS PostgreSQL 15 (db.t4g.micro, Multi-AZ, cifrado KMS)" },
+            ]
+          : [
+              { type: "external_service", name: "external_db", layer: "Persistencia", desc: "Base de datos PostgreSQL / PostGIS en contenedor o servicio externo" },
+            ]),
       ];
 
+  // Dynamic Archify Diagram Model built from selected Terraform decisions
+  const archifyModel = useMemo(() => {
+    const computeLabel = isHA
+      ? isVmCase
+        ? `aws_autoscaling_group.vm_${slug}`
+        : "aws_autoscaling_group.compute"
+      : isVmCase
+      ? `aws_instance.vm_${slug}`
+      : "aws_instance.compute_host";
+
+    const computeSub = isHA
+      ? `ALB + ASG Multi-AZ (${isVmCase ? vmInstanceType : "t3.micro"})`
+      : isVmCase
+      ? `${vmInstanceType} · Raíz ${rootVolGib} GiB gp3`
+      : "t3.micro · Ubuntu 22.04 + Docker";
+
+    const storageNode = isVmCase
+      ? {
+          id: "storage_node",
+          type: "database",
+          label: skipExtraEbs ? "root_block_device (gp3)" : `aws_ebs_volume.disk_1`,
+          sublabel: skipExtraEbs
+            ? `Solo Raíz ${rootVolGib} GiB gp3 Cifrado`
+            : `Volumen EBS ${provEbsGib} GiB gp3 Cifrado`,
+          pos: [565, 345],
+          size: [176, 62],
+        }
+      : {
+          id: "storage_node",
+          type: "database",
+          label: isCloudDB ? "aws_db_instance.app_db" : "Contenedor PostGIS / DB",
+          sublabel: isCloudDB
+            ? "RDS PostgreSQL 15 Multi-AZ :5432"
+            : "PostgreSQL / PostGIS :5432",
+          pos: [565, 345],
+          size: [176, 62],
+        };
+
+    const securityAuxNode = isHA
+      ? {
+          id: "aux_node",
+          type: "cloud",
+          label: "aws_lb.app_alb",
+          sublabel: "ALB Layer 7 Multi-AZ :80/:443",
+          pos: [290, 345],
+          size: [164, 62],
+        }
+      : {
+          id: "aux_node",
+          type: "security",
+          label: isVmCase ? "cloud_init (user_data)" : "aws_secretsmanager",
+          sublabel: isVmCase ? "Rehidratación systemd y red" : "Secretos KMS + IAM Profile",
+          pos: [290, 345],
+          size: [164, 62],
+        };
+
+    const comps = [
+      {
+        id: "clients",
+        type: "external",
+        label: "Usuarios y Operadores",
+        sublabel: `HTTP :3000 / API :8000 / SSH :22`,
+        pos: [36, 205],
+        size: [158, 62],
+      },
+      {
+        id: "igw",
+        type: "cloud",
+        label: "aws_internet_gateway.igw",
+        sublabel: "public_rt 0.0.0.0/0",
+        pos: [290, 65],
+        size: [164, 62],
+      },
+      {
+        id: "sg",
+        type: "security",
+        label: "aws_security_group.app_sg",
+        sublabel: `Puertos: ${ports.slice(0, 5).join(", ")}`,
+        pos: [290, 205],
+        size: [164, 62],
+      },
+      securityAuxNode,
+      {
+        id: "subnet_net",
+        type: "cloud",
+        label: "aws_subnet.public_subnet",
+        sublabel: "10.0.1.0/24 (us-east-1a/1b)",
+        pos: [565, 65],
+        size: [176, 62],
+      },
+      {
+        id: "compute_main",
+        type: "backend",
+        label: computeLabel,
+        sublabel: computeSub,
+        pos: [565, 205],
+        size: [176, 62],
+      },
+      storageNode,
+      {
+        id: "workload_tier",
+        type: "messagebus",
+        label: components[0]?.name || "frontend-service",
+        sublabel: `${components[0]?.framework || "Web"} :${components[0]?.host_ports?.[0] || 3000}`,
+        pos: [845, 135],
+        size: [172, 62],
+      },
+      {
+        id: "api_tier",
+        type: "messagebus",
+        label: components[1]?.name || "backend-api",
+        sublabel: `${components[1]?.framework || "API"} :${components[1]?.host_ports?.[0] || 8000}`,
+        pos: [845, 275],
+        size: [172, 62],
+      },
+    ];
+
+    return {
+      schema_version: 1,
+      diagram_type: "architecture",
+      meta: {
+        title: `Visualización de Recursos Terraform de ${appName} · main.tf Target Cloud (AWS)`,
+        locale: "es",
+        quality_profile: "showcase",
+      },
+      components: comps,
+      boundaries: [
+        {
+          kind: "region",
+          label: "aws_vpc.target_vpc (10.0.0.0/16 · AWS us-east-1)",
+          wraps: [
+            "igw",
+            "sg",
+            "aux_node",
+            "subnet_net",
+            "compute_main",
+            "storage_node",
+            "workload_tier",
+            "api_tier",
+          ],
+          pad: 22,
+        },
+        {
+          kind: "security-group",
+          label: isHA
+            ? "Grupo Multi-AZ (us-east-1a / us-east-1b · Alta Disponibilidad)"
+            : "Zona de Cómputo y Persistencia Aislada (us-east-1a)",
+          wraps: ["subnet_net", "compute_main", "storage_node", "workload_tier", "api_tier"],
+          pad: 14,
+        },
+      ],
+      connections: [
+        { from: "clients", to: "sg", label: `TCP :${ports.slice(0, 3).join("/")}`, variant: "emphasis" },
+        { from: "igw", to: "sg", label: "Ruta IGW" },
+        { from: "sg", to: "compute_main", label: "Ingress SG", variant: "security" },
+        { from: "aux_node", to: "compute_main", label: isHA ? "ALB Target" : "Bootstrap", variant: "dashed" },
+        { from: "subnet_net", to: "compute_main", label: "IP Pública" },
+        { from: "compute_main", to: "storage_node", label: isVmCase ? "EBS gp3" : "SQL :5432", variant: "security" },
+        { from: "compute_main", to: "workload_tier", label: "HTTP :3000", variant: "emphasis" },
+        { from: "compute_main", to: "api_tier", label: "API :8000", variant: "emphasis" },
+      ],
+      cards: [
+        {
+          dot: "cyan",
+          title: "1. Red y Perímetro en main.tf",
+          items: [
+            "aws_vpc.target_vpc (10.0.0.0/16) con DNS hostnames y soporte Multi-AZ",
+            "aws_internet_gateway.igw y tabla de rutas aws_route_table.public_rt",
+            `aws_security_group.app_sg con ${ports.length} puertos autorizados`,
+          ],
+        },
+        {
+          dot: "emerald",
+          title: "2. Cómputo y Servicios Seleccionados",
+          items: [
+            isHA
+              ? `Alta disponibilidad con aws_lb.app_alb y Auto Scaling Group`
+              : `Instancia ${computeLabel} (${computeSub})`,
+            `Servicios activos: ${components.map((c) => c.name).join(" + ")}`,
+            "Sincronización automática de IP pública vía IMDSv2 en cada arranque",
+          ],
+        },
+        {
+          dot: "amber",
+          title: "3. Almacenamiento y Persistencia",
+          items: [
+            isVmCase
+              ? skipExtraEbs
+                ? `Disco raíz unificado de ${rootVolGib} GiB gp3 cifrado`
+                : `Disco raíz ${rootVolGib} GiB + aws_ebs_volume de ${provEbsGib} GiB gp3`
+              : isCloudDB
+              ? "Base de datos gestionada aws_db_instance (Amazon RDS PostgreSQL 15)"
+              : "Persistencia PostgreSQL / PostGIS integrada con volumen persistente",
+            `Total de recursos declarados en HCL: ${terraformResources.length}`,
+          ],
+        },
+      ],
+    };
+  }, [
+    appName,
+    slug,
+    isHA,
+    isVmCase,
+    vmInstanceType,
+    rootVolGib,
+    skipExtraEbs,
+    provEbsGib,
+    isCloudDB,
+    ports,
+    components,
+    terraformResources.length,
+  ]);
+
+  if (!job) {
+    return (
+      <AwsContainer
+        title="Sin arquitectura objetivo activa"
+        description="Selecciona o inicia un plan de migración para sintetizar el código Terraform HCL y renderizar el diagrama de arquitectura con Archify."
+      />
+    );
+  }
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {/* Encabezado Principal y Origen del Diagrama */}
-      <div className="cm-card">
-        <div className="cm-card-title">
-          <span>
-            {isVmCase
-              ? `Arquitectura Generada desde Terraform — Imagen de SO / VM → Nube (${provider})`
-              : `Arquitectura Generada desde Terraform — GitHub → Nube (${provider})`}
-          </span>
-          <span className="cm-badge observed" style={{ backgroundColor: "#0972d3", color: "#ffffff" }}>
-            Generado desde Terraform (HCL)
-          </span>
-        </div>
-        <p style={{ margin: "4px 0 12px 0", fontSize: 13.5, color: "#475569", lineHeight: 1.5 }}>
-          Esta arquitectura no es un gráfico por defecto: <strong>es sintetizada directamente a partir del código Terraform (<code>main.tf</code>, <code>variables.tf</code>, <code>user_data.sh</code>)</strong> generado para <strong>{appName}</strong>. Refleja con precisión cada recurso, regla de red, disco y servicio aprovisionado.
-        </p>
-
-        {/* Selector de Vistas de la Arquitectura */}
-        <div style={{ display: "flex", gap: 8, borderBottom: "1px solid #e2e8f0", paddingBottom: 8, marginTop: 12 }}>
-          <button
-            type="button"
-            className={`cm-btn sm ${activeViewTab === "diagram" ? "primary" : "secondary"}`}
-            onClick={() => setActiveViewTab("diagram")}
-          >
-            Diagrama Visual de Infraestructura
-          </button>
-          <button
-            type="button"
-            className={`cm-btn sm ${activeViewTab === "tf_inventory" ? "primary" : "secondary"}`}
-            onClick={() => setActiveViewTab("tf_inventory")}
-          >
-            Recursos Terraform Creados ({terraformResources.length})
-          </button>
-          <button
-            type="button"
-            className={`cm-btn sm ${activeViewTab === "flows" ? "primary" : "secondary"}`}
-            onClick={() => setActiveViewTab("flows")}
-          >
-            Malla de Tráfico y Puertos
-          </button>
-        </div>
-
-        {/* Resumen Superior de Capacidades Cloud */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10, marginTop: 14 }}>
-          <div className="cm-card-subtle" style={{ padding: 10, borderLeft: "4px solid #0972d3" }}>
-            <span style={{ fontSize: 11.5, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>VPC & Subredes</span>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>aws_vpc (10.0.0.0/16)</div>
-            <div style={{ fontSize: 12, color: "#475569" }}>4 Subredes Multi-AZ (2 Públicas + 2 Privadas)</div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <AwsContainer
+        title={`Visualización de Recursos Terraform de ${appName}`}
+        description="Diagrama interactivo generado con Archify a partir de los recursos declarados en main.tf, variables.tf y user_data.sh según tu selección de arquitectura."
+        actions={
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <span className="cm-badge aws">main.tf Target Cloud · AWS</span>
+            <span className="cm-badge observed">{terraformResources.length} recursos HCL</span>
           </div>
-
-          <div className="cm-card-subtle" style={{ padding: 10, borderLeft: isHA ? "4px solid #8b5cf6" : "4px solid #16a34a" }}>
-            <span style={{ fontSize: 11.5, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>Cómputo en HCL</span>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
-              {isHA
-                ? "aws_lb + aws_autoscaling_group"
+        }
+      >
+        <AwsKeyValuePairs
+          columns={4}
+          items={[
+            {
+              label: "VPC y Subredes (main.tf)",
+              value: "aws_vpc (10.0.0.0/16)",
+              subtext: "4 subredes Multi-AZ (2 públicas + 2 privadas)",
+            },
+            {
+              label: "Arquitectura de cómputo",
+              value: isHA
+                ? "ALB + Auto Scaling"
                 : isVmCase
                 ? `aws_instance (${vmInstanceType})`
-                : "aws_instance (t3.micro)"}
-            </div>
-            <div style={{ fontSize: 12, color: "#475569" }}>
-              {isHA
-                ? "Balanceo L7 + 2-3 Instancias Multi-AZ"
-                : isVmCase
-                ? `${srcEnv.os?.distro || "Linux"} · Raíz ${rootVolGib} GiB gp3`
-                : "Ubuntu 22.04 LTS + Swap 2GB"}
-            </div>
-          </div>
-
-          <div className="cm-card-subtle" style={{ padding: 10, borderLeft: isCloudDB ? "4px solid #2563eb" : "4px solid #0284c7" }}>
-            <span style={{ fontSize: 11.5, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>
-              {isVmCase ? "Volumen EBS (Pvoclabs2)" : "Persistencia"}
-            </span>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
-              {isVmCase
+                : "aws_instance (t3.micro)",
+              subtext: isHA
+                ? "Balanceador Layer 7 + 1-3 instancias"
+                : `Raíz ${rootVolGib} GiB gp3 + user_data.sh`,
+            },
+            {
+              label: isVmCase ? "Almacenamiento EBS" : "Capa de base de datos",
+              value: isVmCase
                 ? skipExtraEbs
-                  ? `Solo Raíz (${rootVolGib} GiB gp3)`
-                  : `aws_ebs_volume (${provEbsGib} GiB gp3)`
+                  ? `Raíz ${rootVolGib} GiB gp3`
+                  : `aws_ebs_volume (${provEbsGib} GiB)`
                 : isCloudDB
-                ? "aws_db_instance (RDS Multi-AZ)"
-                : "Supabase BaaS Externo"}
-            </div>
-            <div style={{ fontSize: 12, color: "#475569" }}>
-              {isVmCase
-                ? `Físico: ${rawDiskGib} GiB → Nube: ${provEbsGib} GiB (<= 100 GiB)`
-                : isCloudDB
-                ? "PostgreSQL 15 aislado en subredes privadas"
-                : "Conexión cifrada sin costo de RDS"}
-            </div>
-          </div>
+                ? "Amazon RDS Multi-AZ"
+                : "PostgreSQL / PostGIS",
+              subtext: "Cifrado habilitado y compatible con cuota AWS Academy",
+            },
+            {
+              label: "Seguridad y puertos",
+              value: `app_sg (${ports.length} puertos)`,
+              subtext: `TCP: ${ports.slice(0, 6).join(", ")}`,
+            },
+          ]}
+        />
 
-          <div className="cm-card-subtle" style={{ padding: 10, borderLeft: "4px solid #f59e0b" }}>
-            <span style={{ fontSize: 11.5, color: "#64748b", textTransform: "uppercase", fontWeight: 700 }}>
-              {isVmCase ? "Security Group & Cloud-Init" : "Seguridad & Secretos"}
-            </span>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#0f172a" }}>
-              {isVmCase ? `app_sg (${ports.length} puertos sin dup.)` : "aws_secretsmanager_secret"}
-            </div>
-            <div style={{ fontSize: 12, color: "#475569" }}>
-              {isVmCase ? "SSH 22 único + user_data.sh (< 12 KB)" : "IAM Instance Profile con mínimo privilegio"}
-            </div>
-          </div>
-        </div>
-      </div>
+        <AwsTabs
+          activeTabId={activeViewTab}
+          onTabChange={setActiveViewTab}
+          tabs={[
+            {
+              id: "diagram",
+              label: "Diagrama de arquitectura (Archify)",
+              badge: "Interactivo",
+            },
+            {
+              id: "tf_inventory",
+              label: "Inventario de recursos Terraform",
+              count: terraformResources.length,
+            },
+            {
+              id: "flows",
+              label: "Malla de tráfico y puertos",
+              count: ports.length,
+            },
+          ]}
+        />
 
-      {/* VISTA 1: DIAGRAMA VISUAL ESQUEMÁTICO GENERADO DESDE TERRAFORM */}
-      {activeViewTab === "diagram" && (
-        <div className="cm-card">
-          <div className="cm-card-title">
-            <span>Visualización de Recursos Terraform de {appName}</span>
-            <span className="cm-badge" style={{ backgroundColor: "#f1f5f9", color: "#334155" }}>
-              main.tf Target Cloud
-            </span>
-          </div>
+        {activeViewTab === "diagram" && (
+          <ArchifyDiagramRenderer
+            model={archifyModel}
+            showStandaloneLink={true}
+            standaloneUrl="/archify-aws-cmir.html"
+          />
+        )}
 
-          <div
-            style={{
-              padding: 20,
-              backgroundColor: "#f8fafc",
-              borderRadius: 8,
-              border: "1px solid #cbd5e1",
-              display: "flex",
-              flexDirection: "column",
-              gap: 16,
-            }}
-          >
-            {/* Nivel 0: Perímetro de Proveedor Cloud AWS */}
-            <div
-              style={{
-                padding: 16,
-                backgroundColor: "#ffffff",
-                borderRadius: 8,
-                border: "2px solid #0972d3",
-                boxShadow: "0 2px 4px rgba(0,0,0,0.04)",
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <strong style={{ fontSize: 14.5, color: "#0972d3" }}>
-                  AWS Cloud (us-east-1 N. Virginia) · Definido en <code>provider.tf</code>
-                </strong>
-                <span className="cm-badge" style={{ backgroundColor: "#eff6ff", color: "#1d4ed8" }}>
-                  Infraestructura CloudMove Gestionada
-                </span>
-              </div>
-
-              {/* Grid: VPC vs Recursos Externos */}
-              <div style={{ display: "grid", gridTemplateColumns: isCloudDB ? "1fr" : "3fr 1.2fr", gap: 14 }}>
-                {/* Contenedor VPC de Terraform */}
-                <div
-                  style={{
-                    padding: 14,
-                    backgroundColor: "#f0fdf4",
-                    borderRadius: 6,
-                    border: "1.5px dashed #16a34a",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                    <strong style={{ fontSize: 13.5, color: "#166534" }}>
-                      aws_vpc.target_vpc (10.0.0.0/16) · cloudmove-target-vpc
-                    </strong>
-                    <span style={{ fontSize: 11.5, color: "#15803d", fontWeight: 600 }}>
-                      aws_internet_gateway.igw + aws_route_table.public_rt
-                    </span>
-                  </div>
-
-                  {/* Subred Pública A */}
-                  <div
-                    style={{
-                      padding: 12,
-                      backgroundColor: "#ffffff",
-                      borderRadius: 6,
-                      border: "1px solid #bbf7d0",
-                      marginBottom: 10,
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: "#1e293b" }}>
-                        aws_subnet.public_subnet (10.0.1.0/24 — us-east-1a)
-                      </span>
-                      <span className="cm-badge" style={{ fontSize: 11, backgroundColor: "#dbeafe", color: "#1e40af" }}>
-                        aws_security_group.app_sg ({ports.join(", ")})
-                      </span>
-                    </div>
-
-                    {/* Balanceador ALB si es HA */}
-                    {isHA && (
-                      <div style={{ padding: 10, backgroundColor: "#faf5ff", borderRadius: 6, border: "1px solid #c084fc", marginBottom: 10 }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                          <strong style={{ fontSize: 13, color: "#6b21a8" }}>
-                            aws_lb.app_alb (ALB Multi-AZ) + aws_lb_target_group.app_tg
-                          </strong>
-                          <span className="cm-badge validated" style={{ fontSize: 11 }}>
-                            HTTP :80 /health
-                          </span>
-                        </div>
-                        <div style={{ fontSize: 12, color: "#581c87", marginTop: 2 }}>
-                          Listener: <code>aws_lb_listener.http_listener</code> · Reparte tráfico entre instancias públicas Multi-AZ.
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Cómputo: ASG o Instancia EC2 */}
-                    <div
-                      style={{
-                        padding: 12,
-                        backgroundColor: "#f8fafc",
-                        borderRadius: 6,
-                        border: "1px solid #cbd5e1",
-                      }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                        <strong style={{ fontSize: 13, color: "#0f172a" }}>
-                          {isHA
-                            ? `aws_autoscaling_group.${isVmCase ? `vm_${slug}_asg` : "compute_host_asg"} (Min: 1, Max: 3)`
-                            : isVmCase
-                            ? `aws_instance.vm_${slug} (${vmInstanceType} · Raíz ${rootVolGib} GiB gp3)`
-                            : `aws_instance.compute_host (t3.micro Free Tier / Ubuntu 22.04 LTS)`}
-                        </strong>
-                        <span className="cm-badge observed" style={{ fontSize: 11 }}>
-                          {isHA
-                            ? "aws_launch_template"
-                            : isVmCase
-                            ? `Compatible AWS Academy (<= 100 GiB)`
-                            : "Swap 2GB anti-OOM"}
-                        </span>
-                      </div>
-
-                      {/* Contenedores / Servicios desplegados en el host */}
-                      <div style={{ display: "grid", gridTemplateColumns: `repeat(auto-fit, minmax(180px, 1fr))`, gap: 8, marginTop: 8 }}>
-                        {components.map((c, idx) => (
-                          <div
-                            key={c.name || idx}
-                            style={{
-                              padding: 8,
-                              backgroundColor: "#ffffff",
-                              borderRadius: 4,
-                              border: idx === 0 ? "1px solid #93c5fd" : "1px solid #c084fc",
-                            }}
-                          >
-                            <div style={{ fontWeight: 700, fontSize: 12.5, color: idx === 0 ? "#1d4ed8" : "#7e22ce" }}>
-                              {isVmCase ? "Servicio " : "Contenedor "}
-                              {c.name ? c.name.charAt(0).toUpperCase() + c.name.slice(1) : "App"}
-                            </div>
-                            <div style={{ fontSize: 11.5, color: "#475569" }}>
-                              {c.framework || c.language || "Servicio"} ({c.runtime || (isVmCase ? "systemd" : "container")})
-                            </div>
-                            <div style={{ fontSize: 11.5, color: "#16a34a", marginTop: 2 }}>
-                              Puerto mapeado: <code>{c.host_ports?.[0] || 80}:{c.container_ports?.[0] || 80}</code>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div style={{ fontSize: 11.5, color: "#64748b", marginTop: 8, textAlign: "center" }}>
-                        {isVmCase
-                          ? `↔ Rehidratado con user_data.sh (< 12 KB) + system_image_snapshot.tar.gz`
-                          : `↔ Inicializado con script user_data.sh y orquestado vía docker-compose.cloudmove.yml`}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Subredes Privadas (Multi-AZ) para RDS si aplica */}
-                  {isCloudDB && (
-                    <div
-                      style={{
-                        padding: 10,
-                        backgroundColor: "#eff6ff",
-                        borderRadius: 6,
-                        border: "1px solid #93c5fd",
-                        marginTop: 10,
-                      }}
-                    >
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-                        <span style={{ fontSize: 12.5, fontWeight: 700, color: "#1e3a8a" }}>
-                          aws_subnet.private_subnet_a & b (10.0.2.0/24 y 10.0.3.0/24)
-                        </span>
-                        <span className="cm-badge observed" style={{ fontSize: 11 }}>
-                          aws_db_subnet_group.db_subnets
-                        </span>
-                      </div>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <div>
-                          <strong>aws_db_instance.app_db</strong> (PostgreSQL 15 Multi-AZ / db.t4g.micro)
-                          <div style={{ fontSize: 11.5, color: "#475569" }}>Puerto 5432 · Backup 7 días · Cifrado Storage KMS</div>
-                        </div>
-                        <span className="cm-badge validated" style={{ fontSize: 11 }}>Gestionado en Terraform</span>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Columna Derecha: Almacenamiento EBS (Caso 2) o Secretos/Supabase (Caso 1) */}
-                {!isCloudDB && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                    {isVmCase ? (
-                      <>
-                        <div
-                          style={{
-                            padding: 12,
-                            backgroundColor: "#f0fdf4",
-                            borderRadius: 6,
-                            border: "1.5px solid #86efac",
-                          }}
-                        >
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                            <strong style={{ fontSize: 12.5, color: "#14532d" }}>
-                              {skipExtraEbs
-                                ? `root_block_device (${rootVolGib} GiB)`
-                                : `aws_ebs_volume.disk_${slug}_1`}
-                            </strong>
-                            <span className="cm-badge observed" style={{ fontSize: 10.5 }}>
-                              {skipExtraEbs ? "SOLO RAÍZ" : `${provEbsGib} GiB gp3`}
-                            </span>
-                          </div>
-                          <div style={{ fontSize: 11.5, color: "#166534", marginTop: 4 }}>
-                            Disco físico origen: <strong>{rawDiskGib} GiB</strong> ({srcEnv.disks?.[0]?.device || "/dev/nvme0n1"})
-                          </div>
-                          <div style={{ fontSize: 11, color: "#15803d", marginTop: 4, fontWeight: 600 }}>
-                            [OK] Ajustado a {provEbsGib} GiB para cumplir política Pvoclabs2 (&lt;= 100 GiB) en AWS Academy
-                          </div>
-                        </div>
-
-                        <div
-                          style={{
-                            padding: 12,
-                            backgroundColor: "#fefce8",
-                            borderRadius: 6,
-                            border: "1px solid #fde047",
-                          }}
-                        >
-                          <div style={{ fontWeight: 700, fontSize: 12.5, color: "#854d0e" }}>
-                            Bundle de Captura del SO en Vivo
-                          </div>
-                          <div style={{ fontSize: 11.5, color: "#713f12", marginTop: 4 }}>
-                            • <code>system_image_snapshot.tar.gz</code>
-                            <br />• <code>restore_system_image.sh</code>
-                            <br />• <code>create_full_raw_disk_clone.sh</code>
-                          </div>
-                          <div style={{ fontSize: 11, color: "#a16207", marginTop: 4 }}>
-                            {(srcEnv.local_users || ["root"]).length} usuarios · {(srcEnv.systemd_services || []).length} servicios systemd
-                          </div>
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <div
-                          style={{
-                            padding: 12,
-                            backgroundColor: "#fefce8",
-                            borderRadius: 6,
-                            border: "1px solid #fde047",
-                          }}
-                        >
-                          <div style={{ fontWeight: 700, fontSize: 12.5, color: "#854d0e" }}>
-                            aws_secretsmanager_secret.secrets
-                          </div>
-                          <div style={{ fontSize: 11.5, color: "#713f12", marginTop: 4 }}>
-                            ID: <code>cloudmove/production/{appName.toLowerCase()}-secrets</code>
-                          </div>
-                          <div style={{ fontSize: 11, color: "#a16207", marginTop: 4 }}>
-                            Asociado a <code>aws_iam_role.identity_sa</code> para inyección en el arranque (Zero-Trust).
-                          </div>
-                        </div>
-
-                        <div
-                          style={{
-                            padding: 12,
-                            backgroundColor: "#f8fafc",
-                            borderRadius: 6,
-                            border: "2px dashed #94a3b8",
-                          }}
-                        >
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                            <strong style={{ fontSize: 12.5, color: "#0f172a" }}>BaaS Supabase</strong>
-                            <span className="cm-badge" style={{ fontSize: 10, backgroundColor: "#e2e8f0", color: "#334155" }}>
-                              EXTERNO
-                            </span>
-                          </div>
-                          <div style={{ fontSize: 11.5, color: "#475569", marginTop: 4 }}>
-                            PostgreSQL 15 Cloud + Auth
-                          </div>
-                          <div style={{ fontSize: 11, color: "#166534", marginTop: 4, fontWeight: 600 }}>
-                            [OK] Preservado externamente sin costo de RDS redundante
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* VISTA 2: INVENTARIO COMPLETO DE RECURSOS TERRAFORM */}
-      {activeViewTab === "tf_inventory" && (
-        <div className="cm-card">
-          <div className="cm-card-title">
-            <span>Inventario Exhaustivo de Recursos en Terraform ({terraformResources.length} Recursos)</span>
-            <span className="cm-badge observed">main.tf</span>
-          </div>
-
-          <p style={{ margin: "4px 0 12px 0", fontSize: 13, color: "#475569" }}>
-            Cada uno de los siguientes recursos está codificado y validado dentro de los módulos Terraform generados para la migración de GitHub a AWS:
-          </p>
-
-          <div className="disc-table-wrap">
-            <table className="disc-table" style={{ width: "100%", fontSize: 13 }}>
+        {activeViewTab === "tf_inventory" && (
+          <div className="cm-table-wrap">
+            <table className="cm-table">
               <thead>
                 <tr>
-                  <th>Tipo de Recurso Terraform</th>
-                  <th>Identificador en HCL</th>
-                  <th>Capa Arquitectónica</th>
-                  <th>Descripción Técnica & Configuración</th>
+                  <th>Tipo de recurso HCL</th>
+                  <th>Identificador en main.tf</th>
+                  <th>Capa de arquitectura</th>
+                  <th>Configuración sintetizada</th>
                 </tr>
               </thead>
               <tbody>
-                {terraformResources.map((r, i) => (
-                  <tr key={i}>
+                {terraformResources.map((r, idx) => (
+                  <tr key={`${r.type}.${r.name}.${idx}`}>
                     <td>
                       <code>{r.type}</code>
                     </td>
@@ -582,9 +485,7 @@ export default function TargetArchitectureView({ job }) {
                       <strong>{r.name}</strong>
                     </td>
                     <td>
-                      <span className="cm-badge info" style={{ fontSize: 11 }}>
-                        {r.layer}
-                      </span>
+                      <span className="cm-badge info">{r.layer}</span>
                     </td>
                     <td>{r.desc}</td>
                   </tr>
@@ -592,62 +493,79 @@ export default function TargetArchitectureView({ job }) {
               </tbody>
             </table>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* VISTA 3: MALLA DE FLUJOS Y PUERTOS */}
-      {activeViewTab === "flows" && (
-        <div className="cm-card">
-          <div className="cm-card-title">
-            <span>Matriz de Flujos de Red, Integraciones y Puertos en Terraform</span>
-            <span className="cm-badge observed">Tráfico y Protocolos</span>
-          </div>
-
-          <div className="disc-table-wrap">
-            <table className="disc-table" style={{ width: "100%", fontSize: 13 }}>
+        {activeViewTab === "flows" && (
+          <div className="cm-table-wrap">
+            <table className="cm-table">
               <thead>
                 <tr>
-                  <th>Flujo de Red</th>
                   <th>Origen</th>
                   <th>Destino</th>
-                  <th>Protocolo / Puerto</th>
-                  <th>Regla Terraform / SG</th>
+                  <th>Protocolo y puerto</th>
+                  <th>Regla de seguridad en Terraform</th>
                 </tr>
               </thead>
               <tbody>
                 <tr>
-                  <td><strong>Ingress Público</strong></td>
                   <td>Internet (0.0.0.0/0)</td>
-                  <td>{isHA ? "aws_lb.app_alb" : "aws_instance.compute_host"}</td>
-                  <td><code>TCP 80, 443</code></td>
-                  <td>Definido en <code>aws_security_group.app_sg</code></td>
+                  <td>
+                    <code>{isHA ? "aws_lb.app_alb" : "aws_instance"}</code>
+                  </td>
+                  <td>
+                    <strong>TCP :80 / :443 / :3000</strong>
+                  </td>
+                  <td>
+                    <AwsStatusIndicator type="success">
+                      Ingress permitido en aws_security_group.app_sg
+                    </AwsStatusIndicator>
+                  </td>
                 </tr>
                 <tr>
-                  <td><strong>Malla Interna</strong></td>
-                  <td>Contenedor Frontend</td>
-                  <td>Contenedor Backend</td>
-                  <td><code>HTTP REST / 8000</code></td>
-                  <td>Red bridge definida en <code>docker-compose.cloudmove.yml</code></td>
+                  <td>Frontend Web (:3000)</td>
+                  <td>Backend API (:8000)</td>
+                  <td>
+                    <strong>HTTP / REST :8000</strong>
+                  </td>
+                  <td>
+                    <AwsStatusIndicator type="success">
+                      Sincronizado vía IMDSv2 (sync_public_ip.sh)
+                    </AwsStatusIndicator>
+                  </td>
                 </tr>
                 <tr>
-                  <td><strong>Persistencia DB</strong></td>
-                  <td>Contenedor Backend</td>
-                  <td>{isCloudDB ? "aws_db_instance.app_db" : "Supabase BaaS Externo"}</td>
-                  <td><code>TCP 5432 (TLS)</code></td>
-                  <td>{isCloudDB ? "Aislado en aws_subnet.private_subnet" : "Conexión saliente segura por Internet"}</td>
+                  <td>Backend API (:8000)</td>
+                  <td>
+                    <code>{isCloudDB ? "aws_db_instance.app_db" : "PostgreSQL / EBS"}</code>
+                  </td>
+                  <td>
+                    <strong>{isVmCase ? "NVMe Block I/O" : "TCP :5432"}</strong>
+                  </td>
+                  <td>
+                    <AwsStatusIndicator type="success">
+                      Tráfico interno dentro de aws_vpc.target_vpc
+                    </AwsStatusIndicator>
+                  </td>
                 </tr>
                 <tr>
-                  <td><strong>Descarga de Secretos</strong></td>
-                  <td>Host EC2 / user_data.sh</td>
-                  <td>aws_secretsmanager_secret</td>
-                  <td><code>HTTPS / AWS SDK</code></td>
-                  <td>Autorizado por <code>aws_iam_instance_profile.identity_sa_profile</code></td>
+                  <td>Operador SSH</td>
+                  <td>
+                    <code>aws_instance</code>
+                  </td>
+                  <td>
+                    <strong>SSH TCP :22</strong>
+                  </td>
+                  <td>
+                    <AwsStatusIndicator type="info">
+                      Regla única deduplicada en aws_security_group.app_sg
+                    </AwsStatusIndicator>
+                  </td>
                 </tr>
               </tbody>
             </table>
           </div>
-        </div>
-      )}
+        )}
+      </AwsContainer>
     </div>
   );
 }

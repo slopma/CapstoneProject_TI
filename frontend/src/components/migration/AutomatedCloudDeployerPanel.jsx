@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { apiFetch } from "../../utils/apiClient";
+import { getSessionCredentials, saveSessionCredentials } from "../../utils/credentialVault";
 import AwsCloudAuditPanel from "../audit/AwsCloudAuditPanel";
 
 const STATUS_BADGE_STYLE = {
   IDLE: { bg: "#e2e8f0", fg: "#334155", label: "EN ESPERA (IDLE)" },
-  RUNNING: { bg: "#dbeafe", fg: "#1d4ed8", label: "⟳ EJECUTANDO TERRAFORM EN VIVO..." },
+  RUNNING: { bg: "#dbeafe", fg: "#1d4ed8", label: "EJECUTANDO TERRAFORM EN VIVO..." },
   SUCCESS: { bg: "#dcfce7", fg: "#166534", label: "[OK] EJECUCIÓN EXITOSA" },
   CANCELLED: { bg: "#fef3c7", fg: "#92400e", label: "CANCELADO POR EL OPERADOR" },
   FAILED: { bg: "#fee2e2", fg: "#991b1b", label: "[ERROR] ERROR EN COMANDO TERRAFORM" },
@@ -13,16 +14,31 @@ const STATUS_BADGE_STYLE = {
 export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted }) {
   const provider = (job?.target_provider || "aws").toUpperCase();
   const migrationId = job?.migration_id;
+  const initialSessionCreds = getSessionCredentials();
 
   // Credential input state
   const [authMode, setAuthMode] = useState("form"); // "form" | "env"
-  const [awsAccessKeyId, setAwsAccessKeyId] = useState("");
-  const [awsSecretAccessKey, setAwsSecretAccessKey] = useState("");
-  const [awsRegion, setAwsRegion] = useState("us-east-1");
-  const [awsSessionToken, setAwsSessionToken] = useState("");
+  const [awsAccessKeyId, setAwsAccessKeyId] = useState(initialSessionCreds?.aws_access_key_id || "");
+  const [awsSecretAccessKey, setAwsSecretAccessKey] = useState(initialSessionCreds?.aws_secret_access_key || "");
+  const [awsRegion, setAwsRegion] = useState(initialSessionCreds?.aws_region || "us-east-1");
+  const [awsSessionToken, setAwsSessionToken] = useState(initialSessionCreds?.aws_session_token || "");
   const [showSecret, setShowSecret] = useState(false);
   const [showTokenField, setShowTokenField] = useState(true);
   const [rawCredsBlock, setRawCredsBlock] = useState("");
+
+  useEffect(() => {
+    const handleSyncCreds = () => {
+      const stored = getSessionCredentials();
+      if (stored) {
+        setAwsAccessKeyId(stored.aws_access_key_id || "");
+        setAwsSecretAccessKey(stored.aws_secret_access_key || "");
+        setAwsSessionToken(stored.aws_session_token || "");
+        setAwsRegion(stored.aws_region || "us-east-1");
+      }
+    };
+    window.addEventListener("cloudmove:credentials-updated", handleSyncCreds);
+    return () => window.removeEventListener("cloudmove:credentials-updated", handleSyncCreds);
+  }, []);
 
   const handleParseCredentialsBlock = (textValue) => {
     setRawCredsBlock(textValue);
@@ -30,11 +46,22 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
     const akMatch = text.match(/(?:aws_access_key_id|access\s*key(?:\s*id)?)\s*[:=]\s*([A-Z0-9]{16,32})/i);
     const skMatch = text.match(/(?:aws_secret_access_key|secret\s*access\s*key)\s*[:=]\s*([A-Za-z0-9/+=]{30,64})/i);
     const stMatch = text.match(/(?:aws_session_token|(?:aws\s*)?session\s*token)\s*[:=]\s*([A-Za-z0-9/+=]{80,})/i);
-    if (akMatch) setAwsAccessKeyId(akMatch[1].trim());
-    if (skMatch) setAwsSecretAccessKey(skMatch[1].trim());
+    const nextAk = akMatch ? akMatch[1].trim() : awsAccessKeyId;
+    const nextSk = skMatch ? skMatch[1].trim() : awsSecretAccessKey;
+    const nextSt = stMatch ? stMatch[1].trim() : awsSessionToken;
+    if (akMatch) setAwsAccessKeyId(nextAk);
+    if (skMatch) setAwsSecretAccessKey(nextSk);
     if (stMatch) {
-      setAwsSessionToken(stMatch[1].trim());
+      setAwsSessionToken(nextSt);
       setShowTokenField(true);
+    }
+    if (nextAk && nextSk) {
+      saveSessionCredentials({
+        aws_access_key_id: nextAk,
+        aws_secret_access_key: nextSk,
+        aws_session_token: nextSt,
+        aws_region: awsRegion || "us-east-1",
+      });
     }
   };
 
@@ -74,7 +101,9 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
   // Build credentials dictionary if using form mode
   const getActiveCredentials = useCallback(() => {
     if (authMode === "env") return null;
-    if (!awsAccessKeyId.trim() || !awsSecretAccessKey.trim()) return null;
+    if (!awsAccessKeyId.trim() || !awsSecretAccessKey.trim()) {
+      return getSessionCredentials();
+    }
     const creds = {
       aws_access_key_id: awsAccessKeyId.trim(),
       aws_secret_access_key: awsSecretAccessKey.trim(),
@@ -148,6 +177,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
     setCallerIdentity(null);
     try {
       const creds = getActiveCredentials();
+      if (creds) saveSessionCredentials(creds);
       const res = await apiFetch("/api/v1/migration/credentials/verify-cloud", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -999,7 +1029,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                 className={`cm-btn sm ${consultTab === "aws_audit" ? "primary" : "secondary"}`}
                 onClick={() => setConsultTab("aws_audit")}
               >
-                🛡️ Auditoría de Cuenta AWS (Consultar y Eliminar Recursos)
+                Auditoría de Cuenta AWS (Consultar y Eliminar Recursos)
               </button>
             </div>
 
@@ -1142,8 +1172,8 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                        <span style={{ fontSize: 18 }}>
-                          {instanceHealth?.all_ready ? "🟢" : instanceHealth?.phase === "booting" ? "⏳" : "🔍"}
+                        <span className={`cm-badge ${instanceHealth?.all_ready ? "observed" : "info"}`}>
+                          {instanceHealth?.all_ready ? "ACTIVO" : instanceHealth?.phase === "booting" ? "INICIANDO" : "SONDA"}
                         </span>
                         <strong style={{ fontSize: 13, color: "#0f172a" }}>
                           Sonda de Estado en Vivo en AWS (IP Pública: {publicIp})
@@ -1193,7 +1223,9 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                             gap: 6,
                           }}
                         >
-                          <span>{instanceHealth.frontend?.online ? "✅" : "⏳"}</span>
+                          <span style={{ fontWeight: 700, color: instanceHealth.frontend?.online ? "#166534" : "#475569" }}>
+                            [{instanceHealth.frontend?.online ? "OK" : "PENDIENTE"}]
+                          </span>
                           <strong>Frontend (Puerto 3000):</strong>
                           <span>
                             {instanceHealth.frontend?.online
@@ -1214,7 +1246,9 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                             gap: 6,
                           }}
                         >
-                          <span>{instanceHealth.backend?.online ? "✅" : "⏳"}</span>
+                          <span style={{ fontWeight: 700, color: instanceHealth.backend?.online ? "#166534" : "#475569" }}>
+                            [{instanceHealth.backend?.online ? "OK" : "PENDIENTE"}]
+                          </span>
                           <strong>Backend API (Puerto 8000):</strong>
                           <span>
                             {instanceHealth.backend?.online
@@ -1235,7 +1269,9 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                             gap: 6,
                           }}
                         >
-                          <span>{instanceHealth.ssh?.open ? "✅" : "⏳"}</span>
+                          <span style={{ fontWeight: 700, color: instanceHealth.ssh?.open ? "#166534" : "#475569" }}>
+                            [{instanceHealth.ssh?.open ? "OK" : "PENDIENTE"}]
+                          </span>
                           <strong>SSH (Puerto 22):</strong>
                           <span>{instanceHealth.ssh?.open ? "Abierto" : "Cerrado"}</span>
                         </div>
@@ -1253,7 +1289,7 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                         lineHeight: 1.45,
                       }}
                     >
-                      <strong>💡 Advertencia de Navegación (Firefox / Chrome):</strong>
+                      <strong>Nota Operativa de Conectividad HTTP:</strong>
                       <br />
                       Si tu navegador muestra el mensaje <em>"Firefox no puede conectarse al servidor"</em>:
                       <ol style={{ margin: "4px 0 0 18px", padding: 0 }}>
@@ -1660,8 +1696,7 @@ curl -Iv http://${publicIp || "<IP_PUBLICA_EC2>"}:8000/docs`}
             {/* PESTAÑA AUDITORÍA DE CUENTA AWS EN VIVO */}
             {consultTab === "aws_audit" && (
               <AwsCloudAuditPanel
-                initialCredentials={getActiveCredentials()}
-                onAuditCompleted={() => fetchTerraformStatus()}
+                onAuditCompleted={fetchTerraformStatus}
               />
             )}
           </>

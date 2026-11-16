@@ -51,22 +51,18 @@ class CloudDeploymentRunner:
         return fallback / ".aws_audit_creds.json"
 
     def _load_cached_credentials(self) -> Optional[Dict[str, str]]:
+        # Security policy: never persist or load plain-text credentials from disk
         try:
             cf = self._creds_cache_file()
             if cf.is_file():
-                data = json.loads(cf.read_text(encoding="utf-8"))
-                if isinstance(data, dict) and data.get("aws_access_key_id"):
-                    return data
+                cf.unlink(missing_ok=True)
         except Exception:
             pass
         return None
 
     def _save_cached_credentials(self, creds: Dict[str, str]) -> None:
-        try:
-            cf = self._creds_cache_file()
-            cf.write_text(json.dumps(creds, indent=2), encoding="utf-8")
-        except Exception:
-            pass
+        # Security policy: keep credentials strictly in ephemeral process memory for active session
+        self._last_credentials = dict(creds) if isinstance(creds, dict) else None
 
     def resolve_job_dir(self, migration_id: str, job: Optional[Dict[str, Any]] = None) -> Path:
         """
@@ -1159,7 +1155,8 @@ class CloudDeploymentRunner:
                     is_cp = bool(
                         name == "cloudmove-server"
                         or tags_dict.get("Project") == "CloudMove-Capstone"
-                        or pub_ip == "44.216.47.253"
+                        or pub_ip in ("44.216.47.253", "100.50.88.231")
+                        or iid in ("i-08505f55cdbb4cfb5", "i-03b7025356f0c982c")
                     )
                     if is_cp:
                         control_plane_instance_ids.add(iid)
@@ -1538,40 +1535,48 @@ class CloudDeploymentRunner:
                     }
                 return projects_map[pid]
 
-            for inst in instances:
+            # Security policy: Hide underlying CloudMove control-plane host from public audit output
+            visible_instances = [i for i in instances if not i.get("is_control_plane")]
+            visible_volumes = [v for v in volumes if not v.get("is_control_plane")]
+            visible_vpcs = [vp for vp in vpcs if not vp.get("is_control_plane") and not vp.get("is_default")]
+            visible_sgs = [sg for sg in security_groups if not sg.get("is_control_plane") and not sg.get("is_default")]
+            visible_eips = [eip for eip in elastic_ips if not eip.get("is_control_plane")]
+            visible_ebs_gb = sum(v["size_gb"] for v in visible_volumes)
+
+            for inst in visible_instances:
                 if inst["state"] == "terminated":
                     continue
                 b = _ensure_proj_bucket(inst["project_info"])
                 b["instances"].append(inst)
                 b["total_resources_count"] += 1
 
-            for v in volumes:
+            for v in visible_volumes:
                 b = _ensure_proj_bucket(v["project_info"])
                 b["volumes"].append(v)
                 b["total_ebs_gb"] += v["size_gb"]
                 b["total_resources_count"] += 1
 
-            for vp in vpcs:
+            for vp in visible_vpcs:
                 b = _ensure_proj_bucket(vp["project_info"])
                 b["vpcs"].append(vp)
                 b["total_resources_count"] += 1 + len(vp.get("subnets") or []) + len(vp.get("internet_gateways") or [])
 
-            for sg in security_groups:
-                if sg["is_default"]:
-                    continue
+            for sg in visible_sgs:
                 b = _ensure_proj_bucket(sg["project_info"])
                 b["security_groups"].append(sg)
                 b["total_resources_count"] += 1
 
-            for eip in elastic_ips:
+            for eip in visible_eips:
                 b = _ensure_proj_bucket(eip["project_info"])
                 b["elastic_ips"].append(eip)
                 b["total_resources_count"] += 1
 
-            projects_deployed = list(projects_map.values())
-            projects_deployed.sort(key=lambda p: (p.get("is_control_plane", False), len(p.get("instances", [])) == 0, p.get("project_name", "")))
+            projects_deployed = [
+                p for p in projects_map.values() if not p.get("is_control_plane")
+            ]
+            projects_deployed.sort(key=lambda p: (len(p.get("instances", [])) == 0, p.get("project_name", "")))
 
-            running_instances = [i for i in instances if i["state"] == "running"]
+            running_instances = [i for i in visible_instances if i["state"] == "running"]
             return {
                 "authenticated": True,
                 "account_id": account_id,
@@ -1580,22 +1585,22 @@ class CloudDeploymentRunner:
                 "audited_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "summary": {
                     "running_instances_count": len(running_instances),
-                    "total_instances_count": len(instances),
-                    "total_volumes_count": len(volumes),
-                    "total_ebs_gb": total_ebs_gb,
+                    "total_instances_count": len(visible_instances),
+                    "total_volumes_count": len(visible_volumes),
+                    "total_ebs_gb": visible_ebs_gb,
                     "academy_ebs_limit_gb": 150,
-                    "total_vpcs_count": len(vpcs),
-                    "custom_vpcs_count": sum(1 for v in vpcs if not v["is_default"]),
+                    "total_vpcs_count": len(visible_vpcs),
+                    "custom_vpcs_count": len(visible_vpcs),
                     "active_workspaces_count": sum(1 for w in workspaces if w["resource_count"] > 0),
                     "projects_count": len(projects_deployed),
                 },
                 "ip_sync_events": ip_sync_events,
                 "projects_deployed": projects_deployed,
-                "instances": instances,
-                "volumes": volumes,
-                "vpcs": vpcs,
-                "security_groups": security_groups,
-                "elastic_ips": elastic_ips,
+                "instances": visible_instances,
+                "volumes": visible_volumes,
+                "vpcs": visible_vpcs,
+                "security_groups": visible_sgs,
+                "elastic_ips": visible_eips,
                 "workspaces": workspaces,
             }
         except Exception as exc:
@@ -1633,10 +1638,18 @@ class CloudDeploymentRunner:
             return {"success": False, "error": "Debe especificar resource_type y resource_id."}
 
         # Hard protection for the main CloudMove server
-        if clean_id in ("i-08505f55cdbb4cfb5", "vol-0a1466af76ba0d220", "44.216.47.253"):
+        if clean_id in (
+            "i-08505f55cdbb4cfb5",
+            "i-03b7025356f0c982c",
+            "vol-0a1466af76ba0d220",
+            "44.216.47.253",
+            "100.50.88.231",
+            "deploy/aws",
+            "cloudmove-control-plane",
+        ):
             return {
                 "success": False,
-                "error": f"El recurso '{clean_id}' pertenece al servidor principal de CloudMove (digitalcafeluna.store) y está protegido contra eliminación.",
+                "error": f"El recurso '{clean_id}' está protegido por políticas de seguridad de la plataforma.",
             }
 
         try:
@@ -1663,7 +1676,7 @@ class CloudDeploymentRunner:
                     for r in inst_res.get("Reservations", [])
                     for i in r.get("Instances", [])
                     if (i.get("State") or {}).get("Name") not in ("terminated",)
-                    and i["InstanceId"] != "i-08505f55cdbb4cfb5"
+                    and i["InstanceId"] not in ("i-08505f55cdbb4cfb5", "i-03b7025356f0c982c")
                 ]
                 if iids:
                     ec2.terminate_instances(InstanceIds=iids)

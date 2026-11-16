@@ -2,150 +2,166 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "Integración JSON Osquery → CMIR v2 → Terraform AWS (rabbitmq-kali)",
+    "title": "Topología CMIR v2.1 y Recursos Terraform AWS (us-east-1)",
     "locale": "es",
-    "output": ".archify/architecture-aws-target-20261019-160600/aws-target.html",
+    "output": ".archify/architecture-aws-cmir-20261115/aws-cmir.html",
     "quality_profile": "showcase"
   },
   "components": [
     {
-      "id": "producers",
+      "id": "users_https",
       "type": "external",
-      "label": "Clientes y Admin",
-      "sublabel": "SSH :22 / API :11434",
+      "label": "Clientes y Operadores",
+      "sublabel": "HTTPS :443 / SSH :22",
       "pos": [36, 210],
       "size": [156, 62]
     },
     {
-      "id": "igw_ssm",
+      "id": "aws_igw",
       "type": "cloud",
       "label": "aws_internet_gateway",
-      "sublabel": "GW 10.78.51.85 → IGW",
+      "sublabel": "igw + public_rt 0.0.0.0/0",
       "pos": [290, 70],
-      "size": [156, 62]
+      "size": [162, 62]
     },
     {
-      "id": "sg_ingress",
+      "id": "aws_sg",
       "type": "security",
       "label": "aws_security_group",
-      "sublabel": "listening_ports :22/:11434",
+      "sublabel": "app_sg (:22/:80/:443/:3000/:8000)",
       "pos": [290, 210],
-      "size": [156, 62]
+      "size": [162, 62]
     },
     {
-      "id": "rds_pg",
+      "id": "aws_secrets",
+      "type": "security",
+      "label": "aws_secretsmanager",
+      "sublabel": "IAM Role + KMS Secrets",
+      "pos": [290, 350],
+      "size": [162, 62]
+    },
+    {
+      "id": "aws_rds",
       "type": "database",
       "label": "aws_db_instance",
-      "sublabel": "PostgreSQL 17 Multi-AZ",
-      "pos": [555, 70],
-      "size": [168, 62]
+      "sublabel": "PostgreSQL 15 Multi-AZ",
+      "pos": [565, 70],
+      "size": [172, 62]
     },
     {
-      "id": "ec2_host",
+      "id": "aws_ec2",
       "type": "backend",
       "label": "aws_instance (EC2)",
-      "sublabel": "c6i.2xlarge / t3.xlarge",
-      "pos": [555, 210],
-      "size": [168, 62]
+      "sublabel": "Ubuntu 22.04 LTS + Contenedores",
+      "pos": [565, 210],
+      "size": [172, 62]
     },
     {
-      "id": "ebs_gp3",
+      "id": "aws_ebs",
       "type": "database",
       "label": "aws_ebs_volume (gp3)",
-      "sublabel": "nvme0n1 477 GiB (39G usado)",
-      "pos": [555, 350],
-      "size": [168, 62]
+      "sublabel": "Almacenamiento Cifrado KMS",
+      "pos": [565, 350],
+      "size": [172, 62]
     },
     {
-      "id": "mq_broker",
+      "id": "app_containers",
       "type": "messagebus",
-      "label": "aws_mq_broker",
-      "sublabel": "RabbitMQ 3.13 Privado",
-      "pos": [835, 210],
-      "size": [168, 62]
+      "label": "Docker Compose / Systemd",
+      "sublabel": "Frontend :3000 + API :8000",
+      "pos": [845, 210],
+      "size": [172, 62]
     },
     {
-      "id": "cloudwatch",
+      "id": "aws_cloudwatch",
       "type": "cloud",
       "label": "Amazon CloudWatch",
-      "sublabel": "Logs systemd y Docker",
-      "pos": [835, 70],
-      "size": [168, 62]
+      "sublabel": "Sondas /health y Telemetría",
+      "pos": [845, 70],
+      "size": [172, 62]
     }
   ],
   "boundaries": [
     {
       "kind": "region",
-      "label": "aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1)",
+      "label": "aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1)",
       "wraps": [
-        "igw_ssm",
-        "sg_ingress",
-        "rds_pg",
-        "ec2_host",
-        "ebs_gp3",
-        "mq_broker",
-        "cloudwatch"
+        "aws_igw",
+        "aws_sg",
+        "aws_secrets",
+        "aws_rds",
+        "aws_ec2",
+        "aws_ebs",
+        "app_containers",
+        "aws_cloudwatch"
       ],
       "pad": 22
     },
     {
       "kind": "security-group",
-      "label": "aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)",
+      "label": "Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 & private_subnet 10.0.2.0/24)",
       "wraps": [
-        "rds_pg",
-        "ec2_host",
-        "ebs_gp3",
-        "mq_broker",
-        "cloudwatch"
+        "aws_rds",
+        "aws_ec2",
+        "aws_ebs",
+        "app_containers",
+        "aws_cloudwatch"
       ],
       "pad": 14
     }
   ],
   "connections": [
     {
-      "from": "producers",
-      "to": "sg_ingress",
-      "label": "TCP :22/:11434",
+      "from": "users_https",
+      "to": "aws_sg",
+      "label": "HTTP/S :80/:443",
       "variant": "emphasis",
       "route": "straight"
     },
     {
-      "from": "igw_ssm",
-      "to": "sg_ingress",
-      "label": "Ruta VPC",
+      "from": "aws_igw",
+      "to": "aws_sg",
+      "label": "Ruta Pública",
       "route": "straight"
     },
     {
-      "from": "sg_ingress",
-      "to": "ec2_host",
-      "label": "Flujo SG",
+      "from": "aws_sg",
+      "to": "aws_ec2",
+      "label": "Ingress Filtrado",
       "variant": "security",
       "route": "straight"
     },
     {
-      "from": "ec2_host",
-      "to": "rds_pg",
-      "label": "SQL :5432",
+      "from": "aws_secrets",
+      "to": "aws_ec2",
+      "label": "IAM Profile",
+      "variant": "dashed",
+      "route": "straight"
+    },
+    {
+      "from": "aws_ec2",
+      "to": "aws_rds",
+      "label": "TCP :5432",
       "variant": "security",
       "route": "straight"
     },
     {
-      "from": "ec2_host",
-      "to": "ebs_gp3",
-      "label": "nvme0n1 gp3",
+      "from": "aws_ec2",
+      "to": "aws_ebs",
+      "label": "Bloques gp3",
       "route": "straight"
     },
     {
-      "from": "ec2_host",
-      "to": "mq_broker",
-      "label": "AMQP :5672",
+      "from": "aws_ec2",
+      "to": "app_containers",
+      "label": "Bridge :3000/:8000",
       "variant": "emphasis",
       "route": "straight"
     },
     {
-      "from": "mq_broker",
-      "to": "cloudwatch",
-      "label": "Métricas",
+      "from": "app_containers",
+      "to": "aws_cloudwatch",
+      "label": "Health :8000",
       "variant": "dashed",
       "route": "straight"
     }
@@ -153,29 +169,29 @@
   "cards": [
     {
       "dot": "cyan",
-      "title": "1. JSON Osquery → CMIR → EC2 & EBS",
+      "title": "1. Caso 1 · Aplicación desde GitHub a AWS",
       "items": [
-        "CPU i7-1255U (10C/16T) + 15.35 GiB RAM → aws_instance c6i.2xlarge (o t3.xlarge right-sized)",
-        "Disco físico /dev/nvme0n1 (476.94 GiB, 39.04 GiB usados en /) → aws_ebs_volume gp3",
-        "Separación estricta entre disco padre nvme0n1 y particiones p1, p2, p3"
+        "Aprovisiona aws_vpc (10.0.0.0/16), aws_internet_gateway y subredes Multi-AZ",
+        "Despliega contenedores en aws_instance con sincronización dinámica de IP vía IMDSv2",
+        "Gestiona variables sensibles mediante aws_secretsmanager_secret e IAM Profile"
       ]
     },
     {
       "dot": "emerald",
-      "title": "2. Red y Puertos → VPC & Security Group",
+      "title": "2. Caso 2 · Imagen de SO / Máquina Virtual a AWS",
       "items": [
-        "Interfaz wlan0 (10.78.51.148/24) + GW 10.78.51.85 → aws_vpc + aws_subnet privada",
-        "listening_ports (sshd :22, ollama :11434, avahi :5353) → reglas ingress en aws_security_group",
-        "Puente docker0 (172.17.0.1/16) documentado para cargas de contenedores"
+        "Captura telemetría real mediante agente remoto inscrito con token de un solo uso",
+        "Dimensiona volúmenes aws_ebs_volume gp3 respetando las cuotas de AWS Academy",
+        "Rehidrata servicios systemd, usuarios y paquetes mediante user_data.sh"
       ]
     },
     {
       "dot": "amber",
-      "title": "3. Estrategia Replatform vs. Rehost",
+      "title": "3. Seguridad y Gobernanza en Consola AWS",
       "items": [
-        "Modo Replatform: genera aws_db_instance (PostgreSQL) y aws_mq_broker (RabbitMQ)",
-        "Modo Rehost: conserva todos los servicios dentro de aws_instance + aws_ebs_volume",
-        "Exportable a provider.tf, variables.tf, main.tf y outputs.tf en 1 clic"
+        "Perímetro aws_security_group deduplicado sin puertos redundantes",
+        "Aislamiento estricto de la infraestructura base de CloudMove",
+        "Trazabilidad completa en main.tf, variables.tf y outputs.tf"
       ]
     }
   ]

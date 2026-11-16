@@ -125,13 +125,8 @@ export default function AppShell({
                 >
                   <span>Plan activo:</span>
                   <strong>{activeMigrationJob.name}</strong>
-                  <span
-                    className={`cm-badge ${
-                      activeMigrationJob.target_provider === "gcp" ? "gcp" : "aws"
-                    }`}
-                  >
-                    {activeMigrationJob.target_provider?.toUpperCase()} ·{" "}
-                    {activeMigrationJob.state}
+                  <span className="cm-badge aws">
+                    AWS · {activeMigrationJob.state}
                   </span>
                 </button>
               )}

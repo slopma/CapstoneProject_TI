@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="generator" content="archify 3.1.0">
   <meta name="archify-reader-contract" content="declared-wide-v1">
-  <title>Integración JSON Osquery → CMIR v2 → Terraform AWS (rabbitmq-kali) · Diagrama</title>
+  <title>Topología CMIR v2.1 y Recursos Terraform AWS (us-east-1) · Diagrama</title>
   <script>
     // Resolve the theme before first paint so light-preference users don't
     // see a dark flash. The toolbar script below re-applies with UI state.
@@ -5150,7 +5150,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
            data-preset-badge-blueprint="PLANO / REV 01"
            data-preset-badge-editorial="EDITORIAL / NOTA DE CAMPO">
         <div class="pulse-dot"></div>
-        <h1>Integración JSON Osquery → CMIR v2 → Terraform AWS (rabbitmq-kali)</h1>
+        <h1>Topología CMIR v2.1 y Recursos Terraform AWS (us-east-1)</h1>
       </div>
     </div>
 
@@ -5159,8 +5159,8 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / LÁMINA 04">
-      <svg viewBox="0 0 1065 500" role="img" lang="es" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-node-ui="" data-reader-fit="intrinsic-height" data-reader-min-text="7.5" data-reader-primary-text="14">
-        <title id="archify-diagram-title">Integración JSON Osquery → CMIR v2 → Terraform AWS (rabbitmq-kali)</title>
+      <svg viewBox="0 0 1079 500" role="img" lang="es" aria-labelledby="archify-diagram-title archify-diagram-description" data-animation="trace" data-preset="classic" data-quality-profile="showcase" data-node-ui="" data-reader-fit="intrinsic-height" data-reader-min-text="7.5" data-reader-primary-text="14">
+        <title id="archify-diagram-title">Topología CMIR v2.1 y Recursos Terraform AWS (us-east-1)</title>
         <desc id="archify-diagram-description">Un diagrama de arquitectura generado por Archify.</desc>
         <!-- Definitions -->
         <defs>
@@ -5206,154 +5206,171 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Boundaries (behind everything) -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1)" x="268" y="28" width="757" height="404" rx="12" class="c-region" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1)" x="268" y="28" width="771" height="404" rx="12" class="c-region" stroke-width="1"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="security-group" data-composition-frame-id="1" data-composition-frame-label="aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)" x="541" y="46" width="476" height="386" rx="8" class="c-security-group" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="security-group" data-composition-frame-id="1" data-composition-frame-label="Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)" x="551" y="46" width="480" height="386" rx="8" class="c-security-group" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
-        <path data-edge-from="producers" data-edge-to="sg_ingress" data-edge-label="TCP :22/:11434" data-edge-key="0" data-composition-points="192,241;290,241" d="M 192 241 L 290 241" class="a-emphasis" data-animate="edge" style="--step:0" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="igw_ssm" data-edge-to="sg_ingress" data-edge-label="Ruta VPC" data-edge-key="1" data-composition-points="368,132;368,210" d="M 368 132 L 368 210" class="a-default" data-animate="edge" style="--step:1" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="sg_ingress" data-edge-to="ec2_host" data-edge-label="Flujo SG" data-edge-key="2" data-composition-points="446,241;555,241" d="M 446 241 L 555 241" class="a-security" data-animate="edge" style="--step:2" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="ec2_host" data-edge-to="rds_pg" data-edge-label="SQL :5432" data-edge-key="3" data-composition-points="639,210;639,132" d="M 639 210 L 639 132" class="a-security" data-animate="edge" style="--step:3" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
-        <path data-edge-from="ec2_host" data-edge-to="ebs_gp3" data-edge-label="nvme0n1 gp3" data-edge-key="4" data-composition-points="639,272;639,350" d="M 639 272 L 639 350" class="a-default" data-animate="edge" style="--step:4" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="ec2_host" data-edge-to="mq_broker" data-edge-label="AMQP :5672" data-edge-key="5" data-composition-points="723,241;835,241" d="M 723 241 L 835 241" class="a-emphasis" data-animate="edge" style="--step:5" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="mq_broker" data-edge-to="cloudwatch" data-edge-label="Métricas" data-edge-key="6" data-composition-points="919,210;919,132" d="M 919 210 L 919 132" class="a-dashed" data-animate="edge" style="--step:6" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="users_https" data-edge-to="aws_sg" data-edge-label="HTTP/S :80/:443" data-edge-key="0" data-composition-points="192,241;290,241" d="M 192 241 L 290 241" class="a-emphasis" data-animate="edge" style="--step:0" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="aws_igw" data-edge-to="aws_sg" data-edge-label="Ruta Pública" data-edge-key="1" data-composition-points="371,132;371,210" d="M 371 132 L 371 210" class="a-default" data-animate="edge" style="--step:1" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="aws_sg" data-edge-to="aws_ec2" data-edge-label="Ingress Filtrado" data-edge-key="2" data-composition-points="452,241;565,241" d="M 452 241 L 565 241" class="a-security" data-animate="edge" style="--step:2" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="aws_secrets" data-edge-to="aws_ec2" data-edge-label="IAM Profile" data-edge-key="3" data-composition-points="452,381;565,241" data-composition-route="straight" d="M 452 381 L 565 241" class="a-dashed" data-animate="edge" style="--step:3" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="aws_ec2" data-edge-to="aws_rds" data-edge-label="TCP :5432" data-edge-key="4" data-composition-points="651,210;651,132" d="M 651 210 L 651 132" class="a-security" data-animate="edge" style="--step:4" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        <path data-edge-from="aws_ec2" data-edge-to="aws_ebs" data-edge-label="Bloques gp3" data-edge-key="5" data-composition-points="651,272;651,350" d="M 651 272 L 651 350" class="a-default" data-animate="edge" style="--step:5" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="aws_ec2" data-edge-to="app_containers" data-edge-label="Bridge :3000/:8000" data-edge-key="6" data-composition-points="737,241;845,241" d="M 737 241 L 845 241" class="a-emphasis" data-animate="edge" style="--step:6" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="app_containers" data-edge-to="aws_cloudwatch" data-edge-label="Health :8000" data-edge-key="7" data-composition-points="931,210;931,132" d="M 931 210 L 931 132" class="a-dashed" data-animate="edge" style="--step:7" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
-        <g id="node-producers" data-node-id="producers" data-node-label="Clientes y Admin" tabindex="0" role="button" aria-label="Enfocar Clientes y Admin, SSH :22 / API :11434, Componente de arquitectura" aria-pressed="false" data-node-kind="external" data-node-sublabel="SSH :22 / API :11434" data-node-context="Componente de arquitectura">
-          <title>Clientes y Admin · SSH :22 / API :11434 · Componente de arquitectura</title>
+        <g id="node-users_https" data-node-id="users_https" data-node-label="Clientes y Operadores" tabindex="0" role="button" aria-label="Enfocar Clientes y Operadores, HTTPS :443 / SSH :22, Componente de arquitectura" aria-pressed="false" data-node-kind="external" data-node-sublabel="HTTPS :443 / SSH :22" data-node-context="Componente de arquitectura">
+          <title>Clientes y Operadores · HTTPS :443 / SSH :22 · Componente de arquitectura</title>
           <rect x="36" y="210" width="156" height="62" rx="8" class="c-mask"/>
           <rect x="36" y="210" width="156" height="62" rx="8" class="c-external" data-animate="node" style="--step:0" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(42 216) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="114" y="239" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Clientes y Admin</text>
-        <text data-detail="context" x="114" y="255" class="t-muted" font-size="9" text-anchor="middle">SSH :22 / API :11434</text>
+          <text data-node-label="" data-detail-anchor="" x="114" y="239" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Clientes y Operadores</text>
+        <text data-detail="context" x="114" y="255" class="t-muted" font-size="9" text-anchor="middle">HTTPS :443 / SSH :22</text>
         </g>
 
-        <g id="node-igw_ssm" data-node-id="igw_ssm" data-node-label="aws_internet_gateway" tabindex="0" role="button" aria-label="Enfocar aws_internet_gateway, GW 10.78.51.85 → IGW, aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1)" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="GW 10.78.51.85 → IGW" data-node-context="aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1)">
-          <title>aws_internet_gateway · GW 10.78.51.85 → IGW · aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1)</title>
-          <rect x="290" y="70" width="156" height="62" rx="8" class="c-mask"/>
-          <rect x="290" y="70" width="156" height="62" rx="8" class="c-cloud" data-animate="node" style="--step:1" stroke-width="1.5"/>
+        <g id="node-aws_igw" data-node-id="aws_igw" data-node-label="aws_internet_gateway" tabindex="0" role="button" aria-label="Enfocar aws_internet_gateway, igw + public_rt 0.0.0.0/0, aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1)" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="igw + public_rt 0.0.0.0/0" data-node-context="aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1)">
+          <title>aws_internet_gateway · igw + public_rt 0.0.0.0/0 · aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1)</title>
+          <rect x="290" y="70" width="162" height="62" rx="8" class="c-mask"/>
+          <rect x="290" y="70" width="162" height="62" rx="8" class="c-cloud" data-animate="node" style="--step:1" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(296 76) scale(0.6875)">
             <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="368" y="99" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aws_internet_gateway</text>
-        <text data-detail="context" x="368" y="115" class="t-muted" font-size="9" text-anchor="middle">GW 10.78.51.85 → IGW</text>
+          <text data-node-label="" data-detail-anchor="" x="371" y="99" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aws_internet_gateway</text>
+        <text data-detail="context" x="371" y="115" class="t-muted" font-size="9" text-anchor="middle">igw + public_rt 0.0.0.0/0</text>
         </g>
 
-        <g id="node-sg_ingress" data-node-id="sg_ingress" data-node-label="aws_security_group" tabindex="0" role="button" aria-label="Enfocar aws_security_group, listening_ports :22/:11434, aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1)" aria-pressed="false" data-node-kind="security" data-node-sublabel="listening_ports :22/:11434" data-node-context="aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1)">
-          <title>aws_security_group · listening_ports :22/:11434 · aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1)</title>
-          <rect x="290" y="210" width="156" height="62" rx="8" class="c-mask"/>
-          <rect x="290" y="210" width="156" height="62" rx="8" class="c-security" data-animate="node" style="--step:1" stroke-width="1.5"/>
+        <g id="node-aws_sg" data-node-id="aws_sg" data-node-label="aws_security_group" tabindex="0" role="button" aria-label="Enfocar aws_security_group, app_sg (:22/:80/:443/:3000/:8000), aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1)" aria-pressed="false" data-node-kind="security" data-node-sublabel="app_sg (:22/:80/:443/:3000/:8000)" data-node-context="aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1)">
+          <title>aws_security_group · app_sg (:22/:80/:443/:3000/:8000) · aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1)</title>
+          <rect x="290" y="210" width="162" height="62" rx="8" class="c-mask"/>
+          <rect x="290" y="210" width="162" height="62" rx="8" class="c-security" data-animate="node" style="--step:1" stroke-width="1.5"/>
           <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(296 216) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="368" y="239" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aws_security_group</text>
-        <text data-detail="context" x="368" y="255" class="t-muted" font-size="9" text-anchor="middle">listening_ports :22/:11434</text>
+          <text data-node-label="" data-detail-anchor="" x="371" y="239" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aws_security_group</text>
+        <text data-detail="context" x="371" y="255" class="t-muted" font-size="7.7" text-anchor="middle">app_sg (:22/:80/:443/:3000/:8000)</text>
         </g>
 
-        <g id="node-rds_pg" data-node-id="rds_pg" data-node-label="aws_db_instance" tabindex="0" role="button" aria-label="Enfocar aws_db_instance, PostgreSQL 17 Multi-AZ, aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1) › aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)" aria-pressed="false" data-node-kind="database" data-node-sublabel="PostgreSQL 17 Multi-AZ" data-node-context="aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1) › aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)">
-          <title>aws_db_instance · PostgreSQL 17 Multi-AZ · aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1) › aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)</title>
-          <rect x="555" y="70" width="168" height="62" rx="8" class="c-mask"/>
-          <rect x="555" y="70" width="168" height="62" rx="8" class="c-database" data-animate="node" style="--step:4" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(561 76) scale(0.6875)">
+        <g id="node-aws_secrets" data-node-id="aws_secrets" data-node-label="aws_secretsmanager" tabindex="0" role="button" aria-label="Enfocar aws_secretsmanager, IAM Role + KMS Secrets, aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1)" aria-pressed="false" data-node-kind="security" data-node-sublabel="IAM Role + KMS Secrets" data-node-context="aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1)">
+          <title>aws_secretsmanager · IAM Role + KMS Secrets · aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1)</title>
+          <rect x="290" y="350" width="162" height="62" rx="8" class="c-mask"/>
+          <rect x="290" y="350" width="162" height="62" rx="8" class="c-security" data-animate="node" style="--step:3" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(296 356) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="371" y="379" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aws_secretsmanager</text>
+        <text data-detail="context" x="371" y="395" class="t-muted" font-size="9" text-anchor="middle">IAM Role + KMS Secrets</text>
+        </g>
+
+        <g id="node-aws_rds" data-node-id="aws_rds" data-node-label="aws_db_instance" tabindex="0" role="button" aria-label="Enfocar aws_db_instance, PostgreSQL 15 Multi-AZ, aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1) › Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)" aria-pressed="false" data-node-kind="database" data-node-sublabel="PostgreSQL 15 Multi-AZ" data-node-context="aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1) › Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)">
+          <title>aws_db_instance · PostgreSQL 15 Multi-AZ · aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1) › Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)</title>
+          <rect x="565" y="70" width="172" height="62" rx="8" class="c-mask"/>
+          <rect x="565" y="70" width="172" height="62" rx="8" class="c-database" data-animate="node" style="--step:5" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(571 76) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="639" y="99" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aws_db_instance</text>
-        <text data-detail="context" x="639" y="115" class="t-muted" font-size="9" text-anchor="middle">PostgreSQL 17 Multi-AZ</text>
+          <text data-node-label="" data-detail-anchor="" x="651" y="99" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aws_db_instance</text>
+        <text data-detail="context" x="651" y="115" class="t-muted" font-size="9" text-anchor="middle">PostgreSQL 15 Multi-AZ</text>
         </g>
 
-        <g id="node-ec2_host" data-node-id="ec2_host" data-node-label="aws_instance (EC2)" tabindex="0" role="button" aria-label="Enfocar aws_instance (EC2), c6i.2xlarge / t3.xlarge, aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1) › aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="c6i.2xlarge / t3.xlarge" data-node-context="aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1) › aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)">
-          <title>aws_instance (EC2) · c6i.2xlarge / t3.xlarge · aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1) › aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)</title>
-          <rect x="555" y="210" width="168" height="62" rx="8" class="c-mask"/>
-          <rect x="555" y="210" width="168" height="62" rx="8" class="c-backend" data-animate="node" style="--step:3" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(561 216) scale(0.6875)">
+        <g id="node-aws_ec2" data-node-id="aws_ec2" data-node-label="aws_instance (EC2)" tabindex="0" role="button" aria-label="Enfocar aws_instance (EC2), Ubuntu 22.04 LTS + Contenedores, aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1) › Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)" aria-pressed="false" data-node-kind="backend" data-node-sublabel="Ubuntu 22.04 LTS + Contenedores" data-node-context="aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1) › Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)">
+          <title>aws_instance (EC2) · Ubuntu 22.04 LTS + Contenedores · aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1) › Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)</title>
+          <rect x="565" y="210" width="172" height="62" rx="8" class="c-mask"/>
+          <rect x="565" y="210" width="172" height="62" rx="8" class="c-backend" data-animate="node" style="--step:3" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(571 216) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="639" y="239" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aws_instance (EC2)</text>
-        <text data-detail="context" x="639" y="255" class="t-muted" font-size="9" text-anchor="middle">c6i.2xlarge / t3.xlarge</text>
+          <text data-node-label="" data-detail-anchor="" x="651" y="239" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aws_instance (EC2)</text>
+        <text data-detail="context" x="651" y="255" class="t-muted" font-size="8.8" text-anchor="middle">Ubuntu 22.04 LTS + Contenedores</text>
         </g>
 
-        <g id="node-ebs_gp3" data-node-id="ebs_gp3" data-node-label="aws_ebs_volume (gp3)" tabindex="0" role="button" aria-label="Enfocar aws_ebs_volume (gp3), nvme0n1 477 GiB (39G usado), aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1) › aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)" aria-pressed="false" data-node-kind="database" data-node-sublabel="nvme0n1 477 GiB (39G usado)" data-node-context="aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1) › aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)">
-          <title>aws_ebs_volume (gp3) · nvme0n1 477 GiB (39G usado) · aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1) › aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)</title>
-          <rect x="555" y="350" width="168" height="62" rx="8" class="c-mask"/>
-          <rect x="555" y="350" width="168" height="62" rx="8" class="c-database" data-animate="node" style="--step:5" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(561 356) scale(0.6875)">
+        <g id="node-aws_ebs" data-node-id="aws_ebs" data-node-label="aws_ebs_volume (gp3)" tabindex="0" role="button" aria-label="Enfocar aws_ebs_volume (gp3), Almacenamiento Cifrado KMS, aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1) › Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)" aria-pressed="false" data-node-kind="database" data-node-sublabel="Almacenamiento Cifrado KMS" data-node-context="aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1) › Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)">
+          <title>aws_ebs_volume (gp3) · Almacenamiento Cifrado KMS · aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1) › Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)</title>
+          <rect x="565" y="350" width="172" height="62" rx="8" class="c-mask"/>
+          <rect x="565" y="350" width="172" height="62" rx="8" class="c-database" data-animate="node" style="--step:6" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(571 356) scale(0.6875)">
             <ellipse cx="8" cy="4" rx="5" ry="2"/>
             <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="639" y="379" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aws_ebs_volume (gp3)</text>
-        <text data-detail="context" x="639" y="395" class="t-muted" font-size="9" text-anchor="middle">nvme0n1 477 GiB (39G usado)</text>
+          <text data-node-label="" data-detail-anchor="" x="651" y="379" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aws_ebs_volume (gp3)</text>
+        <text data-detail="context" x="651" y="395" class="t-muted" font-size="9" text-anchor="middle">Almacenamiento Cifrado KMS</text>
         </g>
 
-        <g id="node-mq_broker" data-node-id="mq_broker" data-node-label="aws_mq_broker" tabindex="0" role="button" aria-label="Enfocar aws_mq_broker, RabbitMQ 3.13 Privado, aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1) › aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="RabbitMQ 3.13 Privado" data-node-context="aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1) › aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)">
-          <title>aws_mq_broker · RabbitMQ 3.13 Privado · aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1) › aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)</title>
-          <rect x="835" y="210" width="168" height="62" rx="8" class="c-mask"/>
-          <rect x="835" y="210" width="168" height="62" rx="8" class="c-messagebus" data-animate="node" style="--step:6" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(841 216) scale(0.6875)">
+        <g id="node-app_containers" data-node-id="app_containers" data-node-label="Docker Compose / Systemd" tabindex="0" role="button" aria-label="Enfocar Docker Compose / Systemd, Frontend :3000 + API :8000, aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1) › Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)" aria-pressed="false" data-node-kind="messagebus" data-node-sublabel="Frontend :3000 + API :8000" data-node-context="aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1) › Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)">
+          <title>Docker Compose / Systemd · Frontend :3000 + API :8000 · aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1) › Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)</title>
+          <rect x="845" y="210" width="172" height="62" rx="8" class="c-mask"/>
+          <rect x="845" y="210" width="172" height="62" rx="8" class="c-messagebus" data-animate="node" style="--step:7" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(851 216) scale(0.6875)">
             <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
             <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
             <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
             <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="919" y="239" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aws_mq_broker</text>
-        <text data-detail="context" x="919" y="255" class="t-muted" font-size="9" text-anchor="middle">RabbitMQ 3.13 Privado</text>
+          <text data-node-label="" data-detail-anchor="" x="931" y="239" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Docker Compose / Systemd</text>
+        <text data-detail="context" x="931" y="255" class="t-muted" font-size="9" text-anchor="middle">Frontend :3000 + API :8000</text>
         </g>
 
-        <g id="node-cloudwatch" data-node-id="cloudwatch" data-node-label="Amazon CloudWatch" tabindex="0" role="button" aria-label="Enfocar Amazon CloudWatch, Logs systemd y Docker, aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1) › aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="Logs systemd y Docker" data-node-context="aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1) › aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)">
-          <title>Amazon CloudWatch · Logs systemd y Docker · aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1) › aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)</title>
-          <rect x="835" y="70" width="168" height="62" rx="8" class="c-mask"/>
-          <rect x="835" y="70" width="168" height="62" rx="8" class="c-cloud" data-animate="node" style="--step:7" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(841 76) scale(0.6875)">
+        <g id="node-aws_cloudwatch" data-node-id="aws_cloudwatch" data-node-label="Amazon CloudWatch" tabindex="0" role="button" aria-label="Enfocar Amazon CloudWatch, Sondas /health y Telemetría, aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1) › Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="Sondas /health y Telemetría" data-node-context="aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1) › Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)">
+          <title>Amazon CloudWatch · Sondas /health y Telemetría · aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1) › Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)</title>
+          <rect x="845" y="70" width="172" height="62" rx="8" class="c-mask"/>
+          <rect x="845" y="70" width="172" height="62" rx="8" class="c-cloud" data-animate="node" style="--step:8" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(851 76) scale(0.6875)">
             <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="919" y="99" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Amazon CloudWatch</text>
-        <text data-detail="context" x="919" y="115" class="t-muted" font-size="9" text-anchor="middle">Logs systemd y Docker</text>
+          <text data-node-label="" data-detail-anchor="" x="931" y="99" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Amazon CloudWatch</text>
+        <text data-detail="context" x="931" y="115" class="t-muted" font-size="9" text-anchor="middle">Sondas /health y Telemetría</text>
         </g>
 
         <!-- Connection labels -->
-        <g data-detail="context" data-edge-from="producers" data-edge-to="sg_ingress" data-edge-label="TCP :22/:11434" data-edge-key="0">
-          <rect x="202.4" y="221" width="77.2" height="14" rx="3" class="c-mask"/>
-          <text x="241" y="231" class="t-edge-emphasis" font-size="8" text-anchor="middle">TCP :22/:11434</text>
+        <g data-detail="context" data-edge-from="users_https" data-edge-to="aws_sg" data-edge-label="HTTP/S :80/:443" data-edge-key="0">
+          <rect x="200" y="221" width="82" height="14" rx="3" class="c-mask"/>
+          <text x="241" y="231" class="t-edge-emphasis" font-size="8" text-anchor="middle">HTTP/S :80/:443</text>
         </g>
-        <g data-detail="context" data-edge-from="igw_ssm" data-edge-to="sg_ingress" data-edge-label="Ruta VPC" data-edge-key="1">
-          <rect x="313.6" y="164" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="337.8" y="174" class="t-edge-default" font-size="8" text-anchor="middle">Ruta VPC</text>
+        <g data-detail="context" data-edge-from="aws_igw" data-edge-to="aws_sg" data-edge-label="Ruta Pública" data-edge-key="1">
+          <rect x="297.4" y="164" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="331.2" y="174" class="t-edge-default" font-size="8" text-anchor="middle">Ruta Pública</text>
         </g>
-        <g data-detail="context" data-edge-from="sg_ingress" data-edge-to="ec2_host" data-edge-label="Flujo SG" data-edge-key="2">
-          <rect x="476.3" y="221" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="500.5" y="231" class="t-edge-security" font-size="8" text-anchor="middle">Flujo SG</text>
+        <g data-detail="context" data-edge-from="aws_sg" data-edge-to="aws_ec2" data-edge-label="Ingress Filtrado" data-edge-key="2">
+          <rect x="465.1" y="221" width="86.8" height="14" rx="3" class="c-mask"/>
+          <text x="508.5" y="231" class="t-edge-security" font-size="8" text-anchor="middle">Ingress Filtrado</text>
         </g>
-        <g data-detail="context" data-edge-from="ec2_host" data-edge-to="rds_pg" data-edge-label="SQL :5432" data-edge-key="3">
-          <rect x="612.4" y="190" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
-          <text x="639" y="200" class="t-edge-security" font-size="8" text-anchor="middle">SQL :5432</text>
+        <g data-detail="context" data-edge-from="aws_secrets" data-edge-to="aws_ec2" data-edge-label="IAM Profile" data-edge-key="3">
+          <rect x="477.1" y="361" width="62.8" height="14" rx="3" class="c-mask"/>
+          <text x="508.5" y="371" class="t-edge-dashed" font-size="8" text-anchor="middle">IAM Profile</text>
         </g>
-        <g data-detail="context" data-edge-from="ec2_host" data-edge-to="ebs_gp3" data-edge-label="nvme0n1 gp3" data-edge-key="4">
-          <rect x="570.2" y="304" width="62.8" height="14" rx="3" class="c-mask"/>
-          <text x="601.6" y="314" class="t-edge-default" font-size="8" text-anchor="middle">nvme0n1 gp3</text>
+        <g data-detail="context" data-edge-from="aws_ec2" data-edge-to="aws_rds" data-edge-label="TCP :5432" data-edge-key="4">
+          <rect x="624.4" y="190" width="53.199999999999996" height="14" rx="3" class="c-mask"/>
+          <text x="651" y="200" class="t-edge-security" font-size="8" text-anchor="middle">TCP :5432</text>
         </g>
-        <g data-detail="context" data-edge-from="ec2_host" data-edge-to="mq_broker" data-edge-label="AMQP :5672" data-edge-key="5">
-          <rect x="750" y="221" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="779" y="231" class="t-edge-emphasis" font-size="8" text-anchor="middle">AMQP :5672</text>
+        <g data-detail="context" data-edge-from="aws_ec2" data-edge-to="aws_ebs" data-edge-label="Bloques gp3" data-edge-key="5">
+          <rect x="582.2" y="304" width="62.8" height="14" rx="3" class="c-mask"/>
+          <text x="613.6" y="314" class="t-edge-default" font-size="8" text-anchor="middle">Bloques gp3</text>
         </g>
-        <g data-detail="context" data-edge-from="mq_broker" data-edge-to="cloudwatch" data-edge-label="Métricas" data-edge-key="6">
-          <rect x="894.8" y="190" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="919" y="200" class="t-edge-dashed" font-size="8" text-anchor="middle">Métricas</text>
+        <g data-detail="context" data-edge-from="aws_ec2" data-edge-to="app_containers" data-edge-label="Bridge :3000/:8000" data-edge-key="6">
+          <rect x="742.8" y="221" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
+          <text x="791" y="231" class="t-edge-emphasis" font-size="8" text-anchor="middle">Bridge :3000/:8000</text>
+        </g>
+        <g data-detail="context" data-edge-from="app_containers" data-edge-to="aws_cloudwatch" data-edge-label="Health :8000" data-edge-key="7">
+          <rect x="897.2" y="190" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="931" y="200" class="t-edge-dashed" font-size="8" text-anchor="middle">Health :8000</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
-        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1)">
-          <rect data-graph-role="structural-frame-label-mask" x="272" y="32" width="285.4" height="16" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="276" y="45" class="t-cloud" font-size="9" font-weight="600">aws_vpc.rabbitmq_kali_vpc (10.0.0.0/16 · us-east-1)</text>
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1)">
+          <rect data-graph-role="structural-frame-label-mask" x="272" y="32" width="317.8" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="276" y="45" class="t-cloud" font-size="9" font-weight="600">aws_vpc.target_vpc (10.0.0.0/16 · EE. UU. Este us-east-1)</text>
         </g>
 
-        <g data-graph-role="structural-frame-label" data-composition-frame-id="1" data-composition-frame-kind="security-group" data-composition-frame-label="aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)">
-          <rect data-graph-role="structural-frame-label-mask" x="545" y="50" width="355.59999999999997" height="16" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="549" y="63" class="t-security" font-size="9" font-weight="600">aws_subnet.rabbitmq_kali_private_a (Origen: wlan0 10.78.51.0/24)</text>
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="1" data-composition-frame-kind="security-group" data-composition-frame-label="Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)">
+          <rect data-graph-role="structural-frame-label-mask" x="555" y="50" width="469" height="16" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="559" y="63" class="t-security" font-size="9" font-weight="600">Subredes Multi-AZ (aws_subnet.public_subnet 10.0.1.0/24 &amp; private_subnet 10.0.2.0/24)</text>
         </g>
 
         <!-- Legend -->
@@ -5564,36 +5581,36 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
       <div class="card">
         <div class="card-header">
           <div class="card-dot cyan"></div>
-          <h3>1. JSON Osquery → CMIR → EC2 &amp; EBS</h3>
+          <h3>1. Caso 1 · Aplicación desde GitHub a AWS</h3>
         </div>
         <ul>
-          <li>CPU i7-1255U (10C/16T) + 15.35 GiB RAM → aws_instance c6i.2xlarge (o t3.xlarge right-sized)</li>
-          <li>Disco físico /dev/nvme0n1 (476.94 GiB, 39.04 GiB usados en /) → aws_ebs_volume gp3</li>
-          <li>Separación estricta entre disco padre nvme0n1 y particiones p1, p2, p3</li>
+          <li>Aprovisiona aws_vpc (10.0.0.0/16), aws_internet_gateway y subredes Multi-AZ</li>
+          <li>Despliega contenedores en aws_instance con sincronización dinámica de IP vía IMDSv2</li>
+          <li>Gestiona variables sensibles mediante aws_secretsmanager_secret e IAM Profile</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>2. Red y Puertos → VPC &amp; Security Group</h3>
+          <h3>2. Caso 2 · Imagen de SO / Máquina Virtual a AWS</h3>
         </div>
         <ul>
-          <li>Interfaz wlan0 (10.78.51.148/24) + GW 10.78.51.85 → aws_vpc + aws_subnet privada</li>
-          <li>listening_ports (sshd :22, ollama :11434, avahi :5353) → reglas ingress en aws_security_group</li>
-          <li>Puente docker0 (172.17.0.1/16) documentado para cargas de contenedores</li>
+          <li>Captura telemetría real mediante agente remoto inscrito con token de un solo uso</li>
+          <li>Dimensiona volúmenes aws_ebs_volume gp3 respetando las cuotas de AWS Academy</li>
+          <li>Rehidrata servicios systemd, usuarios y paquetes mediante user_data.sh</li>
         </ul>
       </div>
 
       <div class="card">
         <div class="card-header">
           <div class="card-dot amber"></div>
-          <h3>3. Estrategia Replatform vs. Rehost</h3>
+          <h3>3. Seguridad y Gobernanza en Consola AWS</h3>
         </div>
         <ul>
-          <li>Modo Replatform: genera aws_db_instance (PostgreSQL) y aws_mq_broker (RabbitMQ)</li>
-          <li>Modo Rehost: conserva todos los servicios dentro de aws_instance + aws_ebs_volume</li>
-          <li>Exportable a provider.tf, variables.tf, main.tf y outputs.tf en 1 clic</li>
+          <li>Perímetro aws_security_group deduplicado sin puertos redundantes</li>
+          <li>Aislamiento estricto de la infraestructura base de CloudMove</li>
+          <li>Trazabilidad completa en main.tf, variables.tf y outputs.tf</li>
         </ul>
       </div>
     </div>

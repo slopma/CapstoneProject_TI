@@ -1,8 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import AppShell from "./components/layout/AppShell";
-import CanvasToolbar from "./components/architecture/CanvasToolbar";
-import Breadcrumbs from "./components/layout/Breadcrumbs";
-import ArchitectureCanvas from "./components/architecture/ArchitectureCanvas";
+import ArchifyArchitectureWorkspace from "./components/architecture/ArchifyArchitectureWorkspace";
 import ResourceInspector from "./components/inspector/ResourceInspector";
 import MigrationPreviewModal from "./components/migration/MigrationPreviewModal";
 import DiscoveryWorkspace from "./components/discovery/DiscoveryWorkspace";
@@ -242,7 +240,16 @@ function App() {
       ]);
       if (discRes && discRes.ok) {
         const d = await discRes.json();
-        if (d.hostname || d.agent?.hostname) setActiveHost(d.hostname || d.agent?.hostname);
+        const rawHost = d.hostname || d.agent?.hostname || "";
+        if (
+          rawHost &&
+          !["cloudmove-server", "localhost", "127.0.0.1", "100.50.88.231"].includes(
+            rawHost.toLowerCase()
+          ) &&
+          !/^[0-9a-f]{12}$/i.test(rawHost)
+        ) {
+          setActiveHost(rawHost);
+        }
       }
       if (jobsRes && jobsRes.ok) {
         const j = await jobsRes.json();
@@ -530,6 +537,7 @@ function App() {
         ) : activeTab === "discovery" ? (
           <DiscoveryWorkspace
             apiUrl={getApiBase()}
+            onNavigateTab={setActiveTab}
             onLoadCmirToCanvas={() => {
               fetchArchitecture();
               setActiveTab("architecture");
@@ -537,52 +545,8 @@ function App() {
           />
         ) : activeTab === "architecture" ? (
           <>
-            <CanvasToolbar
-              archViewMode={archViewMode}
-              onToggleArchViewMode={handleToggleArchViewMode}
-              activeLayer={activeLayer}
-              setActiveLayer={setActiveLayer}
-              domainFilter={domainFilter}
-              setDomainFilter={setDomainFilter}
-              highlightDeps={highlightDeps}
-              setHighlightDeps={setHighlightDeps}
-              showLegend={showLegend}
-              setShowLegend={setShowLegend}
-              onExpandAll={handleExpandAll}
-              onCollapseAll={handleCollapseAll}
-              selectedCount={selectedNodes.length}
-              onClearSelection={() => {
-                setSelectedNodes([]);
-                setSelectedNodeObj(null);
-              }}
-              onAnalyzeDependencies={resolveDependencies}
-            />
-
-            {breadcrumbs.length > 0 && (
-              <Breadcrumbs
-                breadcrumbs={breadcrumbs}
-                onNavigate={(nodeId) => {
-                  const item = allNodes.find((n) => n.id === nodeId);
-                  if (item) setSelectedNodeObj(item);
-                }}
-                onReset={() => {
-                  setSelectedNodeObj(null);
-                  setFocusNodeId(null);
-                }}
-                onBack={() => {
-                  if (breadcrumbs.length > 1) {
-                    const parentCrumb = breadcrumbs[breadcrumbs.length - 2];
-                    const parentObj = allNodes.find((n) => n.id === parentCrumb.id);
-                    setSelectedNodeObj(parentObj || null);
-                  } else {
-                    setSelectedNodeObj(null);
-                  }
-                }}
-              />
-            )}
-
             {message && (
-              <div className="app-message-banner" role="status">
+              <div className="app-message-banner" role="status" style={{ marginBottom: 12 }}>
                 <span>{message}</span>
                 <button
                   type="button"
@@ -598,19 +562,17 @@ function App() {
               </div>
             )}
 
-            <ArchitectureCanvas
-              nodes={visibleNodes}
-              edges={visibleEdges}
+            <ArchifyArchitectureWorkspace
               allNodes={allNodes}
               allEdges={allEdges}
               selectedNodes={selectedNodes}
-              expandedNodeIds={expandedNodeIds}
-              onNodeClick={toggleResourceSelection}
-              onToggleExpand={handleToggleExpand}
-              zoomTargetId={selectedNodeObj?.id}
-              highlightDeps={highlightDeps}
-              showLegend={showLegend}
-              onCloseLegend={() => setShowLegend(false)}
+              onSelectNode={toggleResourceSelection}
+              onClearSelection={() => {
+                setSelectedNodes([]);
+                setSelectedNodeObj(null);
+              }}
+              onAnalyzeDependencies={resolveDependencies}
+              onQuickStartUseCase={handleQuickStartUseCase}
             />
 
             {selectedNodeObj && (
@@ -638,7 +600,9 @@ function App() {
             onLoadCmirToCanvas={handleLoadCmirJobToCanvas}
           />
         ) : activeTab === "sources-targets" ? (
-          <SourcesAndTargetsWorkspace />
+          <SourcesAndTargetsWorkspace
+            onQuickStartUseCase={handleQuickStartUseCase}
+          />
         ) : (
           <ExecutionsAndAuditWorkspace
             generationResult={generationResult}

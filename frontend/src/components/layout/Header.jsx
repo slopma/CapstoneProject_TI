@@ -18,7 +18,7 @@ const QUICK_SERVICES = [
         tab: "migration",
         useCase: "app_source",
         title: "Caso 1 · Migración de Aplicación (GitHub)",
-        desc: "Inspección de repositorios y despliegue automatizado en contenedores EC2 / Cloud Run",
+        desc: "Inspección de repositorios y despliegue automatizado en contenedores sobre Amazon EC2 / ECS",
         badge: "Caso 1",
       },
       {
@@ -26,7 +26,7 @@ const QUICK_SERVICES = [
         tab: "migration",
         useCase: "vm_image",
         title: "Caso 2 · Migración de Imagen de SO / VM",
-        desc: "Captura en vivo por agente osquery o imagen VMDK/QCOW2 hacia EC2 / Compute Engine",
+        desc: "Captura en vivo por agente osquery o imagen VMDK/QCOW2 hacia Amazon EC2",
         badge: "Caso 2",
       },
       {
@@ -63,7 +63,7 @@ const QUICK_SERVICES = [
         id: "sources-agents",
         tab: "sources-targets",
         title: "Conectores, Agentes Remotos y Destinos",
-        desc: "Inscripción de agentes multiplataforma (Linux/Windows/macOS) y validación AWS/GCP",
+        desc: "Inscripción de agentes multiplataforma (Linux/Windows/macOS) y validación AWS STS",
       },
       {
         id: "cloud-audit",
@@ -324,13 +324,13 @@ export default function Header({
         {setTargetProvider && (
           <div className="awsui-top-util-select">
             <select
-              aria-label="Región y proveedor cloud destino activo"
-              value={targetProvider}
-              onChange={(e) => setTargetProvider(e.target.value)}
+              aria-label="Región AWS destino activa"
+              defaultValue="us-east-1"
+              onChange={() => setTargetProvider("aws")}
               className="awsui-squid-select"
             >
-              <option value="aws">EE. UU. Este (N. Virginia) · us-east-1</option>
-              <option value="gcp">GCP Central (Iowa) · us-central1</option>
+              <option value="us-east-1">EE. UU. Este (N. Virginia) · us-east-1</option>
+              <option value="us-west-2">EE. UU. Oeste (Oregón) · us-west-2</option>
             </select>
           </div>
         )}

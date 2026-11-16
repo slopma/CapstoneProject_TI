@@ -1,7 +1,6 @@
 import React from "react";
 
-function MigrationPanel({ node, targetProvider }) {
-  const provider = (targetProvider || "aws").toLowerCase() === "gcp" ? "gcp" : "aws";
+function MigrationPanel({ node }) {
   const epistemic = node.epistemic_state || node.metadata?.data_state || "observed";
   const confidence = typeof node.confidence === "number" ? `${Math.round(node.confidence * 100)}%` : "100%";
 
@@ -11,7 +10,7 @@ function MigrationPanel({ node, targetProvider }) {
         <h4 className="tech-box-title">Preparación de Migración CMIR v2.1</h4>
         <div className="prop-row">
           <span className="prop-key">Proveedor Destino</span>
-          <span className="prop-val highlight">{provider.toUpperCase()}</span>
+          <span className="prop-val highlight">AWS (us-east-1)</span>
         </div>
         <div className="prop-row">
           <span className="prop-key">Estado de Evidencia</span>
@@ -24,7 +23,7 @@ function MigrationPanel({ node, targetProvider }) {
         <div className="prop-row">
           <span className="prop-key">Adaptador Destino</span>
           <span className="prop-val mono">
-            {provider === "gcp" ? "GCPAdapter (hashicorp/google)" : "AWSAdapter (hashicorp/aws)"}
+            AWSAdapter (hashicorp/aws)
           </span>
         </div>
 

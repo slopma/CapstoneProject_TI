@@ -113,10 +113,10 @@ export default function MigrationPreviewModal({
         >
           <div>
             <h3 id="mig-preview-modal-title" style={{ margin: 0, fontSize: 18, fontWeight: 700, color: "#16191F" }}>
-              Análisis de Alcance, Dependencias y Generación de IaC (AWS · GCP)
+              Análisis de Alcance, Dependencias y Generación de IaC (AWS)
             </h3>
             <p className="modal-subtitle" style={{ margin: "4px 0 0 0", fontSize: 14, color: "#5F6B7A" }}>
-              Revisa dependencias directas, transitivas e inferidas, protege recursos compartidos y genera los módulos Terraform HCL.
+              Revisa dependencias directas, transitivas e inferidas, protege recursos compartidos y genera los módulos Terraform HCL hacia Amazon Web Services.
             </p>
           </div>
           <button
@@ -130,7 +130,7 @@ export default function MigrationPreviewModal({
         </div>
 
         <div className="modal-body" style={{ padding: "16px 20px", backgroundColor: "#F2F3F3" }}>
-          {/* Selector de Proveedor Cloud Destino (Solo AWS y GCP por ADR-001) */}
+          {/* Selector de Proveedor Cloud Destino (Exclusivo AWS) */}
           <div
             className="provider-selector-bar"
             style={{
@@ -147,23 +147,10 @@ export default function MigrationPreviewModal({
             }}
           >
             <span className="selector-label" style={{ fontWeight: 700, fontSize: 14, color: "#16191F" }}>
-              Proveedor Cloud Destino (ADR-001):
+              Proveedor Cloud Destino:
             </span>
             <div className="provider-pills" style={{ display: "flex", gap: 8 }}>
-              {[
-                { id: "aws", label: "Amazon Web Services (AWS)" },
-                { id: "gcp", label: "Google Cloud Platform (GCP)" },
-              ].map((prov) => (
-                <button
-                  key={prov.id}
-                  type="button"
-                  onClick={() => setTargetProvider(prov.id)}
-                  className={`cm-btn sm ${targetProvider === prov.id ? "primary" : "secondary"}`}
-                  aria-pressed={targetProvider === prov.id}
-                >
-                  {prov.label}
-                </button>
-              ))}
+              <span className="cm-badge aws">Amazon Web Services (AWS · us-east-1)</span>
             </div>
           </div>
 

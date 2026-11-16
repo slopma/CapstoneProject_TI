@@ -62,10 +62,17 @@ export default function EnvironmentOverviewWorkspace({
   }, []);
 
   const sharedNodesCount = allNodes.filter((n) => n.is_shared).length;
-  const hostName =
+  const rawHostName =
     latestDiscovery?.agent?.hostname ||
     latestDiscovery?.host?.hostname ||
-    "cloudmove-server";
+    "";
+  const isControlHost =
+    !rawHostName ||
+    ["cloudmove-server", "localhost", "127.0.0.1", "100.50.88.231"].includes(
+      rawHostName.toLowerCase()
+    ) ||
+    /^[0-9a-f]{12}$/i.test(rawHostName);
+  const hostName = isControlHost ? "Sin agente remoto" : rawHostName;
 
   const validJobs = useMemo(
     () =>
@@ -87,10 +94,10 @@ export default function EnvironmentOverviewWorkspace({
   const onlineAgentsCount = agents.filter((a) => a.status === "ONLINE").length;
 
   // AWS Quotas & Free Tier Metrics
-  const ebsUsedGb = awsAudit?.summary?.total_ebs_gb ?? 35;
+  const ebsUsedGb = awsAudit?.summary?.total_ebs_gb ?? 0;
   const ebsLimitGb = awsAudit?.summary?.academy_ebs_limit_gb ?? 150;
   const ebsPercent = Math.min(100, Math.round((ebsUsedGb / ebsLimitGb) * 100));
-  const runningInstances = awsAudit?.summary?.running_instances_count ?? 1;
+  const runningInstances = awsAudit?.summary?.running_instances_count ?? 0;
   const totalVpcs = awsAudit?.summary?.total_vpcs_count ?? 1;
 
   const filteredJobs = useMemo(() => {
@@ -113,11 +120,10 @@ export default function EnvironmentOverviewWorkspace({
       {/* AWS Console Home Header */}
       <AwsPageHeader
         title="Inicio de la consola (Console Home)"
-        description="Centro de mando unificado para migración de aplicaciones desde código fuente (Caso 1) y máquinas virtuales / sistemas operativos en vivo (Caso 2) hacia AWS y Google Cloud Platform."
+        description="Centro de mando unificado para migración de aplicaciones desde código fuente (Caso 1) y máquinas virtuales / sistemas operativos en vivo (Caso 2) hacia Amazon Web Services (AWS)."
         badges={
           <>
             <span className="cm-badge aws">AWS · us-east-1</span>
-            <span className="cm-badge gcp">GCP · us-central1</span>
             <span className="cm-badge observed">CMIR v2.1 Activo</span>
             {persistence && (
               <span className="cm-badge info">
@@ -212,20 +218,20 @@ export default function EnvironmentOverviewWorkspace({
                 </div>
 
                 <p className="awsui-usecase-desc">
-                  Inspecciona repositorios de GitHub o carpetas de código sin ejecutar código arbitrario. Detecta lenguajes, puertos, Dockerfiles, esquemas SQL/PostGIS y variables sensibles para desplegar en contenedores sobre Amazon EC2 / ECS o Google Cloud Run.
+                  Inspecciona repositorios de GitHub o carpetas de código sin ejecutar código arbitrario. Detecta lenguajes, puertos, Dockerfiles, esquemas SQL/PostGIS y variables sensibles para desplegar en contenedores sobre Amazon EC2 / ECS.
                 </p>
 
                 <ul className="awsui-usecase-features">
                   <li>
-                    <span className="check-icon">✓</span>
-                    <span>Mapa interactivo de transformación GitHub → Servicios Cloud</span>
+                    <span className="check-icon">-</span>
+                    <span>Mapa interactivo de transformación GitHub hacia Servicios AWS</span>
                   </li>
                   <li>
-                    <span className="check-icon">✓</span>
+                    <span className="check-icon">-</span>
                     <span>Sincronización automática de IP pública dinámica en el frontend</span>
                   </li>
                   <li>
-                    <span className="check-icon">✓</span>
+                    <span className="check-icon">-</span>
                     <span>Despliegue directo con Terraform (`init`, `plan`, `apply`, `destroy`)</span>
                   </li>
                 </ul>
@@ -274,20 +280,20 @@ export default function EnvironmentOverviewWorkspace({
                 </div>
 
                 <p className="awsui-usecase-desc">
-                  Captura el estado completo de un servidor Linux, Windows o macOS mediante el agente remoto CloudMove (osquery) o analiza discos virtuales (VMDK, QCOW2, RAW, VHDX) verificando firmas binarias y SHA-256 para replicarlos en Amazon EC2 o Compute Engine.
+                  Captura el estado completo de un servidor Linux, Windows o macOS mediante el agente remoto CloudMove (osquery) o analiza discos virtuales (VMDK, QCOW2, RAW, VHDX) verificando firmas binarias y SHA-256 para replicarlos en Amazon EC2.
                 </p>
 
                 <ul className="awsui-usecase-features">
                   <li>
-                    <span className="check-icon">✓</span>
-                    <span>Inscripción de agentes remotos con un comando (`curl | sudo bash`)</span>
+                    <span className="check-icon">-</span>
+                    <span>Inscripción secuencial de agentes remotos con token (`curl | sudo bash`)</span>
                   </li>
                   <li>
-                    <span className="check-icon">✓</span>
+                    <span className="check-icon">-</span>
                     <span>Evaluación de 8 dimensiones de fidelidad (Kernel, Red, Discos, Servicios)</span>
                   </li>
                   <li>
-                    <span className="check-icon">✓</span>
+                    <span className="check-icon">-</span>
                     <span>Rehidratación Cloud-Init e importación a AMI / Instancia EC2</span>
                   </li>
                 </ul>
@@ -491,8 +497,8 @@ export default function EnvironmentOverviewWorkspace({
                             </span>
                           </td>
                           <td>
-                            <span className={`cm-badge ${job.target_provider === "gcp" ? "gcp" : "aws"}`}>
-                              {job.target_provider?.toUpperCase()}
+                            <span className="cm-badge aws">
+                              AWS
                             </span>
                           </td>
                           <td>
