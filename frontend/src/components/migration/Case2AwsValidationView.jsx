@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { apiFetch } from "../../utils/apiClient";
 import ArchifyDiagramRenderer from "../architecture/ArchifyDiagramRenderer";
-import { AwsTabs, AwsKeyValuePairs, AwsStatusIndicator } from "../cloudscape/AwsPrimitives";
+import { AwsTabs, AwsKeyValuePairs, AwsStatusIndicator, AwsAlert } from "../cloudscape/AwsPrimitives";
 import { HelpTooltipButton, ContextualTechnicalModal } from "./PlannedCloudStructureGraphModal";
+import Uc2StageTransferBox from "./Uc2StageTransferBox";
 
 function formatBytes(bytes) {
   const n = Number(bytes || 0);
@@ -253,6 +254,18 @@ export default function Case2AwsValidationView({
     () => mergedFiles.reduce((acc, f) => acc + (Number(f.sizeBytes) || 0), 0),
     [mergedFiles]
   );
+
+  const missingSelectedOriginPaths = useMemo(() => {
+    if (!publicIp || !validation?.checks?.files?.ok || manifestSelectedPaths.length === 0) return [];
+    return manifestSelectedPaths.filter((rawSel) => {
+      const clean = String(rawSel || "").replace(/^\/+/, "").replace(/\/+$/, "");
+      if (!clean) return false;
+      return !liveFiles.some((lf) => {
+        const lp = String(lf.path || "").replace(/^\/+/, "");
+        return lp === clean || lp.startsWith(`${clean}/`);
+      });
+    });
+  }, [publicIp, validation?.checks?.files?.ok, manifestSelectedPaths, liveFiles]);
 
   // Auto-load initial file when entering Explorer tab while EC2 is live
   useEffect(() => {
@@ -556,6 +569,32 @@ export default function Case2AwsValidationView({
 
   const filesTabContent = (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {manifestSelectedPaths.length > 0 && (missingSelectedOriginPaths.length > 0 || !publicIp) && (
+        <AwsAlert
+          type={missingSelectedOriginPaths.length > 0 ? "warning" : "info"}
+          title={
+            missingSelectedOriginPaths.length > 0
+              ? `Faltan archivos reales de: ${missingSelectedOriginPaths.join(", ")} en EC2 (${publicIp})`
+              : "Transferencia real de rutas seleccionadas hacia Staging AWS"
+          }
+        >
+          <div style={{ fontSize: 12.5, color: "#414d5c" }}>
+            EC2 UserData está limitado a 16 KB por AWS, por lo que carpetas grandes de usuario (como{" "}
+            <code>{manifestSelectedPaths[0]}</code>) se transfieren por Staging HTTPS y se montan en{" "}
+            <code>/opt/cloudmove/os_capture/rootfs/</code> y <code>/mnt/cloudmove_ebs/rootfs/</code>.
+          </div>
+          <Uc2StageTransferBox
+            selectedPaths={manifestSelectedPaths}
+            migrationId={job?.migration_id}
+            ec2Ip={publicIp}
+            agentId={job?.source_config?.agent_id}
+            onCopy={onCopy}
+            onStageReady={() => {
+              if (publicIp) setTimeout(runLiveValidation, 1800);
+            }}
+          />
+        </AwsAlert>
+      )}
       <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", flex: 1 }}>
           <input
@@ -659,15 +698,26 @@ export default function Case2AwsValidationView({
                         <code>{String(f.sha256 || "-").slice(0, 10)}</code>
                       </td>
                       <td>
-                        <button
-                          type="button"
-                          className="cm-btn sm primary"
-                          style={{ padding: "3px 8px", fontSize: 11.5 }}
-                          onClick={() => loadLiveFileContent(f.path)}
-                          disabled={!publicIp && !f.syncedLive}
-                        >
-                          {loadingFile && isSelected ? "Leyendo..." : "Inspeccionar"}
-                        </button>
+                        <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                          <button
+                            type="button"
+                            className="cm-btn sm primary"
+                            style={{ padding: "3px 8px", fontSize: 11.5 }}
+                            onClick={() => loadLiveFileContent(f.path)}
+                            disabled={!publicIp && !f.syncedLive}
+                          >
+                            {loadingFile && isSelected ? "Leyendo..." : "Inspeccionar"}
+                          </button>
+                          {publicIp && f.syncedLive && (
+                            <a
+                              href={`/api/v1/migration/probe-uc2-file-download?ip=${encodeURIComponent(publicIp)}&path=${encodeURIComponent(f.path)}`}
+                              className="cm-btn sm secondary"
+                              style={{ padding: "3px 7px", fontSize: 11, textDecoration: "none" }}
+                            >
+                              Descargar
+                            </a>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -721,15 +771,24 @@ export default function Case2AwsValidationView({
                 Copiar
               </button>
               {publicIp && (
-                <a
-                  href={`http://${publicIp}:3000/files/view?path=${encodeURIComponent(selectedFilePath)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="cm-btn sm primary"
-                  style={{ padding: "3px 8px", fontSize: 11.5, textDecoration: "none" }}
-                >
-                  Raw EC2 ↗
-                </a>
+                <>
+                  <a
+                    href={`/api/v1/migration/probe-uc2-file-download?ip=${encodeURIComponent(publicIp)}&path=${encodeURIComponent(selectedFilePath)}`}
+                    className="cm-btn sm secondary"
+                    style={{ padding: "3px 8px", fontSize: 11.5, textDecoration: "none" }}
+                  >
+                    Descargar
+                  </a>
+                  <a
+                    href={`http://${publicIp}:3000/files/view?path=${encodeURIComponent(selectedFilePath)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="cm-btn sm primary"
+                    style={{ padding: "3px 8px", fontSize: 11.5, textDecoration: "none" }}
+                  >
+                    Raw EC2 ↗
+                  </a>
+                </>
               )}
             </div>
           </div>
@@ -1063,9 +1122,11 @@ export default function Case2AwsValidationView({
     },
     {
       title: "4. RootFS y EBS Montados",
-      ok: Boolean(filesCheck.ok && (ebsMounted || syncedCount > 0)),
+      ok: Boolean(filesCheck.ok && ebsMounted),
       detail: ebsMounted
         ? `${ebsCheck.mount_dir} (${mirroredCount} replicados)`
+        : liveLsblkRows.some((r) => String(r.name || "").includes("nvme1n1"))
+        ? "nvme1n1 adjunto sin montar en /mnt/cloudmove_ebs (re-despliega con Terraform Apply)"
         : ebsCheck.rootfs_dir || "/opt/cloudmove/os_capture/rootfs",
     },
   ];
@@ -1099,6 +1160,17 @@ export default function Case2AwsValidationView({
             <span className={`cm-badge ${ebsMounted ? "observed" : "info"}`}>
               {ebsMounted ? "Volúmenes EBS Montados (/mnt/cloudmove_ebs)" : "EBS: /opt/cloudmove/os_capture + /mnt/cloudmove_ebs"}
             </span>
+            {missingSelectedOriginPaths.length > 0 && (
+              <button
+                type="button"
+                className="cm-badge warning"
+                style={{ cursor: "pointer", border: "1px solid #f59e0b" }}
+                onClick={() => setActiveTab("files")}
+                title="Abrir Explorador para subir o sincronizar carpetas seleccionadas"
+              >
+                Pendiente subir {missingSelectedOriginPaths.length} ruta(s) de usuario →
+              </button>
+            )}
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>

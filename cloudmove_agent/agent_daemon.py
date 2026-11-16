@@ -15,17 +15,26 @@ from __future__ import annotations
 
 import configparser
 from datetime import datetime, timezone
+import hashlib
+import io
 import json
 import logging
 import os
 from pathlib import Path
 import socket
 import sys
+import tarfile
+import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from typing import Any, Dict, List, Optional
+
+AGENT_VERSION = "2.2.0"
+_SENSITIVE_NAME_TOKENS = (".ssh/id_", ".aws/credentials", "id_rsa", "id_ed25519")
+_SKIP_WALK_DIRS = {".git", "node_modules", ".cache", "__pycache__", ".venv", "venv"}
 
 # Add project root and agent directory to sys.path
 AGENT_DIR = Path(__file__).resolve().parent
@@ -125,29 +134,35 @@ class CloudMoveAgentDaemon:
         except Exception as exc:
             logger.warning(f"No se pudo leer '{cfg_file}': {exc}")
 
+    def _build_auth_headers(self, content_type: str = "application/json") -> Dict[str, str]:
+        """Build authenticated request headers with replay protection."""
+        headers = {
+            "User-Agent": f"CloudMove-Agent/{AGENT_VERSION}",
+            "Content-Type": content_type,
+            "Accept": "application/json",
+            "X-Agent-ID": self.agent_id,
+            "X-Agent-Timestamp": _utc_now(),
+            "X-Agent-Nonce": uuid.uuid4().hex,
+        }
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return headers
+
     def _http_request(
         self,
         method: str,
         path: str,
         payload: Optional[Dict[str, Any]] = None,
         timeout: int = 15,
+        raw_bytes: Optional[bytes] = None,
+        content_type: str = "application/json",
     ) -> Dict[str, Any]:
         """Send authenticated HTTP request with replay protection headers."""
         url = f"{self.server_url}{path}"
-        body_bytes = json.dumps(payload).encode("utf-8") if payload is not None else None
-        now_ts = _utc_now()
-        nonce = uuid.uuid4().hex
-
-        headers = {
-            "User-Agent": "CloudMove-Agent/2.1",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "X-Agent-ID": self.agent_id,
-            "X-Agent-Timestamp": now_ts,
-            "X-Agent-Nonce": nonce,
-        }
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        body_bytes = raw_bytes if raw_bytes is not None else (
+            json.dumps(payload).encode("utf-8") if payload is not None else None
+        )
+        headers = self._build_auth_headers(content_type=content_type)
 
         req = urllib.request.Request(url, data=body_bytes, headers=headers, method=method)
         try:
@@ -174,6 +189,7 @@ class CloudMoveAgentDaemon:
             "load_average": cpu.get("load_average", {}),
             "status": "HEALTHY",
             "uptime_seconds": self._get_uptime(),
+            "agent_version": AGENT_VERSION,
         }
         res = self._http_request("POST", f"/api/v1/agents/{self.agent_id}/heartbeat", {"health_metrics": metrics})
         logger.debug(f"Heartbeat confirmado. Tareas pendientes: {res.get('pending_tasks_count', 0)}")
@@ -217,6 +233,10 @@ class CloudMoveAgentDaemon:
                 result = self._task_quiesce(action, params)
             elif action in ("capture_live_os", "create_disk_image"):
                 result = self._task_capture_live_os(params)
+            elif action == "stage_selected_paths":
+                result = self._task_stage_selected_paths(params)
+            elif action == "self_update":
+                result = self._task_self_update()
             else:
                 raise ValueError(
                     f"Acción '{action}' rechazada por la política de seguridad del agente. "
@@ -349,6 +369,162 @@ class CloudMoveAgentDaemon:
             "sha256": res["sha256"],
             "manifest": res,
         }
+
+    def _task_stage_selected_paths(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Collect selected host paths/directories, pack into bounded tar.gz, and stream chunks."""
+        stage_id = str(params.get("stage_id") or "").strip()
+        selected_paths = [
+            str(p).strip() for p in (params.get("selected_paths") or []) if str(p).strip()
+        ]
+        migration_id = params.get("migration_id")
+        if not stage_id or not selected_paths:
+            raise ValueError("Se requieren 'stage_id' y 'selected_paths' para sincronizar archivos.")
+
+        max_total_bytes = int(params.get("max_total_mb", 1500)) * 1024 * 1024
+        per_file_max_bytes = int(params.get("per_file_max_mb", 150)) * 1024 * 1024
+        chunk_size = 1024 * 1024
+
+        candidates: List[tuple[int, str, Path]] = []
+        skipped_files: List[Dict[str, Any]] = []
+        seen_real: set[str] = set()
+
+        for raw_sp in selected_paths:
+            p = Path(raw_sp).expanduser()
+            if not p.exists() or p.is_symlink():
+                skipped_files.append({"path": raw_sp, "size_bytes": 0, "reason": "not_found_or_symlink"})
+                continue
+            if p.is_file():
+                targets = [p]
+            else:
+                targets = []
+                for root_dir, dirnames, filenames in os.walk(p, followlinks=False):
+                    dirnames[:] = [d for d in sorted(dirnames) if d not in _SKIP_WALK_DIRS]
+                    for fn in sorted(filenames):
+                        targets.append(Path(root_dir) / fn)
+
+            for fp in targets:
+                if len(candidates) >= 6000:
+                    skipped_files.append({"path": str(fp), "size_bytes": 0, "reason": "max_file_count_reached"})
+                    continue
+                if fp.is_symlink() or not fp.is_file():
+                    continue
+                rp_str = str(fp)
+                lower_rp = rp_str.lower()
+                if any(tok in lower_rp for tok in _SENSITIVE_NAME_TOKENS) or fp.name == ".env":
+                    skipped_files.append({"path": rp_str, "size_bytes": 0, "reason": "sensitive_credential_excluded"})
+                    continue
+                try:
+                    real_fp = str(fp.resolve())
+                    if real_fp in seen_real:
+                        continue
+                    seen_real.add(real_fp)
+                    sz = fp.stat().st_size
+                except Exception:
+                    continue
+                if sz > per_file_max_bytes:
+                    skipped_files.append({"path": rp_str, "size_bytes": sz, "reason": "exceeds_per_file_limit"})
+                    continue
+                arc = rp_str.lstrip("/")
+                candidates.append((sz, arc, fp))
+
+        # Pack smaller user files/documents first so a massive binary never starves docs
+        candidates.sort(key=lambda item: (item[0], item[1]))
+        included_files: List[Dict[str, Any]] = []
+        total_raw_bytes = 0
+
+        with tempfile.TemporaryDirectory(prefix="cm_stage_") as tmpd:
+            tar_path = Path(tmpd) / f"{stage_id}.tar.gz"
+            with tarfile.open(tar_path, "w:gz") as tf:
+                for sz, arc, fp in candidates:
+                    if total_raw_bytes + sz > max_total_bytes:
+                        skipped_files.append({"path": "/" + arc, "size_bytes": sz, "reason": "exceeds_total_stage_budget"})
+                        continue
+                    try:
+                        tf.add(fp, arcname=arc, recursive=False)
+                        total_raw_bytes += sz
+                        included_files.append({"path": "/" + arc, "size_bytes": sz})
+                    except Exception as exc:
+                        skipped_files.append({"path": "/" + arc, "size_bytes": sz, "reason": str(exc)})
+
+                inv_bytes = json.dumps(
+                    {
+                        "agent_id": self.agent_id,
+                        "selected_paths": selected_paths,
+                        "included_count": len(included_files),
+                        "total_included_bytes": total_raw_bytes,
+                        "skipped_count": len(skipped_files),
+                        "skipped_sample": skipped_files[:100],
+                    },
+                    indent=2,
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                ti = tarfile.TarInfo("var/log/cloudmove_selected_paths_inventory.json")
+                ti.size = len(inv_bytes)
+                tf.addfile(ti, io.BytesIO(inv_bytes))
+
+            archive_size = tar_path.stat().st_size
+            total_chunks = max(1, (archive_size + chunk_size - 1) // chunk_size)
+            hasher = hashlib.sha256()
+            with tar_path.open("rb") as f:
+                for idx in range(total_chunks):
+                    chunk = f.read(chunk_size)
+                    hasher.update(chunk)
+                    qs = urllib.parse.urlencode({
+                        "stage_id": stage_id,
+                        "chunk_index": idx,
+                        "total_chunks": total_chunks,
+                    })
+                    self._http_request(
+                        "POST",
+                        f"/api/v1/agents/{self.agent_id}/stage-chunk?{qs}",
+                        raw_bytes=chunk,
+                        content_type="application/octet-stream",
+                        timeout=60,
+                    )
+
+            commit_resp = self._http_request(
+                "POST",
+                f"/api/v1/agents/{self.agent_id}/stage-commit",
+                payload={
+                    "stage_id": stage_id,
+                    "total_chunks": total_chunks,
+                    "selected_paths": selected_paths,
+                    "migration_id": migration_id,
+                    "expected_sha256": hasher.hexdigest(),
+                    "skipped_files": skipped_files[:200],
+                },
+                timeout=60,
+            )
+
+        return {
+            "status": "success",
+            "stage_id": stage_id,
+            "included_files_count": len(included_files),
+            "skipped_files_count": len(skipped_files),
+            "bundle_size_bytes": archive_size,
+            "commit": commit_resp,
+        }
+
+    def _task_self_update(self) -> Dict[str, Any]:
+        """Download latest agent bundle from server and exit cleanly so systemd restarts updated."""
+        req = urllib.request.Request(
+            f"{self.server_url}/api/v1/agents/bundle.tar.gz",
+            headers=self._build_auth_headers("application/octet-stream"),
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read()
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tf:
+            for member in tf.getmembers():
+                if not member.isfile():
+                    continue
+                name = Path(member.name).name
+                if name.endswith((".py", ".sh", ".service")):
+                    target = AGENT_DIR / name
+                    src_f = tf.extractfile(member)
+                    if src_f:
+                        target.write_bytes(src_f.read())
+        self._running = False
+        return {"status": "updated", "previous_version": AGENT_VERSION, "restarting": True}
 
     def run_forever(self) -> None:
         """Run the main daemon loop."""

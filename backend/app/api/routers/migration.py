@@ -1,6 +1,8 @@
+import base64
 import io
 import ipaddress
 import json
+import os
 from pathlib import Path
 import re
 import socket
@@ -10,7 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
@@ -1385,9 +1387,23 @@ def get_job_terraform_status_endpoint(migration_id: str):
     return cloud_deployer.get_terraform_status(migration_id, job_dir)
 
 
+def _infer_public_api_url(request: Optional[Request] = None) -> str:
+    env_url = os.getenv("CLOUDMOVE_API_URL", "").strip()
+    if env_url:
+        return env_url.rstrip("/")
+    if not request:
+        return "http://localhost:8000"
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    if "digitalcafeluna.store" in (host or ""):
+        proto = "https"
+    return f"{proto}://{host}".rstrip("/")
+
+
 @router.post("/jobs/{migration_id}/terraform/command")
 def execute_job_terraform_command_endpoint(
     migration_id: str,
+    http_request: Request,
     request: Optional[ExecuteTerraformCommandRequest] = None,
 ):
     """
@@ -1400,6 +1416,15 @@ def execute_job_terraform_command_endpoint(
         job = migration_orchestrator.get_migration(migration_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if job.get("use_case") == "vm_image" and req.action.lower().strip() in ("plan", "apply", "continue", "full_deploy", "dry_run"):
+        try:
+            job = migration_orchestrator.refresh_uc2_stage_binding(
+                migration_id,
+                public_api_url=_infer_public_api_url(http_request),
+            )
+        except Exception:
+            pass
 
     from app.migration.cloud_deployer import cloud_deployer
     job_dir = cloud_deployer.resolve_job_dir(migration_id, job)
@@ -1451,7 +1476,11 @@ def clear_job_terraform_logs_endpoint(migration_id: str):
 
 
 @router.post("/jobs/{migration_id}/deploy-live")
-def deploy_live_migration_job_endpoint(migration_id: str, request: Optional[DeployLiveJobRequest] = None):
+def deploy_live_migration_job_endpoint(
+    migration_id: str,
+    http_request: Request,
+    request: Optional[DeployLiveJobRequest] = None,
+):
     """
     Execute autonomous cloud deployment directly from CloudMove using Terraform & Cloud SDKs.
     """
@@ -1460,6 +1489,15 @@ def deploy_live_migration_job_endpoint(migration_id: str, request: Optional[Depl
         job = migration_orchestrator.get_migration(migration_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if job.get("use_case") == "vm_image":
+        try:
+            job = migration_orchestrator.refresh_uc2_stage_binding(
+                migration_id,
+                public_api_url=_infer_public_api_url(http_request),
+            )
+        except Exception:
+            pass
 
     from app.migration.cloud_deployer import cloud_deployer
     job_dir = cloud_deployer.resolve_job_dir(migration_id, job)
@@ -1729,6 +1767,292 @@ def probe_uc2_bundle(
             )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"No se pudo descargar bundle.tar.gz desde {clean_ip}: {exc}")
+
+
+@router.get("/probe-uc2-file-download")
+def probe_uc2_file_download(
+    ip: str = Query(..., description="Public IP of deployed Case 2 EC2 instance"),
+    path: str = Query(..., description="Relative file path inside /opt/cloudmove/os_capture/rootfs/"),
+):
+    """Proxy binary or large file download safely from the deployed Case 2 EC2 instance."""
+    clean_ip = _sanitize_probe_host(ip)
+    clean_rel = str(path or "").lstrip("/")
+    if not clean_rel or ".." in clean_rel.split("/"):
+        raise HTTPException(status_code=400, detail="Ruta de archivo inválida")
+    target_url = f"http://{clean_ip}:3000/files/download?path={urllib.parse.quote(clean_rel)}"
+    fname = Path(clean_rel).name or "migrated-file"
+    try:
+        req = urllib.request.Request(target_url, headers={"User-Agent": "CloudMove-UC2-DL/1.0"})
+        with urllib.request.urlopen(req, timeout=15.0) as resp:
+            raw = resp.read()
+            return Response(
+                content=raw,
+                media_type="application/octet-stream",
+                headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+            )
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(status_code=exc.code, detail=f"Archivo no disponible: HTTP {exc.code}")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"No se pudo descargar desde {clean_ip}: {exc}")
+
+
+class Uc2StageInitRequest(BaseModel):
+    stage_id: Optional[str] = None
+    selected_paths: List[str] = Field(default_factory=list)
+    migration_id: Optional[str] = None
+    agent_id: Optional[str] = None
+
+
+class Uc2StageCommitRequest(BaseModel):
+    selected_paths: List[str] = Field(default_factory=list)
+    migration_id: Optional[str] = None
+    ec2_ip: Optional[str] = None
+
+
+class Uc2DispatchAgentStageRequest(BaseModel):
+    selected_paths: List[str] = Field(default_factory=list)
+    migration_id: Optional[str] = None
+    agent_id: Optional[str] = None
+    max_total_mb: int = Field(1500, ge=10, le=2048)
+
+
+@router.post("/uc2-stage/init")
+def init_uc2_stage_session(req: Uc2StageInitRequest):
+    """Initialize a Case 2 persistent file staging session."""
+    from app.migration.uc2_staging import create_or_get_stage, get_stage_metadata
+
+    try:
+        meta = create_or_get_stage(
+            stage_id=req.stage_id,
+            selected_paths=req.selected_paths,
+            agent_id=req.agent_id,
+            migration_id=req.migration_id,
+            source_type="browser_upload",
+        )
+        return get_stage_metadata(meta["stage_id"], include_secrets=False)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class Uc2BrowserFileItem(BaseModel):
+    rel_path: str
+    content_b64: str
+
+
+class Uc2BrowserBatchRequest(BaseModel):
+    files: List[Uc2BrowserFileItem] = Field(default_factory=list)
+    selected_paths: List[str] = Field(default_factory=list)
+
+
+@router.post("/uc2-stage/{stage_id}/upload-files")
+def upload_uc2_stage_files_batch(
+    stage_id: str,
+    req: Uc2BrowserBatchRequest,
+):
+    """Receive real files from browser folder picker in bounded JSON/base64 batches."""
+    from app.migration.uc2_staging import save_browser_uploaded_batch
+
+    rel_list: List[str] = []
+    contents: List[bytes] = []
+    for item in req.files:
+        try:
+            raw = base64.b64decode(item.content_b64.encode("ascii"), validate=True)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"Contenido base64 inválido para '{item.rel_path}'.")
+        rel_list.append(item.rel_path)
+        contents.append(raw)
+
+    try:
+        return save_browser_uploaded_batch(
+            stage_id=stage_id,
+            rel_paths=rel_list,
+            contents=contents,
+            selected_paths=req.selected_paths,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/uc2-stage/{stage_id}/commit")
+def commit_uc2_browser_stage(
+    stage_id: str,
+    http_request: Request,
+    req: Optional[Uc2StageCommitRequest] = None,
+):
+    """Build bundle.tar.gz from uploaded files, bind to job, and optionally push to live EC2."""
+    from app.migration.uc2_staging import (
+        build_stage_download_url,
+        finalize_browser_stage,
+        get_stage_metadata,
+        push_stage_to_ec2,
+    )
+
+    body = req or Uc2StageCommitRequest()
+    try:
+        meta = finalize_browser_stage(
+            stage_id=stage_id,
+            selected_paths=body.selected_paths,
+            migration_id=body.migration_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    api_url = _infer_public_api_url(http_request)
+    if body.migration_id:
+        try:
+            migration_orchestrator.refresh_uc2_stage_binding(
+                body.migration_id,
+                stage_meta=meta,
+                public_api_url=api_url,
+            )
+        except Exception:
+            pass
+
+    ec2_sync = None
+    if body.ec2_ip:
+        clean_ip = _sanitize_probe_host(body.ec2_ip)
+        dl_url = build_stage_download_url(api_url, meta)
+        ec2_sync = push_stage_to_ec2(clean_ip, dl_url, sync_token=meta.get("sync_token"))
+
+    clean = get_stage_metadata(stage_id, include_secrets=False) or {}
+    clean["ec2_sync"] = ec2_sync
+    return clean
+
+
+@router.get("/uc2-stage/status")
+def get_uc2_stage_status(
+    http_request: Request,
+    stage_id: Optional[str] = Query(None),
+    migration_id: Optional[str] = Query(None),
+    paths: Optional[str] = Query(None, description="JSON array or comma-separated selected paths"),
+):
+    """Check staging readiness + connected remote agent capabilities for Case 2 file uploads."""
+    from app.migration.uc2_staging import find_ready_stage, get_stage_metadata
+    from app.api.routers.agents import LATEST_AGENT_VERSION, _is_version_gte
+
+    selected_paths: List[str] = []
+    if paths:
+        try:
+            parsed = json.loads(paths)
+            selected_paths = [str(p) for p in parsed] if isinstance(parsed, list) else []
+        except Exception:
+            selected_paths = [p.strip() for p in paths.split(",") if p.strip()]
+
+    db = get_transactional_db()
+    remote_agents = [
+        a for a in db.list_agents(include_revoked=False)
+        if (a.get("hostname") or "").lower() not in ("cloudmove-server", "localhost")
+        and a.get("ip_address") != "100.50.88.231"
+    ]
+    online = next((a for a in remote_agents if a.get("status") == "ONLINE"), remote_agents[0] if remote_agents else None)
+    ag_ver = str((online or {}).get("version") or "2.1.0")
+    supports_staging = bool(online and _is_version_gte(ag_ver, LATEST_AGENT_VERSION))
+
+    stage = None
+    if stage_id:
+        stage = get_stage_metadata(stage_id, include_secrets=False)
+    if not stage or stage.get("status") != "READY":
+        ready = find_ready_stage(
+            stage_id=stage_id,
+            migration_id=migration_id,
+            agent_id=(online or {}).get("agent_id"),
+            selected_paths=selected_paths,
+            include_secrets=False,
+        )
+        if ready:
+            stage = ready
+
+    api_url = _infer_public_api_url(http_request)
+    return {
+        "agent_connected": bool(online and online.get("status") == "ONLINE"),
+        "agent_id": (online or {}).get("agent_id"),
+        "agent_hostname": (online or {}).get("hostname"),
+        "agent_version": ag_ver,
+        "latest_agent_version": LATEST_AGENT_VERSION,
+        "supports_file_staging": supports_staging,
+        "upgrade_command_linux": f"curl -sSL {api_url}/api/v1/agents/install.sh | sudo bash -s -- --upgrade",
+        "stage": stage,
+        "ready": bool(stage and stage.get("status") == "READY"),
+    }
+
+
+@router.post("/uc2-stage/dispatch-agent")
+def dispatch_uc2_agent_stage(req: Uc2DispatchAgentStageRequest, http_request: Request):
+    """Request the enrolled remote agent to pack and upload selected folders/files to staging."""
+    from app.migration.uc2_staging import create_or_get_stage, get_stage_metadata
+    from app.api.routers.agents import LATEST_AGENT_VERSION, _is_version_gte
+
+    if not req.selected_paths:
+        raise HTTPException(status_code=400, detail="Debes seleccionar al menos una carpeta o archivo.")
+
+    db = get_transactional_db()
+    remote_agents = [
+        a for a in db.list_agents(include_revoked=False)
+        if a.get("status") == "ONLINE"
+        and (a.get("hostname") or "").lower() not in ("cloudmove-server", "localhost")
+        and a.get("ip_address") != "100.50.88.231"
+    ]
+    agent = (
+        next((a for a in remote_agents if a.get("agent_id") == req.agent_id), None)
+        if req.agent_id
+        else (remote_agents[0] if remote_agents else None)
+    )
+    if not agent:
+        raise HTTPException(status_code=404, detail="No hay ningún agente remoto ONLINE conectado.")
+
+    api_url = _infer_public_api_url(http_request)
+    upgrade_cmd = f"curl -sSL {api_url}/api/v1/agents/install.sh | sudo bash -s -- --upgrade"
+    ag_ver = str(agent.get("version") or "2.1.0")
+    if not _is_version_gte(ag_ver, LATEST_AGENT_VERSION):
+        return {
+            "dispatched": False,
+            "upgrade_required": True,
+            "agent_id": agent["agent_id"],
+            "agent_version": ag_ver,
+            "latest_agent_version": LATEST_AGENT_VERSION,
+            "upgrade_command_linux": upgrade_cmd,
+            "message": f"El agente instalado en '{agent['hostname']}' usa v{ag_ver}. Actualízalo a v{LATEST_AGENT_VERSION} con el comando sugerido o sube la carpeta directamente desde tu navegador.",
+        }
+
+    meta = create_or_get_stage(
+        selected_paths=req.selected_paths,
+        agent_id=agent["agent_id"],
+        migration_id=req.migration_id,
+        source_type="agent",
+    )
+    task = db.create_agent_task(
+        agent_id=agent["agent_id"],
+        action="stage_selected_paths",
+        parameters={
+            "stage_id": meta["stage_id"],
+            "selected_paths": req.selected_paths,
+            "migration_id": req.migration_id,
+            "max_total_mb": req.max_total_mb,
+        },
+        timeout_seconds=900,
+    )
+    return {
+        "dispatched": True,
+        "upgrade_required": False,
+        "task": task,
+        "stage": get_stage_metadata(meta["stage_id"], include_secrets=False),
+    }
+
+
+@router.get("/uc2-stage/{stage_id}/bundle.tar.gz")
+def download_uc2_staged_bundle(stage_id: str, token: str = Query(...)):
+    """Stream staged Case 2 archive to EC2 instances authenticating with per-stage token."""
+    from app.migration.uc2_staging import verify_stage_download_token
+
+    verified = verify_stage_download_token(stage_id, token)
+    if not verified:
+        raise HTTPException(status_code=403, detail="Token de descarga inválido o paquete no disponible.")
+    bundle_path, _ = verified
+    return FileResponse(
+        path=str(bundle_path),
+        media_type="application/gzip",
+        filename=f"{stage_id}.tar.gz",
+    )
 
 
 class AwsAccountAuditRequest(BaseModel):

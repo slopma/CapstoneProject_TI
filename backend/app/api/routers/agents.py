@@ -33,6 +33,20 @@ from app.dependencies.resolver import resolve_dependencies
 router = APIRouter(prefix="/api/v1/agents", tags=["CloudMove Agent Management"])
 
 DEFAULT_OPERATOR = os.getenv("CLOUDMOVE_OPERATOR_USER", "operator")
+LATEST_AGENT_VERSION = "2.2.0"
+
+
+def _is_version_gte(ver: Optional[str], target: str = LATEST_AGENT_VERSION) -> bool:
+    try:
+        cur_p = [int(x) for x in str(ver or "0").split(".")[:3]]
+        tgt_p = [int(x) for x in target.split(".")[:3]]
+        while len(cur_p) < 3:
+            cur_p.append(0)
+        while len(tgt_p) < 3:
+            tgt_p.append(0)
+        return tuple(cur_p) >= tuple(tgt_p)
+    except Exception:
+        return False
 
 
 def _get_server_url(request: Request) -> str:
@@ -78,10 +92,19 @@ class AgentHeartbeatRequest(BaseModel):
     timestamp: Optional[str] = Field(None, description="ISO 8601 UTC timestamp of request generation")
 
 
+class StageCommitRequest(BaseModel):
+    stage_id: str
+    total_chunks: int = Field(..., ge=1, le=50000)
+    selected_paths: List[str] = Field(default_factory=list)
+    migration_id: Optional[str] = None
+    expected_sha256: Optional[str] = None
+    skipped_files: List[Dict[str, Any]] = Field(default_factory=list)
+
+
 class DispatchTaskRequest(BaseModel):
     action: str = Field(
         ...,
-        description="Authorized action: collect_inventory | inspect_disk | check_mgn_prerequisites | check_gcp_migrate_prerequisites | install_mgn_agent | quiesce_database | unquiesce_database",
+        description="Authorized action: collect_inventory | inspect_disk | check_mgn_prerequisites | check_gcp_migrate_prerequisites | install_mgn_agent | quiesce_database | unquiesce_database | stage_selected_paths | self_update",
     )
     parameters: Optional[Dict[str, Any]] = Field(default_factory=dict)
     timeout_seconds: int = Field(300, ge=10, le=3600)
@@ -218,7 +241,7 @@ def enroll_agent(req: EnrollAgentRequest, request: Request):
         "hostname": enrolled["hostname"],
         "capabilities": enrolled["capabilities"],
         "enrolled_at": enrolled["enrolled_at"],
-        "server_version": "2.1.0",
+        "server_version": LATEST_AGENT_VERSION,
         "heartbeat_interval_seconds": 20,
     }
 
@@ -276,6 +299,7 @@ SERVER_URL="{host_url}"
 ENROLLMENT_TOKEN="{default_token}"
 INSTALL_DIR="/opt/cloudmove-agent"
 SERVICE_NAME="cloudmove-agent"
+UPGRADE_ONLY="false"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -287,16 +311,20 @@ while [[ $# -gt 0 ]]; do
       SERVER_URL="$2"
       shift 2
       ;;
+    --upgrade)
+      UPGRADE_ONLY="true"
+      shift 1
+      ;;
     *)
       echo "Opción desconocida: $1"
-      echo "Uso: $0 --token <ENROLLMENT_TOKEN> [--server <URL>]"
+      echo "Uso: $0 (--token <ENROLLMENT_TOKEN> | --upgrade) [--server <URL>]"
       exit 1
       ;;
   esac
 done
 
-if [[ -z "$ENROLLMENT_TOKEN" ]]; then
-  echo "ERROR: Debe proporcionar un token de inscripción válido con --token <TOKEN>"
+if [[ "$UPGRADE_ONLY" != "true" && -z "$ENROLLMENT_TOKEN" ]]; then
+  echo "ERROR: Debe proporcionar --token <TOKEN> o usar --upgrade para actualizar el agente existente."
   exit 1
 fi
 
@@ -315,9 +343,23 @@ mkdir -p "$INSTALL_DIR"
 mkdir -p /etc/cloudmove
 mkdir -p /var/log/cloudmove
 
-echo "==> Descargando archivos del paquete cloudmove_agent..."
+echo "==> Descargando archivos actualizados del paquete cloudmove_agent (v{LATEST_AGENT_VERSION})..."
 mkdir -p "$INSTALL_DIR/cloudmove_agent"
 curl -sSL "$SERVER_URL/api/v1/agents/bundle.tar.gz" | tar -xz -C "$INSTALL_DIR/cloudmove_agent"
+
+if [[ "$UPGRADE_ONLY" == "true" ]]; then
+  if [[ ! -f /etc/cloudmove/agent.conf ]]; then
+    echo "ERROR: No se encontró /etc/cloudmove/agent.conf para actualizar. Ejecuta con --token <TOKEN>."
+    exit 1
+  fi
+  echo "==> Modo actualización (--upgrade): conservando identidad y API Key de /etc/cloudmove/agent.conf..."
+  systemctl daemon-reload || true
+  systemctl restart $SERVICE_NAME
+  PYTHONPATH="$INSTALL_DIR" /usr/bin/python3 -c "from cloudmove_agent.agent_daemon import CloudMoveAgentDaemon; d=CloudMoveAgentDaemon(); d.send_heartbeat(); d._task_collect_inventory()" >/dev/null 2>&1 || true
+  echo "==> [OK] Agente CloudMove actualizado a v{LATEST_AGENT_VERSION} y reiniciado."
+  systemctl status $SERVICE_NAME --no-pager || true
+  exit 0
+fi
 
 echo "==> Registrando e inscribiendo el agente en $SERVER_URL..."
 HOST_NAME=$(cat /etc/hostname 2>/dev/null | tr -d ' \\n' || hostname -s 2>/dev/null || hostname)
@@ -352,7 +394,7 @@ data = {{
     'os_version': platform.version(),
     'architecture': platform.machine(),
     'machine_id': '$MACHINE_ID' or None,
-    'version': '2.1.0'
+    'version': '{LATEST_AGENT_VERSION}'
 }}
 print(json.dumps(data))
 ")
@@ -536,7 +578,10 @@ def record_heartbeat(
 
 
 @router.get("/live-discovery")
-def get_live_agent_discovery(agent_id: Optional[str] = Query(None)):
+def get_live_agent_discovery(
+    request: Request,
+    agent_id: Optional[str] = Query(None),
+):
     """
     Return the complete live discovery inventory reported by the enrolled remote agent(s),
     including folders & files (filesystem_tree), listening ports, running processes,
@@ -582,10 +627,19 @@ def get_live_agent_discovery(agent_id: Optional[str] = Query(None)):
     total_user_files_bytes = sum(node.get("size_bytes", 0) for node in filesystem_tree)
     total_user_files_gib = round(total_user_files_bytes / (1024 ** 3), 3)
 
+    chosen_version = chosen_agent.get("version") or "2.1.0"
+    server_url = _get_server_url(request)
+    upgrade_cmd = f"curl -sSL {server_url}/api/v1/agents/install.sh | sudo bash -s -- --upgrade"
+
     return {
         "agent_connected": True,
         "agents": remote_agents,
-        "active_agent": chosen_agent,
+        "active_agent": {
+            **chosen_agent,
+            "supports_file_staging": _is_version_gte(chosen_version, LATEST_AGENT_VERSION),
+            "latest_agent_version": LATEST_AGENT_VERSION,
+            "upgrade_command_linux": upgrade_cmd,
+        },
         "inventory": {
             "agent_id": target_id,
             "hostname": payload.get("hostname") or chosen_agent.get("hostname"),
@@ -760,3 +814,67 @@ def ingest_agent_inventory(
         "hostname": hostname,
         "ingested_at": now,
     }
+
+
+@router.post("/{agent_id}/stage-chunk")
+async def upload_agent_stage_chunk(
+    agent_id: str,
+    request: Request,
+    stage_id: str = Query(...),
+    chunk_index: int = Query(..., ge=0),
+    total_chunks: int = Query(..., ge=1),
+    authorization: Optional[str] = Header(None),
+):
+    """Receive an authenticated binary chunk of user-selected Case 2 files from an agent."""
+    _verify_agent_auth(agent_id, authorization)
+    raw = await request.body()
+    from app.migration.uc2_staging import save_stage_chunk
+
+    try:
+        return save_stage_chunk(
+            stage_id=stage_id,
+            chunk_index=chunk_index,
+            total_chunks=total_chunks,
+            raw_bytes=raw,
+            agent_id=agent_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/{agent_id}/stage-commit")
+def commit_agent_stage_archive(
+    agent_id: str,
+    req: StageCommitRequest,
+    authorization: Optional[str] = Header(None),
+):
+    """Assemble and validate uploaded Case 2 file chunks into persistent staging."""
+    _verify_agent_auth(agent_id, authorization)
+    from app.migration.uc2_staging import commit_stage_archive
+
+    try:
+        meta = commit_stage_archive(
+            stage_id=req.stage_id,
+            total_chunks=req.total_chunks,
+            selected_paths=req.selected_paths,
+            agent_id=agent_id,
+            migration_id=req.migration_id,
+            expected_sha256=req.expected_sha256,
+            skipped_files=req.skipped_files,
+            source_type="agent",
+        )
+        if req.migration_id:
+            try:
+                from app.migration.orchestrator import migration_orchestrator
+
+                migration_orchestrator.refresh_uc2_stage_binding(req.migration_id, stage_meta=meta)
+            except Exception:
+                pass
+        return {
+            "status": "READY",
+            "stage_id": meta["stage_id"],
+            "files_count": meta.get("files_count", 0),
+            "bundle_size_bytes": meta.get("bundle_size_bytes", 0),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

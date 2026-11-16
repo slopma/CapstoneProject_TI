@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { AwsStatusIndicator, AwsAlert } from "../cloudscape/AwsPrimitives";
+import Uc2StageTransferBox from "./Uc2StageTransferBox";
 
 const SELECTED_PATHS_STORAGE_KEY = "cm_case2_selected_user_paths_v1";
 
@@ -56,6 +57,8 @@ export default function UserFileSelectionPanel({
   refreshing = false,
   onProceedToMigration,
   hostname = "dispositivo-local",
+  agentId = null,
+  onStageReady,
 }) {
   const [expandedPaths, setExpandedPaths] = useState(() => {
     const init = new Set();
@@ -534,6 +537,13 @@ export default function UserFileSelectionPanel({
           />
         </div>
       </div>
+
+      {/* Control de Carga Real a Staging AWS (Agente o Navegador) */}
+      <Uc2StageTransferBox
+        selectedPaths={Array.from(selectedSet)}
+        agentId={agentId}
+        onStageReady={onStageReady}
+      />
 
       {quotaError && (
         <AwsAlert

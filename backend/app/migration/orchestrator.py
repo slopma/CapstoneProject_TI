@@ -24,6 +24,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
 import json
+import os
 from pathlib import Path
 import shutil
 import uuid
@@ -410,6 +411,21 @@ class MigrationOrchestrator:
 
             elif uc == "vm_image":
                 capture_live = bool(src_cfg.get("capture_live_host", False)) or (src_cfg.get("source_type") == "live_server")
+                resolved_agent_id = src_cfg.get("agent_id")
+                if capture_live and not resolved_agent_id:
+                    try:
+                        online_agents = [
+                            a for a in get_transactional_db().list_agents(include_revoked=False)
+                            if a.get("status") == "ONLINE"
+                            and (a.get("hostname") or "").lower() not in ("cloudmove-server", "localhost")
+                            and a.get("ip_address") != "100.50.88.231"
+                        ]
+                        if online_agents:
+                            resolved_agent_id = online_agents[0].get("agent_id")
+                            src_cfg["agent_id"] = resolved_agent_id
+                    except Exception:
+                        pass
+
                 manifest = inspect_vm_image(
                     image_path=src_cfg.get("image_path"),
                     manifest_override=src_cfg.get("manifest_override"),
@@ -417,12 +433,56 @@ class MigrationOrchestrator:
                     capture_live_host=capture_live,
                     target_provider=provider,
                     output_format=src_cfg.get("output_format", "QCOW2"),
-                    agent_id=src_cfg.get("agent_id"),
+                    agent_id=resolved_agent_id,
                 )
                 if src_cfg.get("selected_user_paths") and not manifest.get("selected_user_paths"):
                     manifest["selected_user_paths"] = [
                         str(p) for p in (src_cfg.get("selected_user_paths") or []) if str(p).strip()
                     ]
+                manifest["migration_id"] = migration_id
+                req_stage_id = src_cfg.get("stage_id") or (src_cfg.get("manifest_override") or {}).get("stage_id")
+                if req_stage_id:
+                    manifest["stage_id"] = req_stage_id
+                try:
+                    from app.migration.uc2_staging import (
+                        create_or_get_stage,
+                        find_ready_stage,
+                        link_stage_to_migration,
+                    )
+
+                    sel_list = manifest.get("selected_user_paths") or []
+                    ready_stg = find_ready_stage(
+                        stage_id=manifest.get("stage_id"),
+                        migration_id=migration_id,
+                        agent_id=resolved_agent_id,
+                        selected_paths=sel_list,
+                    )
+                    if ready_stg:
+                        manifest["stage_id"] = ready_stg["stage_id"]
+                        manifest["staged_files_count"] = ready_stg.get("files_count", 0)
+                        link_stage_to_migration(ready_stg["stage_id"], migration_id)
+                    elif capture_live and sel_list and resolved_agent_id:
+                        ag = get_transactional_db().get_agent(resolved_agent_id)
+                        ver = str((ag or {}).get("version") or "0")
+                        if tuple(int(x) for x in ver.split(".")[:2]) >= (2, 2):
+                            stg = create_or_get_stage(
+                                selected_paths=sel_list,
+                                agent_id=resolved_agent_id,
+                                migration_id=migration_id,
+                            )
+                            manifest["stage_id"] = stg["stage_id"]
+                            get_transactional_db().create_agent_task(
+                                agent_id=resolved_agent_id,
+                                action="stage_selected_paths",
+                                parameters={
+                                    "stage_id": stg["stage_id"],
+                                    "selected_paths": sel_list,
+                                    "migration_id": migration_id,
+                                },
+                                timeout_seconds=900,
+                            )
+                except Exception:
+                    pass
                 require_live_mem = bool(src_cfg.get("require_live_memory_state", False))
                 require_authentic_bin = bool(src_cfg.get("require_authentic_binary", False))
                 source_type = str(manifest.get("source_type") or src_cfg.get("source_type") or "standalone_offline_disk_image")
@@ -515,11 +575,14 @@ class MigrationOrchestrator:
                 job["ordered_stages"][3]["completed_at"] = now
                 job["ordered_stages"][3]["attempts"] = 1
         elif uc == "vm_image":
+            stage_meta = self._resolve_uc2_stage_meta(job, migration_id=migration_id)
             artifacts = generate_vm_image_migration_artifacts(
                 job["source_environment"],
                 job["compatibility_assessment"],
                 cmir_obj,
                 target_provider=provider,
+                stage_meta=stage_meta,
+                public_api_url=os.getenv("CLOUDMOVE_API_URL", ""),
             )
             for idx in (3, 4):
                 if len(job["ordered_stages"]) > idx:
@@ -1077,8 +1140,14 @@ class MigrationOrchestrator:
             )
             job["source_environment"] = manifest
             job["cmir"] = cmir_obj.model_dump()
+            stage_meta = self._resolve_uc2_stage_meta(job, migration_id=migration_id)
             artifacts = generate_vm_image_migration_artifacts(
-                manifest, compat, cmir_obj, target_provider=provider
+                manifest,
+                compat,
+                cmir_obj,
+                target_provider=provider,
+                stage_meta=stage_meta,
+                public_api_url=os.getenv("CLOUDMOVE_API_URL", ""),
             )
             guide_md = generate_deployment_guide(
                 use_case="vm_image",
@@ -1145,6 +1214,63 @@ class MigrationOrchestrator:
             "reason": f"Decisiones de transformación GitHub -> {provider.upper()} actualizadas y Terraform regenerado ({len(merged_decisions)} elecciones).",
         })
         return self._save_job(job, actor_id=actor_id)
+
+    def _resolve_uc2_stage_meta(
+        self,
+        job: Dict[str, Any],
+        migration_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Look up latest READY staged user-file archive matching a Case 2 migration job."""
+        try:
+            from app.migration.uc2_staging import find_ready_stage
+
+            src_env = job.get("source_environment") or {}
+            src_cfg = job.get("source_config") or {}
+            return find_ready_stage(
+                stage_id=src_env.get("stage_id") or src_cfg.get("stage_id"),
+                migration_id=migration_id or job.get("migration_id"),
+                agent_id=src_cfg.get("agent_id"),
+                selected_paths=src_env.get("selected_user_paths") or src_cfg.get("selected_user_paths"),
+                include_secrets=True,
+            )
+        except Exception:
+            return None
+
+    def refresh_uc2_stage_binding(
+        self,
+        migration_id: str,
+        stage_meta: Optional[Dict[str, Any]] = None,
+        public_api_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Re-synthesize Case 2 user_data.sh with the latest READY staged files and EBS sync loop."""
+        job = self.get_migration(migration_id)
+        if job.get("use_case") != "vm_image":
+            return job
+        resolved = stage_meta or self._resolve_uc2_stage_meta(job, migration_id=migration_id)
+        src_env = dict(job.get("source_environment") or {})
+        if resolved:
+            src_env["stage_id"] = resolved["stage_id"]
+            src_env["staged_files_count"] = resolved.get("files_count", 0)
+            if resolved.get("selected_paths") and not src_env.get("selected_user_paths"):
+                src_env["selected_user_paths"] = resolved["selected_paths"]
+            job["source_environment"] = src_env
+        cmir_obj = CMIR.model_validate(job["cmir"])
+        compat = job.get("compatibility_assessment") or evaluate_vm_image_compatibility(
+            src_env, target_provider=job.get("target_provider", "aws")
+        )
+        artifacts = generate_vm_image_migration_artifacts(
+            src_env,
+            compat,
+            cmir_obj,
+            target_provider=job.get("target_provider", "aws"),
+            stage_meta=resolved,
+            public_api_url=public_api_url or os.getenv("CLOUDMOVE_API_URL", ""),
+        )
+        prev_files = dict((job.get("generated_artifacts") or {}).get("files") or {})
+        prev_files.update(artifacts.get("files") or {})
+        artifacts["files"] = prev_files
+        job["generated_artifacts"] = artifacts
+        return self._save_job(job, actor_id="uc2-staging@cloudmove.local")
 
     def get_migration(self, migration_id: str) -> Dict[str, Any]:
         self._ensure_seeded()

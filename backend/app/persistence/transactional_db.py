@@ -1279,14 +1279,25 @@ class TransactionalDatabase:
             if row["status"] == "REVOKED":
                 raise PermissionError(f"El agente '{agent_id}' está revocado.")
 
-            conn.execute(
-                """
-                UPDATE agents
-                SET last_heartbeat_at = ?, status = 'ONLINE', health_metrics_json = ?
-                WHERE agent_id = ?
-                """,
-                (now, json.dumps(health_metrics), agent_id),
-            )
+            agent_ver = health_metrics.get("agent_version")
+            if agent_ver:
+                conn.execute(
+                    """
+                    UPDATE agents
+                    SET last_heartbeat_at = ?, status = 'ONLINE', health_metrics_json = ?, version = ?
+                    WHERE agent_id = ?
+                    """,
+                    (now, json.dumps(health_metrics), str(agent_ver)[:32], agent_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE agents
+                    SET last_heartbeat_at = ?, status = 'ONLINE', health_metrics_json = ?
+                    WHERE agent_id = ?
+                    """,
+                    (now, json.dumps(health_metrics), agent_id),
+                )
             pending_count = conn.execute(
                 "SELECT COUNT(*) AS c FROM agent_tasks WHERE agent_id = ? AND status = 'PENDING'",
                 (agent_id,),
@@ -1390,6 +1401,8 @@ class TransactionalDatabase:
             "quiesce_database",
             "unquiesce_database",
             "install_mgn_agent",
+            "stage_selected_paths",
+            "self_update",
         )
         if action not in allowed_actions:
             raise ValueError(

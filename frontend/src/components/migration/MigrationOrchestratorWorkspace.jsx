@@ -690,6 +690,7 @@ export default function MigrationOrchestratorWorkspace({
   const [selectedUserPaths, setSelectedUserPaths] = useState(
     () => loadSavedSelectedUserPaths() || []
   );
+  const [uc2StageMeta, setUc2StageMeta] = useState(null);
   const [showCase2HelpModal, setShowCase2HelpModal] = useState(false);
   const requireLiveRam = consistencyStrategy === "demo_live_ram";
   const preferContinuousReplication = consistencyStrategy === "continuous_replication";
@@ -1051,10 +1052,12 @@ export default function MigrationOrchestratorWorkspace({
     setLoading(true);
     setErrorMsg("");
     try {
+      const activeAgentId = hostDevicesData?.agent_id || enrolledAgents[0]?.agent_id || undefined;
       const manifestOverride = isLive
         ? {
             format: uc2OutputFormat,
             selected_user_paths: selectedUserPaths,
+            ...(uc2StageMeta?.stage_id ? { stage_id: uc2StageMeta.stage_id } : {}),
           }
         : {
             format: imageFormatOverride,
@@ -1072,6 +1075,7 @@ export default function MigrationOrchestratorWorkspace({
           capture_live_host: isLive,
           output_format: uc2OutputFormat,
           source_type: isLive ? "live_server" : "standalone_offline_disk_image",
+          agent_id: isLive ? activeAgentId : undefined,
           user_decisions: uc2Decisions,
         }),
       });
@@ -1126,6 +1130,7 @@ export default function MigrationOrchestratorWorkspace({
         if (!isLive && !imagePath.trim()) {
           throw new Error("Por favor introduzca la ruta de la imagen de disco a migrar.");
         }
+        const activeAgentId = hostDevicesData?.agent_id || enrolledAgents[0]?.agent_id || undefined;
         sourceConfig.image_path = isLive
           ? (uc2PreInspection?.manifest?.source_file || "live_system")
           : imagePath.trim();
@@ -1133,12 +1138,15 @@ export default function MigrationOrchestratorWorkspace({
           ? {
               format: uc2OutputFormat,
               selected_user_paths: selectedUserPaths,
+              ...(uc2StageMeta?.stage_id ? { stage_id: uc2StageMeta.stage_id } : {}),
             }
           : {
               format: imageFormatOverride,
               source_file: imagePath.trim(),
             };
         sourceConfig.selected_user_paths = selectedUserPaths;
+        if (isLive && activeAgentId) sourceConfig.agent_id = activeAgentId;
+        if (isLive && uc2StageMeta?.stage_id) sourceConfig.stage_id = uc2StageMeta.stage_id;
         sourceConfig.require_live_memory_state = requireLiveRam;
         sourceConfig.prefer_continuous_replication = preferContinuousReplication;
         sourceConfig.capture_live_host = isLive;
@@ -2262,6 +2270,12 @@ export default function MigrationOrchestratorWorkspace({
                         enrolledAgents[0]?.hostname ||
                         "dispositivo-local"
                       }
+                      agentId={
+                        hostDevicesData?.agent_id ||
+                        enrolledAgents[0]?.agent_id ||
+                        null
+                      }
+                      onStageReady={setUc2StageMeta}
                     />
                   </div>
 
