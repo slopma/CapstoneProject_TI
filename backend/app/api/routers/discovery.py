@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
@@ -35,6 +36,19 @@ from app.persistence.transactional_db import get_transactional_db
 router = APIRouter(prefix="/api/v1/discovery", tags=["Discovery Analyzer"])
 
 COLLECTOR_SCRIPT_PATH = PROJECT_ROOT / "cloudmove_osquery_export.py"
+
+
+def _resolve_collector_script_path() -> Path:
+    """Locate `cloudmove_osquery_export.py` across local workspace and Docker mounts."""
+    candidates = [
+        COLLECTOR_SCRIPT_PATH,
+        Path(__file__).resolve().parents[3] / "cloudmove_osquery_export.py",
+        Path("/app/cloudmove_osquery_export.py"),
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return COLLECTOR_SCRIPT_PATH
 
 MAX_IMPORT_BYTES = 25 * 1024 * 1024  # 25 MiB limit
 
@@ -599,12 +613,13 @@ def download_collector_script():
     Download `cloudmove_osquery_export.py` so any user can execute it on their
     device (`python3 cloudmove_osquery_export.py --ui` or `--analyze`).
     """
-    if not COLLECTOR_SCRIPT_PATH.exists():
+    script_path = _resolve_collector_script_path()
+    if not script_path.exists():
         raise HTTPException(
             status_code=404,
-            detail=f"No se encontró el recolector en '{COLLECTOR_SCRIPT_PATH}'.",
+            detail=f"No se encontró el recolector en '{script_path}'.",
         )
-    content = COLLECTOR_SCRIPT_PATH.read_text(encoding="utf-8")
+    content = script_path.read_text(encoding="utf-8")
     return PlainTextResponse(
         content=content,
         media_type="text/x-python; charset=utf-8",
@@ -623,10 +638,11 @@ def collect_live_device_inventory(
     1. Prepare/install osquery for the current PC's OS & architecture and run smoke test.
     2. Execute `cloudmove_osquery_export.py` via `osqueryi`, parse and normalize into CloudMove.
     """
-    if not COLLECTOR_SCRIPT_PATH.exists():
+    script_path = _resolve_collector_script_path()
+    if not script_path.exists():
         raise HTTPException(
             status_code=404,
-            detail=f"No se encontró el script recolector en '{COLLECTOR_SCRIPT_PATH}'.",
+            detail=f"No se encontró el script recolector en '{script_path}'.",
         )
 
     try:
@@ -634,7 +650,7 @@ def collect_live_device_inventory(
         osquery_bin = installer_mod.install_osquery(force_download=False)
         smoke_test = installer_mod.verify_osquery_binary(osquery_bin)
 
-        spec = importlib.util.spec_from_file_location("cloudmove_osquery_export", COLLECTOR_SCRIPT_PATH)
+        spec = importlib.util.spec_from_file_location("cloudmove_osquery_export", script_path)
         if spec is None or spec.loader is None:
             raise RuntimeError("No se pudo cargar el módulo cloudmove_osquery_export.py")
         mod = importlib.util.module_from_spec(spec)

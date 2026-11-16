@@ -112,7 +112,7 @@ export default function Case2AwsValidationView({
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [selectedFilePath, setSelectedFilePath] = useState("etc/os-release");
-  const [fileContent, setFileContent] = useState("");
+  const [fileContent, setFileContent] = useState(null);
   const [loadingFile, setLoadingFile] = useState(false);
   const [fileError, setFileError] = useState("");
 
@@ -159,7 +159,7 @@ export default function Case2AwsValidationView({
       setSelectedFilePath(cleanRel);
       setFileError("");
       if (!publicIp) {
-        setFileContent("");
+        setFileContent(null);
         return;
       }
       setLoadingFile(true);
@@ -170,14 +170,14 @@ export default function Case2AwsValidationView({
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           setFileError(err.detail || `Error HTTP ${res.status} al leer el archivo en EC2.`);
-          setFileContent("");
+          setFileContent(null);
         } else {
           const payload = await res.json();
-          setFileContent(payload.content || "");
+          setFileContent(payload.content ?? "");
         }
       } catch (err) {
         setFileError(`No se pudo consultar ${cleanRel}: ${err.message}`);
-        setFileContent("");
+        setFileContent(null);
       } finally {
         setLoadingFile(false);
       }
@@ -191,6 +191,10 @@ export default function Case2AwsValidationView({
     if (liveFiles.length > 0) {
       for (const f of liveFiles) {
         const cleanRel = String(f.path || "").replace(/^\/+/, "");
+        const isUserSel = manifestSelectedPaths.some((p) => {
+          const cleanSel = String(p || "").replace(/^\/+/, "").replace(/\/+$/, "");
+          return cleanSel && (cleanRel === cleanSel || cleanRel.startsWith(`${cleanSel}/`));
+        });
         map.set(cleanRel, {
           path: cleanRel,
           originPath: f.origin_path || `/${cleanRel}`,
@@ -201,6 +205,7 @@ export default function Case2AwsValidationView({
           sizeBytes: f.size_bytes ?? null,
           sha256: f.sha256 || "-",
           syncedLive: true,
+          userSelected: isUserSel,
         });
       }
     } else {
@@ -718,6 +723,7 @@ export default function Case2AwsValidationView({
                           {publicIp && f.syncedLive && (
                             <a
                               href={`/api/v1/migration/probe-uc2-file-download?ip=${encodeURIComponent(publicIp)}&path=${encodeURIComponent(f.path)}`}
+                              download={f.path.split("/").pop() || "archivo"}
                               className="cm-btn sm secondary"
                               style={{ padding: "3px 7px", fontSize: 11, textDecoration: "none" }}
                             >
@@ -781,19 +787,20 @@ export default function Case2AwsValidationView({
                 <>
                   <a
                     href={`/api/v1/migration/probe-uc2-file-download?ip=${encodeURIComponent(publicIp)}&path=${encodeURIComponent(selectedFilePath)}`}
+                    download={selectedFilePath.split("/").pop() || "archivo"}
                     className="cm-btn sm secondary"
                     style={{ padding: "3px 8px", fontSize: 11.5, textDecoration: "none" }}
                   >
                     Descargar
                   </a>
                   <a
-                    href={`http://${publicIp}:3000/files/view?path=${encodeURIComponent(selectedFilePath)}`}
+                    href={`/api/v1/migration/probe-uc2-file-raw?ip=${encodeURIComponent(publicIp)}&path=${encodeURIComponent(selectedFilePath)}`}
                     target="_blank"
                     rel="noreferrer"
                     className="cm-btn sm primary"
                     style={{ padding: "3px 8px", fontSize: 11.5, textDecoration: "none" }}
                   >
-                    Raw EC2 ↗
+                    Raw ↗
                   </a>
                 </>
               )}
@@ -821,27 +828,31 @@ export default function Case2AwsValidationView({
               <span style={{ color: "#38bdf8" }}>Consultando /files/view en la instancia EC2 ({publicIp})...</span>
             ) : fileError ? (
               <span style={{ color: "#fca5a5" }}>{fileError}</span>
-            ) : fileContent ? (
-              fileContent.split("\n").map((ln, idx) => (
-                <div key={idx} style={{ display: "flex" }}>
-                  <span
-                    style={{
-                      display: "inline-block",
-                      width: 34,
-                      flexShrink: 0,
-                      textAlign: "right",
-                      paddingRight: 10,
-                      color: "#64748b",
-                      userSelect: "none",
-                    }}
-                  >
-                    {idx + 1}
-                  </span>
-                  <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                    {renderHighlightedLine(ln, selectedFilePath)}
-                  </span>
-                </div>
-              ))
+            ) : fileContent !== null ? (
+              fileContent.length === 0 ? (
+                <span style={{ color: "#94a3b8" }}>[Archivo vacío en disco AWS — 0 B]</span>
+              ) : (
+                fileContent.split("\n").map((ln, idx) => (
+                  <div key={idx} style={{ display: "flex" }}>
+                    <span
+                      style={{
+                        display: "inline-block",
+                        width: 34,
+                        flexShrink: 0,
+                        textAlign: "right",
+                        paddingRight: 10,
+                        color: "#64748b",
+                        userSelect: "none",
+                      }}
+                    >
+                      {idx + 1}
+                    </span>
+                    <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                      {renderHighlightedLine(ln, selectedFilePath)}
+                    </span>
+                  </div>
+                ))
+              )
             ) : (
               <span style={{ color: "#94a3b8" }}>
                 Haz clic en "Inspeccionar" sobre cualquier fila para cargar el contenido real del disco en AWS.

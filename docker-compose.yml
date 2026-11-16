@@ -16,6 +16,7 @@ services:
       - ./generated:/app/generated
       - ./inventory:/app/inventory
       - ./cloudmove_agent:/app/cloudmove_agent:ro
+      - ./cloudmove_osquery_export.py:/app/cloudmove_osquery_export.py:ro
     ports:
       - "8000:8000"
 

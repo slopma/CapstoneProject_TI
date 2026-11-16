@@ -187,3 +187,50 @@ def test_target_architecture_handles_empty_component_ports():
     assert len(app_nodes) == 2
     assert app_nodes[0].metadata["container_port"] == 80
     assert app_nodes[1].metadata["container_port"] == 5001
+
+
+def test_collector_script_resolves_and_serves_python_collector():
+    """GET /api/v1/discovery/collector-script must return the real Python script (200)."""
+    resp = client.get("/api/v1/discovery/collector-script")
+    assert resp.status_code == 200
+    assert "collect_osquery_inventory" in resp.text
+    assert 'filename="cloudmove_osquery_export.py"' in resp.headers.get("content-disposition", "")
+
+
+def test_probe_uc2_file_raw_and_download_proxies(monkeypatch):
+    """Case 2 view, raw text, and download proxies should fetch cleanly and guard traversal."""
+    import urllib.request
+
+    bad = client.get("/api/v1/migration/probe-uc2-file-raw?ip=13.218.196.73&path=../../etc/shadow")
+    assert bad.status_code == 400
+
+    class _FakeResp:
+        def __init__(self, body: bytes):
+            self._body = body
+
+        def read(self) -> bytes:
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def _fake_urlopen(req, timeout=8.0):
+        return _FakeResp(b"print('ok')\n")
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    raw_resp = client.get(
+        "/api/v1/migration/probe-uc2-file-raw?ip=13.218.196.73&path=home/lacastrilp/demo.py"
+    )
+    assert raw_resp.status_code == 200
+    assert raw_resp.text == "print('ok')\n"
+
+    dl_resp = client.get(
+        "/api/v1/migration/probe-uc2-file-download?ip=13.218.196.73&path=home/lacastrilp/demo.py"
+    )
+    assert dl_resp.status_code == 200
+    assert dl_resp.content == b"print('ok')\n"
+    assert 'filename="demo.py"' in dl_resp.headers.get("content-disposition", "")

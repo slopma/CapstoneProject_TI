@@ -1863,35 +1863,55 @@ def probe_uc2_validation(
     }
 
 
+def _fetch_uc2_ec2_file(
+    ip: str,
+    path: str,
+    endpoint: str,
+    timeout_sec: float = 8.0,
+) -> tuple[str, bytes]:
+    """Fetch a migrated Case 2 file safely from the EC2 inspection service (`3000`)."""
+    clean_ip = _sanitize_probe_host(ip)
+    clean_rel = str(path or "").lstrip("/")
+    if not clean_rel or ".." in clean_rel.split("/"):
+        raise HTTPException(status_code=400, detail="Ruta de archivo inválida")
+    target_url = f"http://{clean_ip}:3000{endpoint}?path={urllib.parse.quote(clean_rel)}"
+    try:
+        req = urllib.request.Request(target_url, headers={"User-Agent": "CloudMove-UC2-Proxy/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            return clean_rel, resp.read()
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(status_code=exc.code, detail=f"Archivo no accesible en EC2: HTTP {exc.code}")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"No se pudo consultar archivo desde {clean_ip}: {exc}")
+
+
 @router.get("/probe-uc2-file")
 def probe_uc2_file(
     ip: str = Query(..., description="Public IP of deployed Case 2 EC2 instance"),
     path: str = Query(..., description="Relative file path inside /opt/cloudmove/os_capture/rootfs/"),
 ):
     """Fetch captured file text content safely from the deployed EC2 telemetry server."""
-    clean_ip = _sanitize_probe_host(ip)
-    clean_rel = str(path or "").lstrip("/")
-    if not clean_rel or ".." in clean_rel.split("/"):
-        raise HTTPException(status_code=400, detail="Ruta de archivo inválida")
-    target_url = f"http://{clean_ip}:3000/files/view?path={urllib.parse.quote(clean_rel)}"
-    try:
-        req = urllib.request.Request(target_url, headers={"User-Agent": "CloudMove-UC2-Viewer/1.0"})
-        with urllib.request.urlopen(req, timeout=4.0) as resp:
-            raw = resp.read()
-            text = raw.decode("utf-8", errors="replace")
-            return {
-                "ok": True,
-                "path": clean_rel,
-                "origin_path": f"/{clean_rel}",
-                "rootfs_path": f"/opt/cloudmove/os_capture/rootfs/{clean_rel}",
-                "ebs_path": f"/mnt/cloudmove_ebs/rootfs/{clean_rel}",
-                "size_bytes": len(raw),
-                "content": text,
-            }
-    except urllib.error.HTTPError as exc:
-        raise HTTPException(status_code=exc.code, detail=f"Archivo no accesible en EC2: HTTP {exc.code}")
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"No se pudo leer el archivo desde {clean_ip}: {exc}")
+    clean_rel, raw = _fetch_uc2_ec2_file(ip=ip, path=path, endpoint="/files/view", timeout_sec=6.0)
+    text = raw.decode("utf-8", errors="replace")
+    return {
+        "ok": True,
+        "path": clean_rel,
+        "origin_path": f"/{clean_rel}",
+        "rootfs_path": f"/opt/cloudmove/os_capture/rootfs/{clean_rel}",
+        "ebs_path": f"/mnt/cloudmove_ebs/rootfs/{clean_rel}",
+        "size_bytes": len(raw),
+        "content": text,
+    }
+
+
+@router.get("/probe-uc2-file-raw")
+def probe_uc2_file_raw(
+    ip: str = Query(..., description="Public IP of deployed Case 2 EC2 instance"),
+    path: str = Query(..., description="Relative file path inside /opt/cloudmove/os_capture/rootfs/"),
+):
+    """Serve raw UTF-8 view of a migrated Case 2 file over HTTPS without mixed-content warnings."""
+    _, raw = _fetch_uc2_ec2_file(ip=ip, path=path, endpoint="/files/view", timeout_sec=8.0)
+    return PlainTextResponse(content=raw.decode("utf-8", errors="replace"))
 
 
 @router.get("/probe-uc2-bundle")
@@ -1920,25 +1940,13 @@ def probe_uc2_file_download(
     path: str = Query(..., description="Relative file path inside /opt/cloudmove/os_capture/rootfs/"),
 ):
     """Proxy binary or large file download safely from the deployed Case 2 EC2 instance."""
-    clean_ip = _sanitize_probe_host(ip)
-    clean_rel = str(path or "").lstrip("/")
-    if not clean_rel or ".." in clean_rel.split("/"):
-        raise HTTPException(status_code=400, detail="Ruta de archivo inválida")
-    target_url = f"http://{clean_ip}:3000/files/download?path={urllib.parse.quote(clean_rel)}"
+    clean_rel, raw = _fetch_uc2_ec2_file(ip=ip, path=path, endpoint="/files/download", timeout_sec=15.0)
     fname = Path(clean_rel).name or "migrated-file"
-    try:
-        req = urllib.request.Request(target_url, headers={"User-Agent": "CloudMove-UC2-DL/1.0"})
-        with urllib.request.urlopen(req, timeout=15.0) as resp:
-            raw = resp.read()
-            return Response(
-                content=raw,
-                media_type="application/octet-stream",
-                headers={"Content-Disposition": f'attachment; filename="{fname}"'},
-            )
-    except urllib.error.HTTPError as exc:
-        raise HTTPException(status_code=exc.code, detail=f"Archivo no disponible: HTTP {exc.code}")
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"No se pudo descargar desde {clean_ip}: {exc}")
+    return Response(
+        content=raw,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 class Uc2StageInitRequest(BaseModel):
