@@ -1122,6 +1122,11 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                 <strong>Causa:</strong> {tfStatus.error_diagnosis.cause}
               </div>
             )}
+            {!tfStatus.error_diagnosis?.cause && tfStatus.error && (
+              <div>
+                <strong>Detalle:</strong> {tfStatus.error}
+              </div>
+            )}
             {tfStatus.error_diagnosis?.remediation && (
               <div>
                 <strong>Acción recomendada:</strong> {tfStatus.error_diagnosis.remediation}

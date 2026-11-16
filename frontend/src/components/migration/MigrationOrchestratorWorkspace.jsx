@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import IaCViewer from "./IaCViewer";
 import RepositoryTreeViewer from "./RepositoryTreeViewer";
 import ExternalServicesCredentialsCard from "./ExternalServicesCredentialsCard";
@@ -736,6 +736,17 @@ export default function MigrationOrchestratorWorkspace({
     }
   }, []);
 
+  const onActiveJobChangeRef = useRef(onActiveJobChange);
+  useEffect(() => {
+    onActiveJobChangeRef.current = onActiveJobChange;
+  }, [onActiveJobChange]);
+
+  useEffect(() => {
+    if (selectedJob && typeof onActiveJobChangeRef.current === "function") {
+      onActiveJobChangeRef.current(selectedJob);
+    }
+  }, [selectedJob]);
+
   const fetchJobs = useCallback(
     async (selectId = null, manual = false) => {
       if (manual) setRefreshingJobs(true);
@@ -757,18 +768,15 @@ export default function MigrationOrchestratorWorkspace({
           const found = list.find((j) => j.migration_id === targetId);
           if (found) {
             setSelectedJob(found);
-            if (onActiveJobChange) onActiveJobChange(found);
             return;
           }
         }
         if (list.length > 0) {
-          setSelectedJob((prev) => {
-            const next = prev
+          setSelectedJob((prev) =>
+            prev
               ? list.find((j) => j.migration_id === prev.migration_id) || list[0]
-              : list[0];
-            if (onActiveJobChange) onActiveJobChange(next);
-            return next;
-          });
+              : list[0]
+          );
         }
       } catch (err) {
         if (manual) {
@@ -778,7 +786,7 @@ export default function MigrationOrchestratorWorkspace({
         if (manual) setRefreshingJobs(false);
       }
     },
-    [initialJobId, onActiveJobChange]
+    [initialJobId]
   );
 
   useEffect(() => {
