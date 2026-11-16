@@ -28,7 +28,7 @@ export default function SourcesAndTargetsWorkspace({ onQuickStartUseCase }) {
   const [copiedCmd, setCopiedCmd] = useState("");
 
   // Case 1: GitHub Repository Connector
-  const [githubUrl, setGithubUrl] = useState("https://github.com/slopma/CocoaApp");
+  const [githubUrl, setGithubUrl] = useState("");
   const [githubToken, setGithubToken] = useState("");
   const [validatingRepo, setValidatingRepo] = useState(false);
   const [repoResult, setRepoResult] = useState(null);
@@ -48,10 +48,11 @@ export default function SourcesAndTargetsWorkspace({ onQuickStartUseCase }) {
       }
       if (agRes && agRes.ok) {
         const d = await agRes.json();
-        // Filter out any loopback/control-plane host for security
         const remoteAgents = (d.agents || []).filter(
           (a) =>
+            !a.is_control_plane &&
             a.hostname !== "cloudmove-server" &&
+            a.hostname !== "localhost" &&
             !/^[0-9a-f]{12}$/i.test(a.hostname || "")
         );
         setAgents(remoteAgents);
@@ -600,7 +601,7 @@ export default function SourcesAndTargetsWorkspace({ onQuickStartUseCase }) {
                           {ag.health_metrics && (
                             <div className="cm-hint">
                               CPU: {ag.health_metrics.cpu_percent ?? 0}% · RAM:{" "}
-                              {ag.health_metrics.memory_percent ?? 0}%
+                              {ag.health_metrics.ram_percent ?? ag.health_metrics.memory_percent ?? 0}%
                             </div>
                           )}
                         </td>
@@ -745,9 +746,23 @@ export default function SourcesAndTargetsWorkspace({ onQuickStartUseCase }) {
               <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13.5 }}>
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
                   <span>Terraform CLI:</span>
-                  <AwsStatusIndicator type="success">
-                    {awsInfo?.prerequisites?.terraform_cli ? "Instalado y activo" : "Verificado"}
-                  </AwsStatusIndicator>
+                  {awsInfo ? (
+                    <AwsStatusIndicator
+                      type={
+                        (awsInfo?.prerequisites?.terraform_cli_installed ??
+                          awsInfo?.prerequisites?.terraform_cli)
+                          ? "success"
+                          : "warning"
+                      }
+                    >
+                      {(awsInfo?.prerequisites?.terraform_cli_installed ??
+                        awsInfo?.prerequisites?.terraform_cli)
+                        ? "Instalado y activo"
+                        : "No detectado en PATH"}
+                    </AwsStatusIndicator>
+                  ) : (
+                    <AwsStatusIndicator type="info">Consultando...</AwsStatusIndicator>
+                  )}
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
                   <span>Proveedor HashiCorp AWS:</span>

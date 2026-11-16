@@ -1602,12 +1602,12 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
                               Ver /etc/os-release en VM ↗
                             </a>
                             <a
-                              href={`http://${publicIp}:3000/files/view?path=home/lacastrilp/archivos_usuario_origen.txt`}
+                              href={`http://${publicIp}:3000/files/view?path=var/log/cloudmove_origin_workspace.txt`}
                               target="_blank"
                               rel="noreferrer"
                               style={{ fontSize: 11.5, color: "#0369a1", fontFamily: "monospace" }}
                             >
-                              Ver archivos de /home/lacastrilp en VM ↗
+                              Ver archivos de origen en VM ↗
                             </a>
                           </>
                         )}
@@ -1684,10 +1684,10 @@ export default function AutomatedCloudDeployerPanel({ job, onDeploymentCompleted
   ? `# 1. Abrir el Explorador Interactivo de Archivos Reales del SO en la VM (Puerto 3000):
 curl -s http://${publicIp || "<IP_PUBLICA_EC2>"}:3000/files | python3 -m json.tool
 
-# 2. Consultar archivos reales de tu SO (/etc/os-release, /etc/fstab, /home/lacastrilp) subidos a la VM en AWS:
+# 2. Consultar archivos reales de tu SO (/etc/os-release, /etc/fstab, manifiestos) subidos a la VM en AWS:
 curl -s "http://${publicIp || "<IP_PUBLICA_EC2>"}:3000/files/view?path=etc/os-release"
 curl -s "http://${publicIp || "<IP_PUBLICA_EC2>"}:3000/files/view?path=etc/fstab"
-curl -s "http://${publicIp || "<IP_PUBLICA_EC2>"}:3000/files/view?path=home/lacastrilp/archivos_usuario_origen.txt"
+curl -s "http://${publicIp || "<IP_PUBLICA_EC2>"}:3000/files/view?path=var/log/cloudmove_origin_workspace.txt"
 
 # 3. Consultar telemetría en vivo (discos EBS montados lsblk, procesos ps y manifiesto del SO):
 curl -s http://${publicIp || "<IP_PUBLICA_EC2>"}:8000/health | python3 -m json.tool`

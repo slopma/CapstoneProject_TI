@@ -9,10 +9,12 @@ export default function ExternalServicesCredentialsCard({
   const deepInsights = srcEnv.deep_insights || {};
   const envVars = srcEnv.environment_variables || [];
 
+  const rawEnvUrl = (envVars.find((e) => e.name === "VITE_SUPABASE_URL") || {}).redacted_value || "";
   const defaultUrl =
-    (envVars.find((e) => e.name === "VITE_SUPABASE_URL") || {}).redacted_value ||
-    deepInsights.supabase_details?.endpoint ||
-    "https://zlkdxzfxkhohlpswdmap.supabase.co";
+    (rawEnvUrl.startsWith("http") ? rawEnvUrl : "") ||
+    (String(deepInsights.supabase_details?.endpoint || "").startsWith("http")
+      ? deepInsights.supabase_details.endpoint
+      : "");
 
   const [supabaseUrl, setSupabaseUrl] = useState(defaultUrl);
   const [anonKey, setAnonKey] = useState("");

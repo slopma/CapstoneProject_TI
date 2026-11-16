@@ -24,11 +24,132 @@ export default function ArchifyArchitectureWorkspace({
 }) {
   const [viewTab, setViewTab] = useState("archify-interactive"); // "archify-interactive" | "archify-showcase" | "cmir-nodes"
 
-  // Build Archify model from active CMIR nodes or default AWS target architecture
+  // Build dynamic Archify model from active CMIR nodes/edges (or AWS reference baseline if empty)
   const archifyModel = useMemo(() => {
     const resourceNodes = allNodes.filter(
       (n) => (n.level ?? 5) >= 4 || n.category === "resource"
     );
+
+    const mapNodeTypeToArchify = (node) => {
+      const t = String(node.type || "").toLowerCase();
+      if (t.includes("database") || t.includes("db") || t.includes("storage") || t.includes("ebs") || t.includes("volume") || t.includes("s3")) {
+        return "database";
+      }
+      if (t.includes("security") || t.includes("firewall") || t.includes("iam") || t.includes("identity") || t.includes("secret")) {
+        return "security";
+      }
+      if (t.includes("vpc") || t.includes("subnet") || t.includes("network") || t.includes("load_balancer") || t.includes("gateway") || t.includes("vlan")) {
+        return "cloud";
+      }
+      if (t.includes("application") || t.includes("queue") || t.includes("cache") || t.includes("service")) {
+        return "messagebus";
+      }
+      if (t.includes("external")) {
+        return "external";
+      }
+      return "backend";
+    };
+
+    const dynamicNodes = allNodes
+      .filter((n) => !String(n.type || "").toLowerCase().includes("port"))
+      .slice(0, 16);
+
+    if (dynamicNodes.length >= 2) {
+      const colBuckets = { 0: [], 1: [], 2: [], 3: [] };
+      dynamicNodes.forEach((n) => {
+        const at = mapNodeTypeToArchify(n);
+        if (at === "external" || at === "cloud") colBuckets[0].push(n);
+        else if (at === "security") colBuckets[1].push(n);
+        else if (at === "backend" || at === "messagebus") colBuckets[2].push(n);
+        else colBuckets[3].push(n);
+      });
+
+      const compList = [];
+      const colX = [40, 295, 560, 835];
+      Object.entries(colBuckets).forEach(([colIdx, items]) => {
+        const x = colX[Number(colIdx)];
+        items.forEach((node, rowIdx) => {
+          compList.push({
+            id: node.id,
+            type: mapNodeTypeToArchify(node),
+            label: String(node.name || node.id).slice(0, 26),
+            sublabel: `${node.type || "resource"}${node.location ? ` · ${node.location}` : ""}`.slice(0, 32),
+            pos: [x, 65 + rowIdx * 96],
+            size: [180, 62],
+          });
+        });
+      });
+
+      const compIds = new Set(compList.map((c) => c.id));
+      const dynamicConnections = [];
+      allEdges.forEach((e) => {
+        if (e.source !== e.target && compIds.has(e.source) && compIds.has(e.target) && dynamicConnections.length < 18) {
+          dynamicConnections.push({
+            from: e.source,
+            to: e.target,
+            label: String(e.type || "depends_on").slice(0, 18),
+            variant: e.is_hierarchy ? "dashed" : "emphasis",
+          });
+        }
+      });
+
+      const wrappedInsideVpc = compList
+        .filter((c) => c.type !== "external")
+        .map((c) => c.id);
+      const wrappedDataAndCompute = compList
+        .filter((c) => c.type === "backend" || c.type === "database" || c.type === "messagebus")
+        .map((c) => c.id);
+
+      const dynamicBoundaries = [];
+      if (wrappedInsideVpc.length >= 2) {
+        dynamicBoundaries.push({
+          kind: "region",
+          label: "aws_vpc (Topología Descubierta / Planificada AWS us-east-1)",
+          wraps: wrappedInsideVpc,
+          pad: 22,
+        });
+      }
+      if (wrappedDataAndCompute.length >= 2) {
+        dynamicBoundaries.push({
+          kind: "security-group",
+          label: "Perímetro de Cómputo y Datos (EC2 / Contenedores / RDS / EBS)",
+          wraps: wrappedDataAndCompute,
+          pad: 14,
+        });
+      }
+
+      return {
+        schema_version: 1,
+        diagram_type: "architecture",
+        meta: {
+          title: `Topología CMIR v2.1 en Vivo (${allNodes.length} nodos · ${allEdges.length} relaciones)`,
+          locale: "es",
+          quality_profile: "showcase",
+        },
+        components: compList,
+        boundaries: dynamicBoundaries,
+        connections: dynamicConnections,
+        cards: [
+          {
+            dot: "cyan",
+            title: "1. Grafo CMIR v2.1 Sincronizado",
+            items: [
+              `Mostrando ${compList.length} recursos clave de ${allNodes.length} nodos totales`,
+              `${dynamicConnections.length} dependencias activas trazadas desde el backend`,
+              "Haz clic en cualquier bloque del lienzo para inspeccionarlo o seleccionarlo",
+            ],
+          },
+          {
+            dot: "emerald",
+            title: "2. Compatibilidad Exclusiva AWS",
+            items: [
+              "Validación determinista contra AWSAdapter y quotas VPC/EC2/RDS/EBS",
+              "Soporte de alta disponibilidad (ALB + ASG) o instancia única Free-Tier",
+            ],
+          },
+        ],
+      };
+    }
 
     const baseComponents = [
       {

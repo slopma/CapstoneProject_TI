@@ -8,6 +8,21 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    build: {
+      chunkSizeWarningLimit: 600,
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes("node_modules/@xyflow/react")) {
+              return "vendor-xyflow";
+            }
+            if (id.includes("node_modules/react")) {
+              return "vendor-react";
+            }
+          },
+        },
+      },
+    },
     server: {
       port: Number(env.VITE_DEV_PORT || 5173),
       proxy: {

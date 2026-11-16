@@ -1,15 +1,27 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, lazy, Suspense } from "react";
 import AppShell from "./components/layout/AppShell";
-import ArchifyArchitectureWorkspace from "./components/architecture/ArchifyArchitectureWorkspace";
 import ResourceInspector from "./components/inspector/ResourceInspector";
 import MigrationPreviewModal from "./components/migration/MigrationPreviewModal";
-import DiscoveryWorkspace from "./components/discovery/DiscoveryWorkspace";
-import MigrationOrchestratorWorkspace from "./components/migration/MigrationOrchestratorWorkspace";
-import EnvironmentOverviewWorkspace from "./components/overview/EnvironmentOverviewWorkspace";
-import SourcesAndTargetsWorkspace from "./components/sources/SourcesAndTargetsWorkspace";
-import ExecutionsAndAuditWorkspace from "./components/audit/ExecutionsAndAuditWorkspace";
-import { getDomainByType } from "./components/architecture/TechnicalIcons";
 import { apiFetch, getApiBase } from "./utils/apiClient";
+
+const ArchifyArchitectureWorkspace = lazy(() =>
+  import("./components/architecture/ArchifyArchitectureWorkspace")
+);
+const DiscoveryWorkspace = lazy(() =>
+  import("./components/discovery/DiscoveryWorkspace")
+);
+const MigrationOrchestratorWorkspace = lazy(() =>
+  import("./components/migration/MigrationOrchestratorWorkspace")
+);
+const EnvironmentOverviewWorkspace = lazy(() =>
+  import("./components/overview/EnvironmentOverviewWorkspace")
+);
+const SourcesAndTargetsWorkspace = lazy(() =>
+  import("./components/sources/SourcesAndTargetsWorkspace")
+);
+const ExecutionsAndAuditWorkspace = lazy(() =>
+  import("./components/audit/ExecutionsAndAuditWorkspace")
+);
 
 const OFFLINE_ENTERPRISE_NODES = [
   { id: "dc-root", name: "Entorno On-Premise Principal", type: "datacenter", category: "container", level: 0, parent: null },
@@ -130,19 +142,13 @@ function App() {
   const [orchestratorUseCase, setOrchestratorUseCase] = useState(initialRoute.useCase);
   const [orchestratorJobId, setOrchestratorJobId] = useState(null);
 
-  const [archViewMode, setArchViewMode] = useState("target");
   const [allNodes, setAllNodes] = useState([]);
   const [allEdges, setAllEdges] = useState([]);
   const [architectureMeta, setArchitectureMeta] = useState(null);
 
   // Canvas & Hierarchy Exploration States
   const [expandedNodeIds, setExpandedNodeIds] = useState([]);
-  const [activeLayer, setActiveLayer] = useState("ALL");
-  const [domainFilter, setDomainFilter] = useState("ALL");
-  const [highlightDeps, setHighlightDeps] = useState(true);
-  const [showLegend, setShowLegend] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [focusNodeId, setFocusNodeId] = useState(null);
 
   // Selection & Inspector States
   const [selectedNodes, setSelectedNodes] = useState([]);
@@ -196,10 +202,7 @@ function App() {
   const fetchArchitecture = useCallback(async (mode = "target") => {
     setLoading(true);
     try {
-      let response = await apiFetch(`/api/v1/architecture/graph?view_mode=${mode}`);
-      if (!response.ok) {
-        response = await apiFetch(`/graph?view_mode=${mode}`);
-      }
+      const response = await apiFetch(`/api/v1/architecture/graph?view_mode=${mode}`);
       if (!response.ok) throw new Error("Backend unreachable");
       const data = await response.json();
 
@@ -226,11 +229,6 @@ function App() {
     }
   }, []);
 
-  const handleToggleArchViewMode = useCallback((mode) => {
-    setArchViewMode(mode);
-    fetchArchitecture(mode);
-  }, [fetchArchitecture]);
-
   const fetchWorkContextSummary = useCallback(async () => {
     try {
       const [discRes, jobsRes, persRes] = await Promise.all([
@@ -243,7 +241,7 @@ function App() {
         const rawHost = d.hostname || d.agent?.hostname || "";
         if (
           rawHost &&
-          !["cloudmove-server", "localhost", "127.0.0.1", "100.50.88.231"].includes(
+          !["cloudmove-server", "localhost", "127.0.0.1"].includes(
             rawHost.toLowerCase()
           ) &&
           !/^[0-9a-f]{12}$/i.test(rawHost)
@@ -279,18 +277,6 @@ function App() {
       prev.includes(nodeId) ? prev.filter((id) => id !== nodeId) : [...prev, nodeId]
     );
   }, []);
-
-  const handleExpandAll = useCallback(() => {
-    const allContainerIds = allNodes
-      .filter((n) => n.category === "container" || (n.level ?? 5) < 5)
-      .map((n) => n.id);
-    setExpandedNodeIds(allContainerIds);
-  }, [allNodes]);
-
-  const handleCollapseAll = useCallback(() => {
-    const rootIds = allNodes.filter((n) => (n.level ?? 0) === 0).map((n) => n.id);
-    setExpandedNodeIds(rootIds);
-  }, [allNodes]);
 
   const toggleResourceSelection = useCallback(
     (nodeId) => {
@@ -373,91 +359,6 @@ function App() {
     }
   };
 
-  const breadcrumbs = useMemo(() => {
-    if (!selectedNodeObj) return [];
-    const crumbs = [];
-    let curr = selectedNodeObj;
-    const visited = new Set();
-    while (curr && !visited.has(curr.id)) {
-      visited.add(curr.id);
-      crumbs.unshift({ id: curr.id, name: curr.name, level: curr.level ?? 0 });
-      curr = curr.parent ? allNodes.find((n) => n.id === curr.parent) : null;
-    }
-    return crumbs;
-  }, [selectedNodeObj, allNodes]);
-
-  const { visibleNodes, visibleEdges } = useMemo(() => {
-    let filtered = allNodes;
-
-    if (activeLayer !== "ALL") {
-      filtered = filtered.filter((n) => {
-        const lvl = n.level ?? 5;
-        if (activeLayer === "L0_L1") return lvl <= 1;
-        if (activeLayer === "L2") return lvl <= 2;
-        if (activeLayer === "L3_L4") return lvl <= 4;
-        if (activeLayer === "L5") return true;
-        return true;
-      });
-    }
-
-    if (domainFilter !== "ALL") {
-      filtered = filtered.filter((n) => {
-        const isContainer = n.category === "container" || (n.level ?? 5) < 5;
-        if (isContainer) return true;
-        if (domainFilter === "shared") return Boolean(n.is_shared);
-        const dom = getDomainByType(n.type);
-        if (domainFilter === "network") return dom === "network" || dom === "security";
-        if (domainFilter === "data") return dom === "data" || dom === "storage";
-        return dom === domainFilter;
-      });
-    }
-
-    if (searchQuery.trim() !== "") {
-      const q = searchQuery.toLowerCase();
-      const matchedIds = new Set(
-        filtered
-          .filter(
-            (n) =>
-              n.name?.toLowerCase().includes(q) ||
-              n.type?.toLowerCase().includes(q) ||
-              n.id?.toLowerCase().includes(q)
-          )
-          .map((n) => n.id)
-      );
-      filtered.forEach((n) => {
-        if (matchedIds.has(n.id)) {
-          let p = n.parent;
-          while (p) {
-            matchedIds.add(p);
-            const parentObj = allNodes.find((x) => x.id === p);
-            p = parentObj ? parentObj.parent : null;
-          }
-        }
-      });
-      filtered = filtered.filter((n) => matchedIds.has(n.id));
-    }
-
-    if (focusNodeId) {
-      const subtreeIds = new Set([focusNodeId]);
-      let added = true;
-      while (added) {
-        added = false;
-        allNodes.forEach((n) => {
-          if (n.parent && subtreeIds.has(n.parent) && !subtreeIds.has(n.id)) {
-            subtreeIds.add(n.id);
-            added = true;
-          }
-        });
-      }
-      filtered = filtered.filter((n) => subtreeIds.has(n.id));
-    }
-
-    const nodeIds = new Set(filtered.map((n) => n.id));
-    const edges = allEdges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
-
-    return { visibleNodes: filtered, visibleEdges: edges };
-  }, [allNodes, allEdges, activeLayer, domainFilter, searchQuery, focusNodeId]);
-
   const handleLoadCmirJobToCanvas = useCallback(
     (jobOrPayload) => {
       const cmir = jobOrPayload?.cmir || jobOrPayload;
@@ -520,6 +421,14 @@ function App() {
       }}
     >
       <ViewErrorBoundary key={activeTab}>
+        <Suspense
+          fallback={
+            <div className="loading-state-overlay">
+              <div className="spinner-ring" />
+              <p>Cargando módulo de CloudMove...</p>
+            </div>
+          }
+        >
         {loading ? (
           <div className="loading-state-overlay">
             <div className="spinner-ring" />
@@ -584,7 +493,6 @@ function App() {
                 onClose={() => setSelectedNodeObj(null)}
                 onSelectNode={(nodeId) => {
                   toggleResourceSelection(nodeId);
-                  setFocusNodeId(nodeId);
                 }}
                 targetProvider={targetProvider}
                 onToggleExpand={handleToggleExpand}
@@ -610,6 +518,7 @@ function App() {
             onSelectMigrationInOrchestrator={handleQuickStartUseCase}
           />
         )}
+        </Suspense>
       </ViewErrorBoundary>
 
       {showMigrationModal && (

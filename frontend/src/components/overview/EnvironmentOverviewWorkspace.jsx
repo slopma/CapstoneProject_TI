@@ -10,7 +10,7 @@ import {
 
 export default function EnvironmentOverviewWorkspace({
   allNodes = [],
-  allEdges = [],
+  allEdges: _allEdges = [],
   selectedNodes = [],
   initialJobs = [],
   onNavigateTab,
@@ -68,7 +68,7 @@ export default function EnvironmentOverviewWorkspace({
     "";
   const isControlHost =
     !rawHostName ||
-    ["cloudmove-server", "localhost", "127.0.0.1", "100.50.88.231"].includes(
+    ["cloudmove-server", "localhost", "127.0.0.1"].includes(
       rawHostName.toLowerCase()
     ) ||
     /^[0-9a-f]{12}$/i.test(rawHostName);

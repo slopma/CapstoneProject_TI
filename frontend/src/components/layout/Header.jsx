@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { getCredentialsSummary } from "../../utils/credentialVault";
 
 export const TAB_LABELS = {
   overview: "Console Home (Inicio)",
@@ -83,7 +84,7 @@ export default function Header({
   setSearchQuery,
   selectedCount,
   onPrepareMigration,
-  targetProvider = "aws",
+  targetProvider: _targetProvider = "aws",
   setTargetProvider,
   onToggleMobileNav,
   sidebarCollapsed,
@@ -92,9 +93,16 @@ export default function Header({
   const [servicesOpen, setServicesOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
+  const [credSummary, setCredSummary] = useState(() => getCredentialsSummary());
   const servicesRef = useRef(null);
   const accountRef = useRef(null);
   const searchRef = useRef(null);
+
+  useEffect(() => {
+    const handleCredsSync = () => setCredSummary(getCredentialsSummary());
+    window.addEventListener("cloudmove:credentials-updated", handleCredsSync);
+    return () => window.removeEventListener("cloudmove:credentials-updated", handleCredsSync);
+  }, []);
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -344,19 +352,30 @@ export default function Header({
             title="Detalles de cuenta y sesión AWS Academy"
           >
             <span className="awsui-account-dot" aria-hidden="true" />
-            <span className="awsui-account-name">voclabs/lacastrilp</span>
+            <span className="awsui-account-name">
+              {credSummary.hasCredentials ? `aws/${credSummary.maskedAccessKey}` : "Sesión Web AWS"}
+            </span>
             <span style={{ fontSize: 10, opacity: 0.75 }}>▾</span>
           </button>
 
           {accountOpen && (
             <div className="awsui-account-popover" role="menu">
               <div className="awsui-account-popover-header">
-                <div style={{ fontSize: 12, color: "#545b64" }}>Cuenta AWS Academy Learner Lab</div>
+                <div style={{ fontSize: 12, color: "#545b64" }}>Sesión aislada por navegador (sessionStorage)</div>
                 <div style={{ fontSize: 14, fontWeight: 700, color: "#000716", fontFamily: "monospace" }}>
-                  ID: 5297-0013-9352
+                  {credSummary.hasCredentials ? credSummary.maskedAccessKey : "Sin credenciales cargadas"}
                 </div>
-                <div style={{ fontSize: 12, color: "#037f0c", fontWeight: 600, marginTop: 2 }}>
-                  ● Sesión STS activa · us-east-1
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: credSummary.hasCredentials ? "#037f0c" : "#b45309",
+                    fontWeight: 600,
+                    marginTop: 2,
+                  }}
+                >
+                  {credSummary.hasCredentials
+                    ? `● Credenciales activas en pestaña · ${credSummary.region || "us-east-1"}`
+                    : "○ Ingresa credenciales AWS en Despliegue o Auditoría"}
                 </div>
               </div>
               <div className="awsui-account-popover-body">

@@ -4,8 +4,8 @@
   "status": "current",
   "command": "deliver",
   "type": "architecture",
-  "input": "/home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/.archify/architecture-aws-cmir-20261115/candidate.json",
-  "output": "/home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/public/archify-aws-cmir.html",
+  "input": ".archify/architecture-aws-cmir-20261115/candidate.json",
+  "output": "archify-aws-cmir.html",
   "specification": {
     "sha256": "9c05a7b4238025ac787f339810115a4f035b71d189c8cf029bc2bf8e3cc91ed1",
     "bytes": 5042
