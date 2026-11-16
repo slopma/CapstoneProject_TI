@@ -8,17 +8,16 @@ Addresses Section 5.1 & Section 9:
 - Versioned schema migrations (`v1.0`, `v2.0`, `v2.1`) tracked in `schema_migrations`.
 - Persistent relational tables with primary keys, unique constraints, foreign keys, and indexes:
   1. `schema_migrations`
-  2. `campaigns`
-  3. `assets`
-  4. `migration_plans`
-  5. `migration_stages`
-  6. `stage_executions` (with `UNIQUE(migration_id, stage_id, idempotency_key)` to guarantee idempotent retries)
-  7. `migration_artifacts`
-  8. `cloud_discovery_snapshots`
-  9. `audit_events`
+  2. `assets`
+  3. `migration_plans`
+  4. `migration_stages`
+  5. `stage_executions` (with `UNIQUE(migration_id, stage_id, idempotency_key)` to guarantee idempotent retries)
+  6. `migration_artifacts`
+  7. `cloud_discovery_snapshots`
+  8. `audit_events`
 - Prevents two operators from executing the same migration stage simultaneously via
   atomic stage locks (`locked_by`, `locked_at`) and optimistic concurrency (`version` column).
--Controlled migration of legacy JSON files (`migrations_state.json`, `datacenter_campaigns.json`)
+- Controlled migration of legacy JSON files (`migrations_state.json`)
   with automatic `.bak` backup and corruption/incompatibility detection.
 """
 
@@ -63,7 +62,7 @@ class IncompatibleLegacyDataError(ValueError):
 SCHEMA_MIGRATIONS: List[Tuple[str, str, str]] = [
     (
         "1.0.0",
-        "Initial transactional tables for campaigns, assets, migration_plans, and audit_events",
+        "Initial transactional tables for assets, migration_plans, and audit_events",
         """
         CREATE TABLE IF NOT EXISTS schema_migrations (
             version TEXT PRIMARY KEY,
@@ -71,20 +70,6 @@ SCHEMA_MIGRATIONS: List[Tuple[str, str, str]] = [
             checksum TEXT NOT NULL,
             applied_at TEXT NOT NULL
         );
-
-        CREATE TABLE IF NOT EXISTS campaigns (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            environment_id TEXT NOT NULL,
-            mode TEXT NOT NULL,
-            status TEXT NOT NULL,
-            version INTEGER NOT NULL DEFAULT 1,
-            created_by TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            payload_json TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_campaigns_env_status ON campaigns(environment_id, status);
 
         CREATE TABLE IF NOT EXISTS assets (
             id TEXT PRIMARY KEY,
@@ -116,7 +101,7 @@ SCHEMA_MIGRATIONS: List[Tuple[str, str, str]] = [
             updated_at TEXT NOT NULL,
             payload_json TEXT NOT NULL,
             CHECK (target_provider IN ('aws', 'gcp')),
-            CHECK (use_case IN ('app_source', 'vm_image', 'datacenter_campaign'))
+            CHECK (use_case IN ('app_source', 'vm_image'))
         );
         CREATE INDEX IF NOT EXISTS idx_migration_plans_uc_prov ON migration_plans(use_case, target_provider);
         CREATE INDEX IF NOT EXISTS idx_migration_plans_state ON migration_plans(state);
@@ -189,7 +174,7 @@ SCHEMA_MIGRATIONS: List[Tuple[str, str, str]] = [
     ),
     (
         "2.1.0",
-        "Add cloud_discovery_snapshots and campaign_global_state table for full restart recovery",
+        "Add cloud_discovery_snapshots table for full restart recovery",
         """
         CREATE TABLE IF NOT EXISTS cloud_discovery_snapshots (
             snapshot_id TEXT PRIMARY KEY,
@@ -205,13 +190,6 @@ SCHEMA_MIGRATIONS: List[Tuple[str, str, str]] = [
             CHECK (provider IN ('aws', 'gcp'))
         );
         CREATE INDEX IF NOT EXISTS idx_cloud_snapshots_prov ON cloud_discovery_snapshots(provider, account_or_project, discovered_at);
-
-        CREATE TABLE IF NOT EXISTS campaign_global_state (
-            state_key TEXT PRIMARY KEY,
-            version INTEGER NOT NULL DEFAULT 1,
-            updated_at TEXT NOT NULL,
-            payload_json TEXT NOT NULL
-        );
         """,
     ),
     (
@@ -374,7 +352,6 @@ class TransactionalDatabase:
                 "SELECT version, description, checksum, applied_at FROM schema_migrations ORDER BY version ASC"
             ).fetchall()
             plans_count = conn.execute("SELECT COUNT(*) AS c FROM migration_plans").fetchone()["c"]
-            camps_count = conn.execute("SELECT COUNT(*) AS c FROM campaigns").fetchone()["c"]
             assets_count = conn.execute("SELECT COUNT(*) AS c FROM assets").fetchone()["c"]
             exec_count = conn.execute("SELECT COUNT(*) AS c FROM stage_executions").fetchone()["c"]
             audit_count = conn.execute("SELECT COUNT(*) AS c FROM audit_events").fetchone()["c"]
@@ -388,7 +365,6 @@ class TransactionalDatabase:
             "applied_migrations": [dict(r) for r in rows],
             "counts": {
                 "migration_plans": plans_count,
-                "campaigns": camps_count,
                 "assets": assets_count,
                 "stage_executions": exec_count,
                 "audit_events": audit_count,
@@ -498,7 +474,7 @@ class TransactionalDatabase:
         use_case = str(job.get("use_case", "app_source")).lower().strip()
         if target_provider not in ("aws", "gcp"):
             raise ValueError(f"Proveedor '{target_provider}' rechazado por restricción de integridad (solo aws|gcp).")
-        if use_case not in ("app_source", "vm_image", "datacenter_campaign"):
+        if use_case not in ("app_source", "vm_image"):
             raise ValueError(f"Caso de uso '{use_case}' inválido en persistencia transaccional.")
 
         now = _utc_now()
@@ -857,90 +833,8 @@ class TransactionalDatabase:
             )
 
     # ==========================================================================
-    # Datacenter Campaigns & Assets Transactional Persistence
+    # Assets Transactional Persistence
     # ==========================================================================
-
-    def save_campaign_state(self, state: Dict[str, Any]) -> None:
-        """
-        Atomically persist the full datacenter campaign state, individual campaigns,
-        and reconciled assets into relational tables so campaigns and partial progress
-        survive backend restarts cleanly.
-        """
-        now = _utc_now()
-        with self.transaction(write=True) as conn:
-            row = conn.execute(
-                "SELECT version FROM campaign_global_state WHERE state_key = 'primary'"
-            ).fetchone()
-            next_ver = (int(row["version"]) + 1) if row else 1
-            conn.execute(
-                """
-                INSERT INTO campaign_global_state (state_key, version, updated_at, payload_json)
-                VALUES ('primary', ?, ?, ?)
-                ON CONFLICT(state_key) DO UPDATE SET
-                    version = excluded.version,
-                    updated_at = excluded.updated_at,
-                    payload_json = excluded.payload_json
-                """,
-                (next_ver, now, json.dumps(state, ensure_ascii=False)),
-            )
-
-            for cid, camp in (state.get("campaigns") or {}).items():
-                conn.execute(
-                    """
-                    INSERT INTO campaigns (
-                        id, name, environment_id, mode, status, version,
-                        created_by, created_at, updated_at, payload_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        name = excluded.name,
-                        mode = excluded.mode,
-                        status = excluded.status,
-                        version = campaigns.version + 1,
-                        updated_at = excluded.updated_at,
-                        payload_json = excluded.payload_json
-                    """,
-                    (
-                        cid,
-                        camp.get("name", cid),
-                        camp.get("environment_id", "env-datacenter-01"),
-                        camp.get("mode", "discover_plan"),
-                        camp.get("status", "created"),
-                        1,
-                        camp.get("created_by", DEFAULT_OPERATOR),
-                        camp.get("created_at", now),
-                        camp.get("updated_at", now),
-                        json.dumps(camp, ensure_ascii=False),
-                    ),
-                )
-
-            for aid, asset in (state.get("assets") or {}).items():
-                canonical_key = asset.get("canonical_key") or aid
-                conn.execute(
-                    """
-                    INSERT INTO assets (
-                        id, canonical_key, hostname, asset_type, environment_id,
-                        site_id, lifecycle_state, version, updated_at, payload_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        hostname = excluded.hostname,
-                        asset_type = excluded.asset_type,
-                        lifecycle_state = excluded.lifecycle_state,
-                        version = assets.version + 1,
-                        updated_at = excluded.updated_at,
-                        payload_json = excluded.payload_json
-                    """,
-                    (
-                        aid,
-                        canonical_key,
-                        asset.get("hostname", aid),
-                        asset.get("asset_type", "virtual_machine"),
-                        asset.get("environment_id", "env-datacenter-01"),
-                        asset.get("site_id", "site-dc-a"),
-                        asset.get("lifecycle_state", "discovered"),
-                        now,
-                        json.dumps(asset, ensure_ascii=False),
-                    ),
-                )
 
     def upsert_asset(
         self,
@@ -1018,15 +912,6 @@ class TransactionalDatabase:
                 item["payload"] = json.loads(item.pop("payload_json"))
                 out.append(item)
             return out
-
-    def load_campaign_state(self) -> Optional[Dict[str, Any]]:
-        with self.transaction(write=False) as conn:
-            row = conn.execute(
-                "SELECT payload_json FROM campaign_global_state WHERE state_key = 'primary'"
-            ).fetchone()
-            if not row:
-                return None
-            return json.loads(row["payload_json"])
 
     # ==========================================================================
     # Cloud Live Discovery Snapshots Persistence
@@ -1120,16 +1005,14 @@ class TransactionalDatabase:
     def migrate_legacy_json_files(
         self,
         migrations_json_path: Optional[Path] = None,
-        campaigns_json_path: Optional[Path] = None,
     ) -> Dict[str, Any]:
         """
-        Migrate legacy JSON files (`migrations_state.json`, `datacenter_campaigns.json`)
+        Migrate legacy JSON files (`migrations_state.json`)
         into the transactional database, creating `.bak` backups and detecting any
         incompatible or corrupted records (e.g., unsupported target provider `azure`).
         """
         report: Dict[str, Any] = {
             "migrated_jobs_count": 0,
-            "migrated_campaigns_count": 0,
             "backups_created": [],
             "incompatible_records": [],
         }
@@ -1171,28 +1054,6 @@ class TransactionalDatabase:
                 report["incompatible_records"].append({
                     "file": str(migrations_json_path),
                     "reason": f"Archivo JSON corrupto o ilegible: {exc}",
-                })
-
-        if campaigns_json_path and campaigns_json_path.is_file():
-            backup_path = campaigns_json_path.with_suffix(".json.bak")
-            if not backup_path.exists():
-                shutil.copy2(campaigns_json_path, backup_path)
-                report["backups_created"].append(str(backup_path))
-            try:
-                raw_camp = json.loads(campaigns_json_path.read_text(encoding="utf-8"))
-                if not isinstance(raw_camp, dict) or "campaigns" not in raw_camp or "sites" not in raw_camp:
-                    report["incompatible_records"].append({
-                        "file": str(campaigns_json_path),
-                        "reason": "Estructura de campañas incompatible: faltan claves 'campaigns' o 'sites'.",
-                    })
-                else:
-                    if self.load_campaign_state() is None:
-                        self.save_campaign_state(raw_camp)
-                        report["migrated_campaigns_count"] = len(raw_camp.get("campaigns", {}))
-            except Exception as exc:
-                report["incompatible_records"].append({
-                    "file": str(campaigns_json_path),
-                    "reason": f"Archivo JSON de campañas corrupto: {exc}",
                 })
 
         self.legacy_migration_report = {

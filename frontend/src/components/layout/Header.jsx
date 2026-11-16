@@ -1,18 +1,84 @@
-import React from "react";
+import React, { useState, useRef, useEffect } from "react";
 
 export const TAB_LABELS = {
-  overview: "Resumen del entorno",
-  discovery: "Discovery e inventario",
-  campaigns: "Campañas de datacenter",
-  architecture: "Grafo de arquitectura",
-  migration: "Migraciones y planes",
-  "sources-targets": "Orígenes y destinos",
-  "executions-audit": "Ejecuciones, IaC y auditoría",
+  overview: "Console Home (Inicio)",
+  discovery: "Discovery e inventario (osquery)",
+  architecture: "Grafo de arquitectura CMIR",
+  migration: "Orquestador de migración (Casos 1 y 2)",
+  "sources-targets": "Orígenes, agentes y destinos",
+  "executions-audit": "Auditoría AWS y Terraform",
 };
+
+const QUICK_SERVICES = [
+  {
+    category: "Casos de Migración Activos",
+    items: [
+      {
+        id: "case-1",
+        tab: "migration",
+        useCase: "app_source",
+        title: "Caso 1 · Migración de Aplicación (GitHub)",
+        desc: "Inspección de repositorios y despliegue automatizado en contenedores EC2 / Cloud Run",
+        badge: "Caso 1",
+      },
+      {
+        id: "case-2",
+        tab: "migration",
+        useCase: "vm_image",
+        title: "Caso 2 · Migración de Imagen de SO / VM",
+        desc: "Captura en vivo por agente osquery o imagen VMDK/QCOW2 hacia EC2 / Compute Engine",
+        badge: "Caso 2",
+      },
+      {
+        id: "migration-hub",
+        tab: "migration",
+        title: "AWS Migration Hub · Planes y Etapas",
+        desc: "Gestión del ciclo de vida transaccional, pruebas pre-cutover y generación Terraform HCL",
+        badge: "Hub",
+      },
+    ],
+  },
+  {
+    category: "Descubrimiento, Topología y Gobernanza",
+    items: [
+      {
+        id: "overview-home",
+        tab: "overview",
+        title: "Console Home (Panel Principal)",
+        desc: "Resumen ejecutivo del entorno, widgets de salud, cuotas de AWS Academy y accesos rápidos",
+      },
+      {
+        id: "discovery-osquery",
+        tab: "discovery",
+        title: "Application Discovery Service (osquery)",
+        desc: "Telemetría profunda de hardware, procesos, puertos TCP/UDP y motores de bases de datos",
+      },
+      {
+        id: "arch-graph",
+        tab: "architecture",
+        title: "Grafo Jerárquico CMIR v2.1",
+        desc: "Topología interactiva Nivel 0-5, dependencias transitivas y recursos compartidos",
+      },
+      {
+        id: "sources-agents",
+        tab: "sources-targets",
+        title: "Conectores, Agentes Remotos y Destinos",
+        desc: "Inscripción de agentes multiplataforma (Linux/Windows/macOS) y validación AWS/GCP",
+      },
+      {
+        id: "cloud-audit",
+        tab: "executions-audit",
+        title: "Auditoría de Cuenta AWS y Estados Terraform",
+        desc: "Consulta en vivo de instancias EC2, volúmenes EBS, VPCs y destrucción controlada",
+      },
+    ],
+  },
+];
 
 export default function Header({
   activeTab,
   setActiveTab,
+  onQuickStartUseCase,
   searchQuery,
   setSearchQuery,
   selectedCount,
@@ -23,6 +89,64 @@ export default function Header({
   sidebarCollapsed,
   onToggleSidebarCollapse,
 }) {
+  const [servicesOpen, setServicesOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const servicesRef = useRef(null);
+  const accountRef = useRef(null);
+  const searchRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (servicesRef.current && !servicesRef.current.contains(e.target)) {
+        setServicesOpen(false);
+      }
+      if (accountRef.current && !accountRef.current.contains(e.target)) {
+        setAccountOpen(false);
+      }
+      if (searchRef.current && !searchRef.current.contains(e.target)) {
+        setSearchFocused(false);
+      }
+    };
+    const handleKeyDown = (e) => {
+      if ((e.altKey && e.key.toLowerCase() === "s") || (e.metaKey && e.key.toLowerCase() === "k")) {
+        e.preventDefault();
+        const input = searchRef.current?.querySelector("input");
+        if (input) input.focus();
+      }
+      if (e.key === "Escape") {
+        setServicesOpen(false);
+        setAccountOpen(false);
+        setSearchFocused(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  const handleServiceSelect = (item) => {
+    setServicesOpen(false);
+    setSearchFocused(false);
+    if (item.useCase && onQuickStartUseCase) {
+      onQuickStartUseCase(item.useCase);
+    } else if (setActiveTab) {
+      setActiveTab(item.tab);
+    }
+  };
+
+  const flatServices = QUICK_SERVICES.flatMap((g) => g.items);
+  const filteredServices = searchQuery?.trim()
+    ? flatServices.filter(
+        (s) =>
+          s.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          s.desc.toLowerCase().includes(searchQuery.toLowerCase())
+      )
+    : flatServices;
+
   return (
     <header className="enterprise-header awsui-top-navigation" role="banner">
       <div className="header-left">
@@ -44,7 +168,7 @@ export default function Header({
             type="button"
             className="awsui-top-icon-btn"
             onClick={onToggleSidebarCollapse}
-            title={sidebarCollapsed ? "Expandir menú lateral" : "Contraer menú lateral"}
+            title={sidebarCollapsed ? "Expandir panel de navegación" : "Contraer panel de navegación"}
             aria-label="Alternar panel lateral"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -54,26 +178,87 @@ export default function Header({
           </button>
         )}
 
+        {/* AWS Console Brand Identity */}
         <button
           type="button"
           className="awsui-brand-identity"
           onClick={() => setActiveTab && setActiveTab("overview")}
-          title="Ir al Resumen del entorno de CloudMove Console"
+          title="Ir a Console Home (Página Principal)"
         >
           <span className="awsui-brand-cube" aria-hidden="true">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FF9900" strokeWidth="2.2">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FF9900" strokeWidth="2.2">
               <path d="M12 2L2 7l10 5 10-5-10-5z" />
               <path d="M2 17l10 5 10-5" />
               <path d="M2 12l10 5 10-5" />
             </svg>
           </span>
           <span className="awsui-brand-title">CloudMove</span>
-          <span className="awsui-brand-tag">AWS · GCP Console</span>
+          <span className="awsui-brand-tag">Management Console</span>
         </button>
+
+        {/* AWS Services 3x3 Waffle Menu */}
+        <div className="awsui-services-dropdown-wrap" ref={servicesRef}>
+          <button
+            type="button"
+            className={`awsui-services-trigger ${servicesOpen ? "is-open" : ""}`}
+            onClick={() => setServicesOpen((prev) => !prev)}
+            aria-expanded={servicesOpen}
+            aria-haspopup="true"
+          >
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <rect x="3" y="3" width="4" height="4" rx="1" />
+              <rect x="10" y="3" width="4" height="4" rx="1" />
+              <rect x="17" y="3" width="4" height="4" rx="1" />
+              <rect x="3" y="10" width="4" height="4" rx="1" />
+              <rect x="10" y="10" width="4" height="4" rx="1" />
+              <rect x="17" y="10" width="4" height="4" rx="1" />
+              <rect x="3" y="17" width="4" height="4" rx="1" />
+              <rect x="10" y="17" width="4" height="4" rx="1" />
+              <rect x="17" y="17" width="4" height="4" rx="1" />
+            </svg>
+            <span>Servicios</span>
+            <span style={{ fontSize: 10, opacity: 0.8 }}>▾</span>
+          </button>
+
+          {servicesOpen && (
+            <div className="awsui-services-popover" role="menu" aria-label="Catálogo de servicios de CloudMove">
+              <div className="awsui-services-popover-header">
+                <span>Servicios de CloudMove Console</span>
+                <span className="awsui-services-popover-sub">Casos 1 y 2 · Modelo CMIR v2.1</span>
+              </div>
+              <div className="awsui-services-popover-grid">
+                {QUICK_SERVICES.map((group) => (
+                  <div key={group.category} className="awsui-services-group">
+                    <div className="awsui-services-group-title">{group.category}</div>
+                    <div className="awsui-services-list">
+                      {group.items.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className="awsui-service-item"
+                          onClick={() => handleServiceSelect(item)}
+                        >
+                          <div className="awsui-service-item-top">
+                            <span className="awsui-service-item-title">{item.title}</span>
+                            {item.badge && (
+                              <span className="awsui-service-item-badge">{item.badge}</span>
+                            )}
+                          </div>
+                          <span className="awsui-service-item-desc">{item.desc}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
-      <div className="awsui-top-center">
-        <div className="header-search-box">
+      {/* Global Search Bar */}
+      <div className="awsui-top-center" ref={searchRef}>
+        <div className="header-search-box" style={{ position: "relative" }}>
           <svg
             width="15"
             height="15"
@@ -91,28 +276,124 @@ export default function Header({
             type="search"
             name="architecture-search"
             className="header-search-input"
-            aria-label="Buscar recursos, IPs, servicios o planes"
-            placeholder="Buscar servicios, recursos o planes..."
+            aria-label="Buscar servicios, recursos, IPs o planes"
+            placeholder="Buscar servicios, casos de uso, recursos o IPs... [Alt+S]"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onFocus={() => setSearchFocused(true)}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setSearchFocused(true);
+            }}
           />
+          {searchFocused && (
+            <div className="awsui-search-suggestions" role="listbox">
+              <div className="awsui-search-suggestions-header">
+                Navegación rápida de servicios ({filteredServices.length})
+              </div>
+              {filteredServices.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className="awsui-search-suggestion-item"
+                  onClick={() => handleServiceSelect(s)}
+                >
+                  <div>
+                    <strong>{s.title}</strong>
+                    <div style={{ fontSize: 12, color: "#545b64" }}>{s.desc}</div>
+                  </div>
+                  <span style={{ fontSize: 11, color: "#0972d3", fontWeight: 700 }}>Abrir →</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
+      {/* Right Utilities: Cloud Audit, Region Selector, Account Menu & Primary CTA */}
       <div className="header-right">
+        <button
+          type="button"
+          className={`awsui-top-util-btn ${activeTab === "executions-audit" ? "is-active" : ""}`}
+          onClick={() => setActiveTab && setActiveTab("executions-audit")}
+          title="Auditoría de Cuenta AWS y Ejecuciones Terraform"
+        >
+          <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#FF9900" }}>&gt;_</span>
+          <span className="awsui-util-label">Auditoría AWS</span>
+        </button>
+
         {setTargetProvider && (
           <div className="awsui-top-util-select">
             <select
-              aria-label="Proveedor cloud destino activo"
+              aria-label="Región y proveedor cloud destino activo"
               value={targetProvider}
               onChange={(e) => setTargetProvider(e.target.value)}
               className="awsui-squid-select"
             >
-              <option value="aws">AWS · us-east-1</option>
-              <option value="gcp">GCP · us-central1</option>
+              <option value="aws">EE. UU. Este (N. Virginia) · us-east-1</option>
+              <option value="gcp">GCP Central (Iowa) · us-central1</option>
             </select>
           </div>
         )}
+
+        {/* Account Menu */}
+        <div className="awsui-account-dropdown-wrap" ref={accountRef}>
+          <button
+            type="button"
+            className="awsui-account-trigger"
+            onClick={() => setAccountOpen((prev) => !prev)}
+            title="Detalles de cuenta y sesión AWS Academy"
+          >
+            <span className="awsui-account-dot" aria-hidden="true" />
+            <span className="awsui-account-name">voclabs/lacastrilp</span>
+            <span style={{ fontSize: 10, opacity: 0.75 }}>▾</span>
+          </button>
+
+          {accountOpen && (
+            <div className="awsui-account-popover" role="menu">
+              <div className="awsui-account-popover-header">
+                <div style={{ fontSize: 12, color: "#545b64" }}>Cuenta AWS Academy Learner Lab</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#000716", fontFamily: "monospace" }}>
+                  ID: 5297-0013-9352
+                </div>
+                <div style={{ fontSize: 12, color: "#037f0c", fontWeight: 600, marginTop: 2 }}>
+                  ● Sesión STS activa · us-east-1
+                </div>
+              </div>
+              <div className="awsui-account-popover-body">
+                <button
+                  type="button"
+                  className="awsui-account-menu-item"
+                  onClick={() => {
+                    setAccountOpen(false);
+                    if (setActiveTab) setActiveTab("overview");
+                  }}
+                >
+                  Ir a Console Home
+                </button>
+                <button
+                  type="button"
+                  className="awsui-account-menu-item"
+                  onClick={() => {
+                    setAccountOpen(false);
+                    if (setActiveTab) setActiveTab("executions-audit");
+                  }}
+                >
+                  Gestionar credenciales AWS y recursos activos
+                </button>
+                <button
+                  type="button"
+                  className="awsui-account-menu-item"
+                  onClick={() => {
+                    setAccountOpen(false);
+                    if (setActiveTab) setActiveTab("sources-targets");
+                  }}
+                >
+                  Configurar agentes y conectores
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         {selectedCount > 0 ? (
           <button

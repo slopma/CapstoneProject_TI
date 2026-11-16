@@ -1274,8 +1274,6 @@ class CloudDeploymentRunner:
                         "Caso 1 · Aplicación (GitHub / Código)"
                         if uc == "app_source"
                         else "Caso 2 · Imagen de SO / Máquina Virtual"
-                        if uc == "vm_image"
-                        else "Caso 3 · Campaña Datacenter"
                     )
                     src_cfg = job_obj.get("source_config") or {}
                     src_env = job_obj.get("source_environment") or {}

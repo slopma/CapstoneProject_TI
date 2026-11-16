@@ -4,7 +4,9 @@ import Header, { TAB_LABELS } from "./Header";
 
 export default function AppShell({
   activeTab,
+  activeUseCase = "app_source",
   setActiveTab,
+  onQuickStartUseCase,
   architectureName,
   searchQuery,
   setSearchQuery,
@@ -29,7 +31,12 @@ export default function AppShell({
   }, [mobileNavOpen]);
 
   const { activeMigrationJob, jobsCount } = workContext;
-  const currentServiceLabel = TAB_LABELS[activeTab] || "Consola operativa";
+  const currentServiceLabel =
+    activeTab === "migration"
+      ? activeUseCase === "vm_image"
+        ? "Caso 2 · Migración de Imagen de SO / VM"
+        : "Caso 1 · Migración de Aplicación (GitHub)"
+      : TAB_LABELS[activeTab] || "Console Home";
 
   return (
     <div
@@ -44,6 +51,7 @@ export default function AppShell({
       <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}
+        onQuickStartUseCase={onQuickStartUseCase}
         architectureName={architectureName}
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
@@ -59,7 +67,9 @@ export default function AppShell({
       <div className="awsui-app-body">
         <Sidebar
           activeTab={activeTab}
+          activeUseCase={activeUseCase}
           setActiveTab={setActiveTab}
+          onQuickStartUseCase={onQuickStartUseCase}
           mobileOpen={mobileNavOpen}
           onCloseMobile={() => setMobileNavOpen(false)}
           collapsed={sidebarCollapsed}
@@ -83,11 +93,25 @@ export default function AppShell({
                 className="awsui-crumb-link"
                 onClick={() => setActiveTab("overview")}
               >
-                CloudMove Console
+                AWS CloudMove Console
               </button>
               <span className="awsui-crumb-sep" aria-hidden="true">
-                /
+                ›
               </span>
+              {activeTab === "migration" && (
+                <>
+                  <button
+                    type="button"
+                    className="awsui-crumb-link"
+                    onClick={() => setActiveTab("migration")}
+                  >
+                    AWS Migration Hub
+                  </button>
+                  <span className="awsui-crumb-sep" aria-hidden="true">
+                    ›
+                  </span>
+                </>
+              )}
               <span className="awsui-crumb-current">{currentServiceLabel}</span>
             </nav>
 

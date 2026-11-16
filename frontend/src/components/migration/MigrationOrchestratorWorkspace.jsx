@@ -54,21 +54,15 @@ function deriveOperationalStatusBadge(job) {
 const USE_CASE_CARDS = [
   {
     id: "app_source",
-    title: "Aplicación",
-    subtitle: "Código desde GitHub o una carpeta local → contenedores en la nube.",
-    badge: "Caso 1",
+    title: "Caso 1 · Aplicación (GitHub / Código Fuente)",
+    subtitle: "Inspecciona repositorios GitHub o carpetas locales → contenedores gestionados y bases de datos en AWS o GCP.",
+    badge: "Caso 1 · App",
   },
   {
     id: "vm_image",
-    title: "Imagen de SO / VM",
-    subtitle: "Disco virtual o el equipo actual → máquina virtual en la nube.",
-    badge: "Caso 2",
-  },
-  {
-    id: "datacenter_campaign",
-    title: "Datacenter",
-    subtitle: "Muchos servidores a la vez, migrados por oleadas.",
-    badge: "Caso 3",
+    title: "Caso 2 · Imagen de SO / Máquina Virtual",
+    subtitle: "Captura el servidor mediante agente osquery o disco virtual (VMDK/QCOW2/RAW) → instancia EC2 o Compute Engine.",
+    badge: "Caso 2 · VM / SO",
   },
 ];
 
@@ -766,7 +760,9 @@ export default function MigrationOrchestratorWorkspace({
         const res = await apiFetch("/api/v1/migration/jobs");
         if (!res.ok) return;
         const data = await res.json();
-        const list = data.jobs || [];
+        const list = (data.jobs || []).filter(
+          (j) => j.use_case === "app_source" || j.use_case === "vm_image"
+        );
         setJobs(list);
         const targetId = selectId || initialJobId;
         if (targetId) {
@@ -797,6 +793,17 @@ export default function MigrationOrchestratorWorkspace({
     fetchJobs();
     fetchPersistence();
   }, [fetchJobs, fetchPersistence]);
+
+  useEffect(() => {
+    if (initialUseCase === "app_source" || initialUseCase === "vm_image") {
+      setNewUseCase(initialUseCase);
+    }
+    if (initialJobId) {
+      setMainTab("inspector");
+    } else if (initialUseCase) {
+      setMainTab("wizard");
+    }
+  }, [initialUseCase, initialJobId]);
 
   // Validate GitHub repository access and list branches/tags
   const handleValidateGithub = async (overrideUrl = null, overrideToken = null) => {
@@ -1114,10 +1121,8 @@ export default function MigrationOrchestratorWorkspace({
         } else if (newUseCase === "vm_image" && imagePath.trim()) {
           const imgName = imagePath.trim().split("/").pop() || "disco";
           planName = `Migración Imagen ${imgName} → ${newProvider.toUpperCase()}`;
-        } else if (newUseCase === "vm_image") {
-          planName = `Importación Imagen VM → ${newProvider.toUpperCase()}`;
         } else {
-          planName = `Campaña Datacenter → ${newProvider.toUpperCase()}`;
+          planName = `Importación Imagen VM → ${newProvider.toUpperCase()}`;
         }
       }
 
@@ -1502,9 +1507,7 @@ export default function MigrationOrchestratorWorkspace({
                 placeholder={
                   newUseCase === "app_source"
                     ? "Ej. Migración de Aplicación → AWS"
-                    : newUseCase === "vm_image"
-                    ? "Ej. Importación Debian 12 ERP VMDK → AWS"
-                    : "Ej. Oleada Datacenter Principal → GCP"
+                    : "Ej. Importación Debian 12 ERP VMDK → AWS"
                 }
                 value={newName}
                 onChange={(e) => {
@@ -2281,16 +2284,6 @@ export default function MigrationOrchestratorWorkspace({
               </button>
             )}
 
-            {newUseCase === "datacenter_campaign" && onNavigateTab && (
-              <button
-                type="button"
-                className="cm-btn"
-                onClick={() => onNavigateTab("campaigns")}
-              >
-                Abrir Consola de Campañas de Datacenter y Selección de Cargas →
-              </button>
-            )}
-
             <button
               type="button"
               className="cm-btn primary"
@@ -2552,9 +2545,7 @@ export default function MigrationOrchestratorWorkspace({
                   const caseLabel =
                     job.use_case === "app_source"
                       ? "Caso 1 · Aplicación"
-                      : job.use_case === "vm_image"
-                      ? "Caso 2 · Imagen SO/VM"
-                      : "Caso 3 · Datacenter";
+                      : "Caso 2 · Imagen SO/VM";
                   return (
                     <tr key={job.migration_id} style={isSelected ? { backgroundColor: "#F2F8FD" } : undefined}>
                       <td>
@@ -3660,7 +3651,7 @@ export default function MigrationOrchestratorWorkspace({
               </div>
             )}
 
-            {/* Etapas Ordenadas del Plan de Migración (12 etapas Caso 1 / 13 etapas Caso 2 / 10 etapas Caso 3) */}
+            {/* Etapas Ordenadas del Plan de Migración (12 etapas Caso 1 / 13 etapas Caso 2) */}
             {inspectorTab === "execution" && (
             <div className="cm-card">
               <div className="cm-card-title">
@@ -3836,7 +3827,6 @@ export default function MigrationOrchestratorWorkspace({
                     <div className="cm-hint" style={{ marginTop: 4 }}>
                       {currentJob.use_case === "app_source" && "Caso 1: Aplicación desde Código Fuente / GitHub — Despliegue en Contenedores Gestionados y Bases de Datos"}
                       {currentJob.use_case === "vm_image" && "Caso 2: Sistema Operativo / Máquina Virtual — Ingesta de Disco, Importación de Hipervisor y Restauración In-Guest"}
-                      {currentJob.use_case === "datacenter_campaign" && "Caso 3: Campaña de Datacenter — Migración por Oleadas (Waves), CDC de Bases de Datos y Replicación Continua"}
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
@@ -4380,68 +4370,6 @@ vmplayer ${vmSlug}.vmx`}
                     </div>
                   );
                 })()}
-
-                {/* CASO 3: CAMPAÑA DE DATACENTER */}
-                {currentJob.use_case === "datacenter_campaign" && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                    <div className="cm-step-card">
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
-                        Paso 1: Descargar el Paquete de Campaña y Matriz de Oleadas (Waves)
-                      </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
-                        Descarga el archivo ZIP con los módulos de Terraform de la Landing Zone y el grafo de dependencias:
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
-{`unzip cloudmove-datacenter_campaign-${currentJob.target_provider}-${currentJob.migration_id}.zip -d ./dc_campaign
-cd ./dc_campaign`}
-                      </pre>
-                    </div>
-
-                    <div className="cm-step-card">
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
-                        Paso 2: Despliegue de la Landing Zone y Red Compartida (Wave 0)
-                      </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
-                        Aprovisiona primero la VPC central, subredes, Cloud NAT y conectividad híbrida VPN/Interconnect:
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
-{`cd landing_zone
-terraform init
-terraform apply -auto-approve`}
-                      </pre>
-                    </div>
-
-                    <div className="cm-step-card">
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
-                        Paso 3: Migración Continua de Bases de Datos con CDC (Wave 1)
-                      </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
-                        Aprovisiona las bases de datos gestionadas ({currentJob.target_provider === "aws" ? "Amazon RDS / Aurora" : "Google Cloud SQL"}) y configura replicación continua de datos con Change Data Capture (CDC):
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
-{currentJob.target_provider === "aws"
-  ? "aws dms start-replication-task --replication-task-arn $DMS_TASK_ARN --start-replication-task-type start-replication"
-  : "gcloud database-migration migration-jobs start $GCP_MIGRATION_JOB_ID"}
-                      </pre>
-                    </div>
-
-                    <div className="cm-step-card">
-                      <div style={{ fontWeight: 700, fontSize: 14, color: "var(--color-text-primary)", marginBottom: 4 }}>
-                        Paso 4: Replicación de Servidores y Ventana de Corte (Cutover)
-                      </div>
-                      <p style={{ margin: "0 0 6px 0", fontSize: 14, color: "#475569" }}>
-                        Inicia la replicación continua a nivel de bloques ({currentJob.target_provider === "aws" ? "AWS MGN" : "GCP Migrate to VMs"}), sincroniza deltas y ejecuta la conmutación de tráfico en la ventana programada:
-                      </p>
-                      <pre style={{ margin: 0, padding: 8, backgroundColor: "#1e293b", color: "#f8fafc", borderRadius: 4, fontSize: 13.5 }}>
-{currentJob.target_provider === "aws"
-  ? `# Ejecutar cutover en AWS Application Migration Service:
-aws mgn finalize-cutover --source-server-id $MGN_SOURCE_ID`
-  : `# Ejecutar cutover en Google Cloud Migrate to VMs:
-gcloud migration vms cutover $GCP_MIGRATION_GROUP_ID`}
-                      </pre>
-                    </div>
-                  </div>
-                )}
                   </>
                 )}
               </div>

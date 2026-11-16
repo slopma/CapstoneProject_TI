@@ -76,7 +76,7 @@ class SelectionRequest(BaseModel):
 
 class CreateMigrationJobRequest(BaseModel):
     name: Optional[str] = Field(None, description="Human-readable name for the migration")
-    use_case: str = Field(..., description="app_source | vm_image | datacenter_campaign")
+    use_case: str = Field(..., description="app_source | vm_image")
     target_provider: str = Field("aws", description="aws | gcp")
     target_config: Optional[Dict[str, Any]] = Field(default_factory=dict)
     source_config: Optional[Dict[str, Any]] = Field(default_factory=dict)
@@ -323,7 +323,7 @@ def generate_migration_iac(request: SelectionRequest):
 
 @router.get("/jobs")
 def list_migration_jobs(
-    use_case: Optional[str] = Query(None, description="app_source | vm_image | datacenter_campaign"),
+    use_case: Optional[str] = Query(None, description="app_source | vm_image"),
     target_provider: Optional[str] = Query(None, description="aws | gcp"),
 ):
     """List orchestrated migration jobs across all 3 use cases."""

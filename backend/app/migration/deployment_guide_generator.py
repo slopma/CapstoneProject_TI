@@ -1,10 +1,9 @@
 """
 CloudMove Deployment Guide Generator.
 Generates comprehensive, step-by-step production runbooks (in Markdown)
-for deploying collected workloads to AWS and GCP across all three use cases:
+for deploying collected workloads to AWS and GCP across the two active use cases:
 - Case 1: GitHub / Application Source Code (app_source)
 - Case 2: Live Operating System & VM Image (vm_image)
-- Case 3: Datacenter Migration Campaign (datacenter_campaign)
 """
 
 from __future__ import annotations
@@ -59,18 +58,7 @@ def generate_deployment_guide(
     region = cfg.get("region") or cfg.get("aws_region") or cfg.get("gcp_region") or default_region
     gcp_project = cfg.get("gcp_project_id") or cfg.get("project_id") or "cloudmove-production"
 
-    if uc_clean == "app_source":
-        return _build_case_1_guide(
-            provider_clean=provider_clean,
-            job_name=safe_job_name,
-            slug_name=slug_name,
-            migration_id=migration_id,
-            region=region,
-            gcp_project=gcp_project,
-            src=src,
-            files=artifacts_files,
-        )
-    elif uc_clean == "vm_image":
+    if uc_clean == "vm_image":
         return _build_case_2_guide(
             provider_clean=provider_clean,
             job_name=job_name,
@@ -81,17 +69,16 @@ def generate_deployment_guide(
             src=src,
             files=artifacts_files,
         )
-    else:
-        return _build_case_3_guide(
-            provider_clean=provider_clean,
-            job_name=job_name,
-            slug_name=slug_name,
-            migration_id=migration_id,
-            region=region,
-            gcp_project=gcp_project,
-            src=src,
-            files=artifacts_files,
-        )
+    return _build_case_1_guide(
+        provider_clean=provider_clean,
+        job_name=safe_job_name,
+        slug_name=slug_name,
+        migration_id=migration_id,
+        region=region,
+        gcp_project=gcp_project,
+        src=src,
+        files=artifacts_files,
+    )
 
 
 def _build_case_1_guide(
@@ -835,97 +822,4 @@ chmod +x launch_virtualbox.sh
 chmod +x launch_vmware.sh
 ./launch_vmware.sh
 ```
-"""
-
-
-def _build_case_3_guide(
-    provider_clean: str,
-    job_name: str,
-    slug_name: str,
-    migration_id: str,
-    region: str,
-    gcp_project: str,
-    src: Dict[str, Any],
-    files: Dict[str, str],
-) -> str:
-    servers_count = len(src.get("servers", [])) or 12
-    waves_count = 4
-
-    hybrid_net = "AWS Site-to-Site VPN / Direct Connect" if provider_clean == "aws" else "Google Cloud Interconnect / Cloud VPN"
-    db_service = "Amazon RDS / Aurora Multi-AZ" if provider_clean == "aws" else "Google Cloud SQL"
-    lb_service = "Application Load Balancer" if provider_clean == "aws" else "Google Cloud Load Balancing"
-
-    if provider_clean == "aws":
-        dms_block = f"""```bash
-# Iniciar tarea de replicacion con AWS Database Migration Service (DMS)
-aws dms start-replication-task --replication-task-arn $DMS_TASK_ARN --start-replication-task-type start-replication
-```"""
-        mgn_block = f"""```bash
-# Instalar agente de AWS Application Migration Service (AWS MGN) en los servidores origen
-sudo ./aws-replication-installer-init.py --region {region}
-```"""
-    else:
-        dms_block = """```bash
-# Iniciar replicacion continua con Database Migration Service de GCP
-gcloud database-migration migration-jobs start $GCP_MIGRATION_JOB_ID
-```"""
-        mgn_block = """```bash
-# Configurar Google Cloud Migrate to Virtual Machines
-gcloud migration vms connectors create ...
-```"""
-
-    return f"""# Guia Paso a Paso: Ejecucion de Campana de Migracion de Datacenter ({provider_clean.upper()})
-**Campana:** {job_name} | **ID de Migracion:** {migration_id}
-**Total de Servidores:** {servers_count} servidores inventariados | **Fases:** {waves_count} Oleadas (Waves)
-**Nube Destino:** {provider_clean.upper()} (`{region}`)
-**Estrategia:** Replicacion Continua a Nivel de Bloques con Replicacion de Datos CDC y Cero Tiempo de Inactividad
-
----
-
-### Paso 1: Descargar el Paquete de Campana de Datacenter
-Descarga el archivo ZIP generado por CloudMove:
-```bash
-CLOUDMOVE_API_URL="${{CLOUDMOVE_API_URL:-{DEFAULT_API_URL}}}"
-curl -O "$CLOUDMOVE_API_URL/api/v1/migration/jobs/{migration_id}/bundle.zip"
-unzip bundle.zip -d ./cloudmove_datacenter
-cd ./cloudmove_datacenter
-```
-Archivos incluidos:
-- `main.tf`, `variables.tf`: Landing Zone completa (VPC central, Subredes de BD/App/Web, Transit Gateway, Cloud NAT).
-- `migration_waves.json`: Matriz de dependencias y asignacion de servidores por oleada.
-- `deploy_waves_{provider_clean}.sh`: Script para orquestar la migracion secuencial por fases.
-- `DEPLOYMENT_INSTRUCTIONS.md`: Este manual de operaciones.
-
-### Paso 2: Despliegue de la Landing Zone y Red Compartida (Wave 0)
-Antes de migrar servidores individuales, despliega los cimientos de red y seguridad:
-```bash
-cd landing_zone
-terraform init
-terraform apply -auto-approve
-```
-Esto aprovisiona:
-1. VPC central con enrutamiento entre subredes publicas, de aplicacion y de bases de datos.
-2. Conexion hibrida hacia el datacenter local ({hybrid_net}).
-3. Roles de servicio IAM, politicas de firewall y perimetros de seguridad.
-
-### Paso 3: Migracion Continua de Bases de Datos (Wave 1 - Data Tier)
-1. Aprovisionar instancias administradas de base de datos ({db_service}).
-2. Configurar replicacion continua de datos con Change Data Capture (CDC):
-{dms_block}
-3. Mantener la replicacion activa mientras se migran las capas de aplicacion.
-
-### Paso 4: Migracion de Servidores de Aplicacion por Bloques (Wave 2 - App Tier)
-Instalar los agentes de replicacion continua a nivel de bloques en los servidores fisicos o hipervisores VMware/Proxmox:
-{mgn_block}
-Los discos se sincronizan de forma continua y transparente en segundo plano.
-
-### Paso 5: Despliegue de Balanceadores y Capa Web (Wave 3 - Web Tier)
-Aprovisionar balanceadores de carga ({lb_service}) apuntando a los servidores replicados en la Wave 2.
-
-### Paso 6: Ventana de Conmutacion Final (Cutover) y Rollback
-1. Activar modo solo-lectura temporal en base de datos origen.
-2. Esperar a que el retraso (lag) de replicacion en CDC llegue a 0 segundos.
-3. Promover la base de datos en la nube a Primaria.
-4. Conmutar registros DNS con TTL bajo (60 segundos).
-5. Mantener canal de replicacion inversa activo durante la ventana de observabilidad (48 horas).
 """

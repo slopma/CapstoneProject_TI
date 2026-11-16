@@ -1,10 +1,9 @@
 """
 Unified CloudMove Migration Orchestrator (`MigrationOrchestrator`) — Section 5.1, 6, 7, 8, 9.
 
-Manages the full lifecycle of migrations across the three integrated use cases:
+Manages the full lifecycle of migrations across the two integrated use cases:
 1. `app_source` — Guided migration from an application or its source code/manifests/processes.
 2. `vm_image` — Complete OS & multi-disk image migration to a cloud virtual machine.
-3. `datacenter_campaign` — Full datacenter discovery, workload subgraph selection & migration.
 
 Enforces:
 - The explicit state machine:
@@ -36,7 +35,6 @@ from app.cmir.models import CMIR
 from app.config import PROJECT_ROOT
 from app.dependencies.resolver import resolve_dependencies
 from app.dependencies.validator import validate_migration_subgraph
-from app.discovery.campaigns import campaign_store
 from app.discovery.connectors import SecretRedactor
 from app.graph.builder import build_graph
 from app.migration.app_migrator import (
@@ -64,7 +62,7 @@ from app.persistence.transactional_db import (
 
 
 SUPPORTED_TARGET_PROVIDERS = {"aws", "gcp"}
-SUPPORTED_USE_CASES = {"app_source", "vm_image", "datacenter_campaign"}
+SUPPORTED_USE_CASES = {"app_source", "vm_image"}
 
 MIGRATIONS_STORE_PATH = PROJECT_ROOT / "backend" / "data" / "migrations_state.json"
 
@@ -165,40 +163,6 @@ def _get_adapter(provider: str):
         f"Proveedor destino '{provider}' fuera del alcance funcional. "
         "Proveedores admitidos exclusivamente: 'aws' y 'gcp'."
     )
-
-
-def _build_datacenter_migration_stages(target_provider: str, selected_count: int) -> List[Dict[str, Any]]:
-    p_upper = target_provider.upper()
-    specs = [
-        ("uc3-stage-01", "1. Validación de alcance autorizado y conectividad pre-flight", "Comprobar rangos CIDR, conectores de hipervisor, canales SSH/WinRM y límites de concurrencia."),
-        ("uc3-stage-02", "2. Ejecución de campaña de descubrimiento multi-fuente y reconciliación", "Descubrir servidores físicos, hipervisores, VMs, SO, procesos, servicios, bases de datos y almacenamiento con IDs canónicos estables."),
-        ("uc3-stage-03", "3. Construcción de jerarquía CMIR v2.1 y clasificación de evidencias", "Consolidar grafo DATACENTER -> HOST -> HYPERVISOR -> VM -> OS -> PROCESOS -> APLICACIONES -> DEPENDENCIAS separando observado vs inferido."),
-        ("uc3-stage-04", f"4. Selección de subgrafo de carga ({selected_count} activos) y protección de recursos compartidos", "Resolver dependencias directas/transitivas y bloquear la migración automática de bases de datos o volúmenes compartidos no validados."),
-        ("uc3-stage-05", f"5. Generación y validación de plan de migración por oleadas e IaC ({p_upper})", f"Generar módulos Terraform (`provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`) validados con `terraform fmt` para {p_upper}."),
-        ("uc3-stage-06", f"6. Aprobación del plan de oleada y prerrequisitos de cuenta/proyecto {p_upper}", "Confirmar política de dependencias compartidas, cuotas de VPC/Cómputo y ventana de mantenimiento."),
-        ("uc3-stage-07", f"7. Aprovisionamiento de fundación de red, seguridad y almacenamiento en {p_upper}", "Crear VPC, subredes privadas, reglas de firewall/Security Groups, volúmenes y servicios de datos en destino."),
-        ("uc3-stage-08", f"8. Replicación / despliegue de cargas seleccionadas en entorno aislado de {p_upper}", "Ejecutar traslado de VMs/aplicaciones seleccionadas preservando intactos los sistemas no seleccionados."),
-        ("uc3-stage-09", "9. Pruebas integrales de humo, conectividad y latencia híbrida", "Validar servicios migrados y conectividad hacia recursos compartidos retenidos."),
-        ("uc3-stage-10", "10. Cutover controlado por oleada y validación final en destino", "Conmutar tráfico de los activos seleccionados manteniendo el servidor de origen intacto para punto de retorno seguro."),
-    ]
-    return [
-        {
-            "stage_id": sid,
-            "order": idx + 1,
-            "title": title,
-            "description": desc,
-            "status": "PENDING",
-            "started_at": None,
-            "completed_at": None,
-            "attempts": 0,
-            "max_retries": 3,
-            "recovery_point": f"checkpoint-{sid}",
-            "logs": [],
-            "evidence": [],
-            "error": None,
-        }
-        for idx, (sid, title, desc) in enumerate(specs)
-    ]
 
 
 class MigrationOrchestrator:
@@ -491,38 +455,6 @@ class MigrationOrchestrator:
                 job["compatibility_assessment"] = compat
                 job["blockers"] = compat["blockers"]
                 job["warnings"].extend(compat["warnings"])
-                job["ordered_stages"] = stages
-
-            elif uc == "datacenter_campaign":
-                campaigns = campaign_store.list_campaigns()
-                camp_id = src_cfg.get("campaign_id") or campaigns[0]["id"]
-                validated_shared = src_cfg.get("validated_shared_resources") or []
-                plan_bundle = campaign_store.plan_campaign_workload_migration(
-                    camp_id,
-                    selected_resources=src_cfg.get("selected_resources"),
-                    target_provider=provider,
-                    validated_shared_resources=validated_shared,
-                )
-                stages = _build_datacenter_migration_stages(provider, len(plan_bundle["selected_resources"]))
-                now = _utc_now()
-                for s in stages[:4]:
-                    s["status"] = "COMPLETED"
-                    s["started_at"] = now
-                    s["completed_at"] = now
-                    s["attempts"] = 1
-                    s["evidence"].append(f"Campaña '{camp_id}' inventariada y subgrafo evaluado.")
-
-                job["source_environment"] = {
-                    "campaign_id": camp_id,
-                    "selected_resources": plan_bundle["selected_resources"],
-                }
-                job["cmir"] = plan_bundle["subgraph_cmir"]
-                job["selected_resources"] = plan_bundle["selected_resources"]
-                job["validated_shared_resources"] = validated_shared
-                job["dependency_analysis"] = plan_bundle["dependency_analysis"]
-                job["compatibility_assessment"] = plan_bundle["validation"]
-                job["blockers"] = plan_bundle["validation"].get("errors", [])
-                job["warnings"].extend(plan_bundle["validation"].get("warnings", []))
                 job["ordered_stages"] = stages
 
             if job["blockers"]:

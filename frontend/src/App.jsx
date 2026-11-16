@@ -6,7 +6,6 @@ import ArchitectureCanvas from "./components/architecture/ArchitectureCanvas";
 import ResourceInspector from "./components/inspector/ResourceInspector";
 import MigrationPreviewModal from "./components/migration/MigrationPreviewModal";
 import DiscoveryWorkspace from "./components/discovery/DiscoveryWorkspace";
-import DataCenterCampaignPanel from "./components/discovery/DataCenterCampaignPanel";
 import MigrationOrchestratorWorkspace from "./components/migration/MigrationOrchestratorWorkspace";
 import EnvironmentOverviewWorkspace from "./components/overview/EnvironmentOverviewWorkspace";
 import SourcesAndTargetsWorkspace from "./components/sources/SourcesAndTargetsWorkspace";
@@ -15,7 +14,7 @@ import { getDomainByType } from "./components/architecture/TechnicalIcons";
 import { apiFetch, getApiBase } from "./utils/apiClient";
 
 const OFFLINE_ENTERPRISE_NODES = [
-  { id: "dc-root", name: "Datacenter On-Premise Principal", type: "datacenter", category: "container", level: 0, parent: null },
+  { id: "dc-root", name: "Entorno On-Premise Principal", type: "datacenter", category: "container", level: 0, parent: null },
   { id: "rack-a1", name: "Rack A1 - Infraestructura Física", type: "rack", category: "container", level: 1, parent: "dc-root" },
   { id: "vlan-prod", name: "Red VLAN Producción (192.168.10.0/24)", type: "vlan", category: "container", level: 2, parent: "rack-a1" },
   { id: "esxi-cluster", name: "Cluster Virtualización VMware ESXi", type: "cluster", category: "container", level: 3, parent: "vlan-prod" },
@@ -67,7 +66,6 @@ const OFFLINE_ENTERPRISE_EDGES = [
 const VALID_TABS = new Set([
   "overview",
   "discovery",
-  "campaigns",
   "architecture",
   "migration",
   "sources-targets",
@@ -102,19 +100,38 @@ class ViewErrorBoundary extends React.Component {
   }
 }
 
-function getInitialTabFromUrl() {
+function getInitialRouteFromUrl() {
   try {
     const params = new URLSearchParams(window.location.search);
-    const tab = params.get("tab");
-    if (tab && VALID_TABS.has(tab)) return tab;
+    const rawTab = params.get("tab");
+    const rawUseCase = params.get("use_case");
+    if (rawTab === "case1") {
+      return { tab: "migration", useCase: "app_source" };
+    }
+    if (rawTab === "case2") {
+      return { tab: "migration", useCase: "vm_image" };
+    }
+    if (rawTab === "home") {
+      return { tab: "overview", useCase: "app_source" };
+    }
+    if (rawTab && VALID_TABS.has(rawTab)) {
+      return {
+        tab: rawTab,
+        useCase: rawUseCase === "vm_image" ? "vm_image" : "app_source",
+      };
+    }
   } catch {
     // Ignore URL parse error
   }
-  return "architecture";
+  return { tab: "overview", useCase: "app_source" };
 }
 
 function App() {
-  const [activeTab, setActiveTabState] = useState(getInitialTabFromUrl);
+  const initialRoute = useMemo(() => getInitialRouteFromUrl(), []);
+  const [activeTab, setActiveTabState] = useState(initialRoute.tab);
+  const [orchestratorUseCase, setOrchestratorUseCase] = useState(initialRoute.useCase);
+  const [orchestratorJobId, setOrchestratorJobId] = useState(null);
+
   const [archViewMode, setArchViewMode] = useState("target");
   const [allNodes, setAllNodes] = useState([]);
   const [allEdges, setAllEdges] = useState([]);
@@ -141,29 +158,41 @@ function App() {
 
   // Persistent Work Context Across Tabs
   const [activeHost, setActiveHost] = useState("");
-  const [activeCampaign, setActiveCampaign] = useState(null);
   const [activeMigrationJob, setActiveMigrationJob] = useState(null);
-  const [cachedCampaigns, setCachedCampaigns] = useState([]);
   const [cachedJobs, setCachedJobs] = useState([]);
   const [persistenceEngine, setPersistenceEngine] = useState("SQLITE (WAL)");
   const [jobsCount, setJobsCount] = useState(0);
-  const [orchestratorUseCase, setOrchestratorUseCase] = useState("app_source");
-  const [orchestratorJobId, setOrchestratorJobId] = useState(null);
 
   // Status States
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [message, setMessage] = useState("");
 
-  const setActiveTab = useCallback((nextTab) => {
-    setActiveTabState(nextTab);
+  const setActiveTab = useCallback((nextTab, useCaseOverride = null) => {
+    const validNext = VALID_TABS.has(nextTab) ? nextTab : "overview";
+    setActiveTabState(validNext);
     try {
       const url = new URL(window.location.href);
-      url.searchParams.set("tab", nextTab);
-      window.history.replaceState({}, "", url.toString());
+      url.searchParams.set("tab", validNext);
+      if (validNext === "migration" && useCaseOverride) {
+        url.searchParams.set("use_case", useCaseOverride);
+      } else if (validNext !== "migration") {
+        url.searchParams.delete("use_case");
+      }
+      window.history.pushState({}, "", url.toString());
     } catch {
       // Ignore history error
     }
+  }, []);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const route = getInitialRouteFromUrl();
+      setActiveTabState(route.tab);
+      setOrchestratorUseCase(route.useCase);
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
   }, []);
 
   const fetchArchitecture = useCallback(async (mode = "target") => {
@@ -191,7 +220,7 @@ function App() {
     } catch {
       setAllNodes(OFFLINE_ENTERPRISE_NODES);
       setAllEdges(OFFLINE_ENTERPRISE_EDGES);
-      setArchitectureMeta({ name: "onpremise-datacenter-enterprise", provider: "on-premise" });
+      setArchitectureMeta({ name: "onpremise-enterprise", provider: "on-premise" });
       const initialExpanded = OFFLINE_ENTERPRISE_NODES.filter((n) => (n.level ?? 0) <= 4).map((n) => n.id);
       setExpandedNodeIds(initialExpanded);
     } finally {
@@ -204,12 +233,10 @@ function App() {
     fetchArchitecture(mode);
   }, [fetchArchitecture]);
 
-
   const fetchWorkContextSummary = useCallback(async () => {
     try {
-      const [discRes, campRes, jobsRes, persRes] = await Promise.all([
+      const [discRes, jobsRes, persRes] = await Promise.all([
         apiFetch("/api/v1/discovery/latest").catch(() => null),
-        apiFetch("/api/v1/campaigns").catch(() => null),
         apiFetch("/api/v1/migration/jobs").catch(() => null),
         apiFetch("/api/v1/migration/persistence/status").catch(() => null),
       ]);
@@ -217,15 +244,11 @@ function App() {
         const d = await discRes.json();
         if (d.hostname || d.agent?.hostname) setActiveHost(d.hostname || d.agent?.hostname);
       }
-      if (campRes && campRes.ok) {
-        const c = await campRes.json();
-        const cList = c.campaigns || [];
-        setCachedCampaigns(cList);
-        if (cList.length > 0) setActiveCampaign(cList[0]);
-      }
       if (jobsRes && jobsRes.ok) {
         const j = await jobsRes.json();
-        const list = j.jobs || [];
+        const list = (j.jobs || []).filter(
+          (item) => item.use_case === "app_source" || item.use_case === "vm_image"
+        );
         setCachedJobs(list);
         setJobsCount(list.length);
         if (list.length > 0) setActiveMigrationJob((prev) => prev || list[0]);
@@ -373,7 +396,7 @@ function App() {
     if (domainFilter !== "ALL") {
       filtered = filtered.filter((n) => {
         const isContainer = n.category === "container" || (n.level ?? 5) < 5;
-        if (isContainer) return true; // Keep parent containers so leaf nodes remain anchored
+        if (isContainer) return true;
         if (domainFilter === "shared") return Boolean(n.is_shared);
         const dom = getDomainByType(n.type);
         if (domainFilter === "network") return dom === "network" || dom === "security";
@@ -461,9 +484,10 @@ function App() {
 
   const handleQuickStartUseCase = useCallback(
     (useCaseId, jobId = null) => {
-      setOrchestratorUseCase(useCaseId || "app_source");
+      const cleanUc = useCaseId === "vm_image" ? "vm_image" : "app_source";
+      setOrchestratorUseCase(cleanUc);
       setOrchestratorJobId(jobId);
-      setActiveTab("migration");
+      setActiveTab("migration", cleanUc);
     },
     [setActiveTab]
   );
@@ -471,7 +495,9 @@ function App() {
   return (
     <AppShell
       activeTab={activeTab}
+      activeUseCase={orchestratorUseCase}
       setActiveTab={setActiveTab}
+      onQuickStartUseCase={handleQuickStartUseCase}
       architectureName={architectureMeta?.name}
       searchQuery={searchQuery}
       setSearchQuery={setSearchQuery}
@@ -481,158 +507,144 @@ function App() {
       setTargetProvider={setTargetProvider}
       workContext={{
         activeHost,
-        activeCampaign,
         activeMigrationJob,
         persistenceEngine,
         jobsCount,
       }}
     >
       <ViewErrorBoundary key={activeTab}>
-      {loading ? (
-        <div className="loading-state-overlay">
-          <div className="spinner-ring" />
-          <p>Inicializando motor de topología CMIR v2.1 e inventario de infraestructura...</p>
-        </div>
-      ) : activeTab === "overview" ? (
-        <EnvironmentOverviewWorkspace
-          allNodes={allNodes}
-          allEdges={allEdges}
-          selectedNodes={selectedNodes}
-          initialCampaigns={cachedCampaigns}
-          initialJobs={cachedJobs}
-          onNavigateTab={setActiveTab}
-          onQuickStartUseCase={handleQuickStartUseCase}
-        />
-      ) : activeTab === "discovery" ? (
-        <DiscoveryWorkspace
-          apiUrl={getApiBase()}
-          onLoadCmirToCanvas={() => {
-            fetchArchitecture();
-            setActiveTab("architecture");
-          }}
-        />
-      ) : activeTab === "campaigns" ? (
-        <DataCenterCampaignPanel
-          isStandalonePage={true}
-          onActiveCampaignChange={setActiveCampaign}
-          onLoadCampaignCmirToCanvas={(cmir, camp) => {
-            handleLoadCmirJobToCanvas({
-              cmir,
-              name: `Campaña Datacenter ${camp?.campaign_id || ""}`,
-              target_provider: "aws",
-            });
-          }}
-        />
-      ) : activeTab === "architecture" ? (
-        <>
-          <CanvasToolbar
-            archViewMode={archViewMode}
-            onToggleArchViewMode={handleToggleArchViewMode}
-            activeLayer={activeLayer}
-            setActiveLayer={setActiveLayer}
-            domainFilter={domainFilter}
-            setDomainFilter={setDomainFilter}
-            highlightDeps={highlightDeps}
-            setHighlightDeps={setHighlightDeps}
-            showLegend={showLegend}
-            setShowLegend={setShowLegend}
-            onExpandAll={handleExpandAll}
-            onCollapseAll={handleCollapseAll}
-            selectedCount={selectedNodes.length}
-            onClearSelection={() => {
-              setSelectedNodes([]);
-              setSelectedNodeObj(null);
-            }}
-            onAnalyzeDependencies={resolveDependencies}
-          />
-
-          {breadcrumbs.length > 0 && (
-            <Breadcrumbs
-              breadcrumbs={breadcrumbs}
-              onNavigate={(nodeId) => {
-                const item = allNodes.find((n) => n.id === nodeId);
-                if (item) setSelectedNodeObj(item);
-              }}
-              onReset={() => {
-                setSelectedNodeObj(null);
-                setFocusNodeId(null);
-              }}
-              onBack={() => {
-                if (breadcrumbs.length > 1) {
-                  const parentCrumb = breadcrumbs[breadcrumbs.length - 2];
-                  const parentObj = allNodes.find((n) => n.id === parentCrumb.id);
-                  setSelectedNodeObj(parentObj || null);
-                } else {
-                  setSelectedNodeObj(null);
-                }
-              }}
-            />
-          )}
-
-          {message && (
-            <div className="app-message-banner" role="status">
-              <span>{message}</span>
-              <button
-                type="button"
-                className="cm-btn sm"
-                style={{ marginLeft: 12 }}
-                onClick={() => {
-                  fetchArchitecture();
-                  setMessage("");
-                }}
-              >
-                Restaurar Topología Completa
-              </button>
-            </div>
-          )}
-
-          <ArchitectureCanvas
-            nodes={visibleNodes}
-            edges={visibleEdges}
+        {loading ? (
+          <div className="loading-state-overlay">
+            <div className="spinner-ring" />
+            <p>Inicializando AWS CloudMove Management Console y motor CMIR v2.1...</p>
+          </div>
+        ) : activeTab === "overview" ? (
+          <EnvironmentOverviewWorkspace
             allNodes={allNodes}
             allEdges={allEdges}
             selectedNodes={selectedNodes}
-            expandedNodeIds={expandedNodeIds}
-            onNodeClick={toggleResourceSelection}
-            onToggleExpand={handleToggleExpand}
-            zoomTargetId={selectedNodeObj?.id}
-            highlightDeps={highlightDeps}
-            showLegend={showLegend}
-            onCloseLegend={() => setShowLegend(false)}
+            initialJobs={cachedJobs}
+            onNavigateTab={setActiveTab}
+            onQuickStartUseCase={handleQuickStartUseCase}
           />
-
-          {selectedNodeObj && (
-            <ResourceInspector
-              node={selectedNodeObj}
-              allNodes={allNodes}
-              edges={allEdges}
-              onClose={() => setSelectedNodeObj(null)}
-              onSelectNode={(nodeId) => {
-                toggleResourceSelection(nodeId);
-                setFocusNodeId(nodeId);
+        ) : activeTab === "discovery" ? (
+          <DiscoveryWorkspace
+            apiUrl={getApiBase()}
+            onLoadCmirToCanvas={() => {
+              fetchArchitecture();
+              setActiveTab("architecture");
+            }}
+          />
+        ) : activeTab === "architecture" ? (
+          <>
+            <CanvasToolbar
+              archViewMode={archViewMode}
+              onToggleArchViewMode={handleToggleArchViewMode}
+              activeLayer={activeLayer}
+              setActiveLayer={setActiveLayer}
+              domainFilter={domainFilter}
+              setDomainFilter={setDomainFilter}
+              highlightDeps={highlightDeps}
+              setHighlightDeps={setHighlightDeps}
+              showLegend={showLegend}
+              setShowLegend={setShowLegend}
+              onExpandAll={handleExpandAll}
+              onCollapseAll={handleCollapseAll}
+              selectedCount={selectedNodes.length}
+              onClearSelection={() => {
+                setSelectedNodes([]);
+                setSelectedNodeObj(null);
               }}
-              targetProvider={targetProvider}
-              onToggleExpand={handleToggleExpand}
-              isExpanded={expandedNodeIds.includes(selectedNodeObj.id)}
+              onAnalyzeDependencies={resolveDependencies}
             />
-          )}
-        </>
-      ) : activeTab === "migration" ? (
-        <MigrationOrchestratorWorkspace
-          initialUseCase={orchestratorUseCase}
-          initialJobId={orchestratorJobId}
-          onActiveJobChange={setActiveMigrationJob}
-          onNavigateTab={setActiveTab}
-          onLoadCmirToCanvas={handleLoadCmirJobToCanvas}
-        />
-      ) : activeTab === "sources-targets" ? (
-        <SourcesAndTargetsWorkspace />
-      ) : (
-        <ExecutionsAndAuditWorkspace
-          generationResult={generationResult}
-          onSelectMigrationInOrchestrator={handleQuickStartUseCase}
-        />
-      )}
+
+            {breadcrumbs.length > 0 && (
+              <Breadcrumbs
+                breadcrumbs={breadcrumbs}
+                onNavigate={(nodeId) => {
+                  const item = allNodes.find((n) => n.id === nodeId);
+                  if (item) setSelectedNodeObj(item);
+                }}
+                onReset={() => {
+                  setSelectedNodeObj(null);
+                  setFocusNodeId(null);
+                }}
+                onBack={() => {
+                  if (breadcrumbs.length > 1) {
+                    const parentCrumb = breadcrumbs[breadcrumbs.length - 2];
+                    const parentObj = allNodes.find((n) => n.id === parentCrumb.id);
+                    setSelectedNodeObj(parentObj || null);
+                  } else {
+                    setSelectedNodeObj(null);
+                  }
+                }}
+              />
+            )}
+
+            {message && (
+              <div className="app-message-banner" role="status">
+                <span>{message}</span>
+                <button
+                  type="button"
+                  className="cm-btn sm"
+                  style={{ marginLeft: 12 }}
+                  onClick={() => {
+                    fetchArchitecture();
+                    setMessage("");
+                  }}
+                >
+                  Restaurar Topología Completa
+                </button>
+              </div>
+            )}
+
+            <ArchitectureCanvas
+              nodes={visibleNodes}
+              edges={visibleEdges}
+              allNodes={allNodes}
+              allEdges={allEdges}
+              selectedNodes={selectedNodes}
+              expandedNodeIds={expandedNodeIds}
+              onNodeClick={toggleResourceSelection}
+              onToggleExpand={handleToggleExpand}
+              zoomTargetId={selectedNodeObj?.id}
+              highlightDeps={highlightDeps}
+              showLegend={showLegend}
+              onCloseLegend={() => setShowLegend(false)}
+            />
+
+            {selectedNodeObj && (
+              <ResourceInspector
+                node={selectedNodeObj}
+                allNodes={allNodes}
+                edges={allEdges}
+                onClose={() => setSelectedNodeObj(null)}
+                onSelectNode={(nodeId) => {
+                  toggleResourceSelection(nodeId);
+                  setFocusNodeId(nodeId);
+                }}
+                targetProvider={targetProvider}
+                onToggleExpand={handleToggleExpand}
+                isExpanded={expandedNodeIds.includes(selectedNodeObj.id)}
+              />
+            )}
+          </>
+        ) : activeTab === "migration" ? (
+          <MigrationOrchestratorWorkspace
+            initialUseCase={orchestratorUseCase}
+            initialJobId={orchestratorJobId}
+            onActiveJobChange={setActiveMigrationJob}
+            onNavigateTab={setActiveTab}
+            onLoadCmirToCanvas={handleLoadCmirJobToCanvas}
+          />
+        ) : activeTab === "sources-targets" ? (
+          <SourcesAndTargetsWorkspace />
+        ) : (
+          <ExecutionsAndAuditWorkspace
+            generationResult={generationResult}
+            onSelectMigrationInOrchestrator={handleQuickStartUseCase}
+          />
+        )}
       </ViewErrorBoundary>
 
       {showMigrationModal && (

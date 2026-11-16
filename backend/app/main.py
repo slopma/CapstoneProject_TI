@@ -14,7 +14,7 @@ from app.dependencies.resolver import resolve_dependencies
 from app.translators.aws import translate_cmir_to_aws
 from app.generators.terraform import generate_aws_terraform
 from app.config import AWS_OUTPUT_PATH, CORS_ORIGINS, INVENTORY_PATH, LOG_LEVEL
-from app.api.routers import architecture, migration, discovery, campaigns, agents
+from app.api.routers import architecture, migration, discovery, agents
 
 class _CorrelationIdFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
@@ -80,7 +80,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 app.include_router(architecture.router)
 app.include_router(migration.router)
 app.include_router(discovery.router)
-app.include_router(campaigns.router)
 app.include_router(agents.router)
 
 

@@ -5321,3 +5321,627 @@ body {
   }
 }
 
+/* ==========================================================================
+   11. AWS MANAGEMENT CONSOLE GLOBAL HEADER MENUS & CONSOLE HOME DASHBOARD
+   ========================================================================== */
+
+/* Top Bar Services Waffle Menu */
+.awsui-services-dropdown-wrap,
+.awsui-account-dropdown-wrap {
+  position: relative;
+}
+
+.awsui-services-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 12px;
+  background-color: transparent;
+  border: 1px solid #414d5c;
+  border-radius: 4px;
+  color: #ffffff;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.awsui-services-trigger:hover,
+.awsui-services-trigger.is-open {
+  background-color: #16191f;
+  border-color: #ff9900;
+  color: #ff9900;
+}
+
+.awsui-services-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 680px;
+  max-width: 92vw;
+  background-color: #ffffff;
+  border: 1px solid #d5dbdb;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 7, 22, 0.28);
+  z-index: 1200;
+  overflow: hidden;
+  color: #000716;
+}
+
+.awsui-services-popover-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 18px;
+  background-color: #232f3e;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 700;
+  border-bottom: 2px solid #ff9900;
+}
+
+.awsui-services-popover-sub {
+  font-size: 12px;
+  color: #d5dbdb;
+  font-weight: 500;
+}
+
+.awsui-services-popover-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 16px 18px;
+}
+
+@media (max-width: 768px) {
+  .awsui-services-popover-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.awsui-services-group-title {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #545b64;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #e9ebed;
+}
+
+.awsui-services-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.awsui-service-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  padding: 9px 12px;
+  background-color: #ffffff;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.awsui-service-item:hover {
+  background-color: #f2f8fd;
+  border-color: #539fe5;
+}
+
+.awsui-service-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.awsui-service-item-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #0972d3;
+}
+
+.awsui-service-item-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background-color: #fff8f0;
+  border: 1px solid #ff9900;
+  color: #ec7211;
+}
+
+.awsui-service-item-desc {
+  font-size: 12px;
+  color: #545b64;
+  line-height: 1.35;
+}
+
+/* Search Suggestions Dropdown */
+.awsui-search-suggestions {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background-color: #ffffff;
+  border: 1px solid #d5dbdb;
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 7, 22, 0.25);
+  z-index: 1200;
+  max-height: 360px;
+  overflow-y: auto;
+  color: #000716;
+}
+
+.awsui-search-suggestions-header {
+  padding: 8px 14px;
+  background-color: #fafafa;
+  border-bottom: 1px solid #e9ebed;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #545b64;
+  text-transform: uppercase;
+}
+
+.awsui-search-suggestion-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid #f2f3f3;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13.5px;
+  color: #000716;
+}
+
+.awsui-search-suggestion-item:hover {
+  background-color: #f2f8fd;
+}
+
+/* Top Utilities & Account Menu */
+.awsui-top-util-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 11px;
+  background-color: #16191f;
+  border: 1px solid #545b64;
+  border-radius: 4px;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.awsui-top-util-btn:hover,
+.awsui-top-util-btn.is-active {
+  border-color: #ff9900;
+  background-color: #000716;
+}
+
+.awsui-account-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 12px;
+  background-color: #16191f;
+  border: 1px solid #545b64;
+  border-radius: 4px;
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.awsui-account-trigger:hover {
+  border-color: #d5dbdb;
+}
+
+.awsui-account-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #22c55e;
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.25);
+}
+
+.awsui-account-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 290px;
+  background-color: #ffffff;
+  border: 1px solid #d5dbdb;
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(0, 7, 22, 0.26);
+  z-index: 1200;
+  overflow: hidden;
+  color: #000716;
+}
+
+.awsui-account-popover-header {
+  padding: 14px 16px;
+  background-color: #fafafa;
+  border-bottom: 1px solid #e9ebed;
+}
+
+.awsui-account-popover-body {
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+}
+
+.awsui-account-menu-item {
+  text-align: left;
+  padding: 9px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #000716;
+  cursor: pointer;
+}
+
+.awsui-account-menu-item:hover {
+  background-color: #f2f8fd;
+  color: #0972d3;
+}
+
+/* AWS Console Home 2-Column Widget Layout */
+.awsui-console-home-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2.1fr) minmax(320px, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 1180px) {
+  .awsui-console-home-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Use Case Cards (Caso 1 & Caso 2) */
+.awsui-usecase-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 18px;
+}
+
+.awsui-usecase-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  background-color: #ffffff;
+  border: 1px solid #d5dbdb;
+  border-top: 4px solid #ff9900;
+  border-radius: 8px;
+  padding: 20px;
+  transition: box-shadow 150ms ease, border-color 150ms ease;
+}
+
+.awsui-usecase-card:nth-child(2) {
+  border-top-color: #0972d3;
+}
+
+.awsui-usecase-card:hover {
+  box-shadow: 0 4px 14px rgba(0, 28, 36, 0.12);
+}
+
+.awsui-usecase-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.awsui-usecase-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.awsui-usecase-icon.aws-orange {
+  background-color: #fff8f0;
+  border: 1px solid #ff9900;
+  color: #ec7211;
+}
+
+.awsui-usecase-icon.aws-blue {
+  background-color: #f2f8fd;
+  border: 1px solid #539fe5;
+  color: #0972d3;
+}
+
+.awsui-usecase-title {
+  margin: 6px 0 0;
+  font-size: 16.5px;
+  font-weight: 700;
+  color: #000716;
+  line-height: 1.3;
+}
+
+.awsui-usecase-desc {
+  margin: 0 0 14px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: #545b64;
+}
+
+.awsui-usecase-features {
+  list-style: none;
+  padding: 12px 14px;
+  margin: 0 0 16px;
+  background-color: #fafafa;
+  border: 1px solid #e9ebed;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 13px;
+  color: #000716;
+}
+
+.awsui-usecase-features li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.awsui-usecase-features .check-icon {
+  color: #037f0c;
+  font-weight: 800;
+}
+
+.awsui-usecase-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 12px;
+  border-top: 1px solid #e9ebed;
+}
+
+/* Recently Visited Services Grid */
+.awsui-recent-services-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.awsui-service-shortcut {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  background-color: #ffffff;
+  border: 1px solid #e9ebed;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.awsui-service-shortcut:hover {
+  background-color: #f2f8fd;
+  border-color: #0972d3;
+}
+
+.shortcut-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.shortcut-badge.aws {
+  background-color: #fff8f0;
+  color: #ec7211;
+  border: 1px solid #ff9900;
+}
+
+.shortcut-badge.blue {
+  background-color: #f2f8fd;
+  color: #0972d3;
+  border: 1px solid #539fe5;
+}
+
+.shortcut-badge.green {
+  background-color: #f2f8f0;
+  color: #037f0c;
+  border: 1px solid #037f0c;
+}
+
+.shortcut-badge.neutral {
+  background-color: #f2f3f3;
+  color: #232f3e;
+  border: 1px solid #d5dbdb;
+}
+
+.shortcut-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.shortcut-meta strong {
+  font-size: 13.5px;
+  color: #0972d3;
+  font-weight: 700;
+}
+
+.shortcut-meta span {
+  font-size: 12px;
+  color: #545b64;
+  line-height: 1.35;
+}
+
+/* AWS Free Tier & Quotas Widget */
+.awsui-quota-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.awsui-quota-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.awsui-quota-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13.5px;
+  color: #000716;
+  font-variant-numeric: tabular-nums;
+}
+
+.awsui-quota-bar-bg {
+  width: 100%;
+  height: 8px;
+  background-color: #e9ebed;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.awsui-quota-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 300ms ease;
+}
+
+.awsui-quota-bar-fill.is-ok {
+  background-color: #0972d3;
+}
+
+.awsui-quota-bar-fill.is-warning {
+  background-color: #ff9900;
+}
+
+.awsui-quota-bar-fill.is-danger {
+  background-color: #d91515;
+}
+
+/* AWS Health Dashboard Widget */
+.awsui-health-summary-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid #e9ebed;
+}
+
+.awsui-health-stat {
+  display: flex;
+  flex-direction: column;
+  padding: 10px 14px;
+  background-color: #fafafa;
+  border: 1px solid #e9ebed;
+  border-radius: 6px;
+}
+
+.awsui-health-num {
+  font-size: 22px;
+  font-weight: 700;
+  color: #037f0c;
+  font-variant-numeric: tabular-nums;
+}
+
+.awsui-health-label {
+  font-size: 12px;
+  color: #545b64;
+  font-weight: 600;
+}
+
+.awsui-health-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.awsui-health-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13.5px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #f2f3f3;
+}
+
+.awsui-health-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+/* Documentation Links Widget */
+.awsui-docs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.awsui-doc-link {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 14px;
+  background-color: #fafafa;
+  border: 1px solid #e9ebed;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.awsui-doc-link:hover {
+  background-color: #f2f8fd;
+  border-color: #0972d3;
+}
+
+.awsui-doc-link strong {
+  display: block;
+  font-size: 13.5px;
+  color: #0972d3;
+  margin-bottom: 4px;
+}
+
+.awsui-doc-link p {
+  margin: 0;
+  font-size: 12.5px;
+  color: #545b64;
+  line-height: 1.4;
+}
+
+.awsui-doc-link .doc-arrow {
+  color: #0972d3;
+  font-weight: 700;
+  font-size: 15px;
+}
+
+

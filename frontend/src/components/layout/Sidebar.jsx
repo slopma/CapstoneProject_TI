@@ -3,53 +3,73 @@ import { NavIcon } from "../architecture/TechnicalIcons";
 
 export const CLOUDMOVE_NAV_GROUPS = [
   {
-    group: "Descubrimiento y topología",
+    group: "Consola principal",
     items: [
       {
         id: "overview",
-        label: "Resumen del entorno",
-        hint: "Panel general, métricas y accesos rápidos",
-        icon: "architecture",
-      },
-      {
-        id: "discovery",
-        label: "Discovery e inventario",
-        hint: "Agente osquery, procesos, red y bases de datos",
-        icon: "discovery",
-      },
-      {
-        id: "campaigns",
-        label: "Campañas de datacenter",
-        hint: "Descubrimiento masivo y oleadas por sitio",
-        icon: "dependencies",
-      },
-      {
-        id: "architecture",
-        label: "Grafo de arquitectura",
-        hint: "Topología CMIR v2.1 y análisis de alcance",
+        label: "Console Home (Inicio)",
+        hint: "Panel principal, widgets de estado y lanzamiento rápido",
         icon: "architecture",
       },
     ],
   },
   {
-    group: "Migración y gobernanza",
+    group: "Casos de migración",
     items: [
       {
-        id: "migration",
-        label: "Migraciones y planes",
-        hint: "Casos 1 (App/GitHub), 2 (Imagen VM) y 3 (Datacenter)",
+        id: "case-1-nav",
+        tab: "migration",
+        useCase: "app_source",
+        label: "Caso 1 · Aplicación (GitHub)",
+        hint: "Repositorio o código fuente → Contenedores en AWS/GCP",
         icon: "migration",
       },
       {
-        id: "sources-targets",
-        label: "Orígenes y destinos",
-        hint: "Conectores, agentes y compatibilidad AWS/GCP",
-        icon: "settings",
+        id: "case-2-nav",
+        tab: "migration",
+        useCase: "vm_image",
+        label: "Caso 2 · Imagen de SO / VM",
+        hint: "Agente en vivo o disco VMDK/QCOW2 → Máquina virtual",
+        icon: "discovery",
       },
       {
+        id: "migration",
+        label: "Planes de migración",
+        hint: "Orquestador completo, etapas y despliegue Terraform",
+        icon: "dependencies",
+      },
+    ],
+  },
+  {
+    group: "Descubrimiento y topología",
+    items: [
+      {
+        id: "discovery",
+        label: "Discovery e inventario",
+        hint: "Telemetría osquery, procesos, red y bases de datos",
+        icon: "discovery",
+      },
+      {
+        id: "architecture",
+        label: "Grafo de arquitectura CMIR",
+        hint: "Topología jerárquica Nivel 0-5 y dependencias",
+        icon: "architecture",
+      },
+      {
+        id: "sources-targets",
+        label: "Orígenes, agentes y destinos",
+        hint: "Inscripción de agentes remotos y conectores AWS/GCP",
+        icon: "settings",
+      },
+    ],
+  },
+  {
+    group: "Gobernanza y operaciones",
+    items: [
+      {
         id: "executions-audit",
-        label: "Auditoría y Terraform",
-        hint: "Terraform HCL, pruebas pre/post y bitácora ACID",
+        label: "Auditoría AWS y Terraform",
+        hint: "Recursos activos en AWS, cuotas EBS y bitácora ACID",
         icon: "audit",
       },
     ],
@@ -58,16 +78,35 @@ export const CLOUDMOVE_NAV_GROUPS = [
 
 export default function Sidebar({
   activeTab,
+  activeUseCase = "app_source",
   setActiveTab,
+  onQuickStartUseCase,
   mobileOpen = false,
   onCloseMobile,
   collapsed = false,
   onToggleCollapse,
   systemStats = {},
 }) {
-  const handleSelect = (id) => {
-    setActiveTab(id);
+  const handleSelect = (item) => {
+    if (item.useCase && onQuickStartUseCase) {
+      onQuickStartUseCase(item.useCase);
+    } else {
+      setActiveTab(item.tab || item.id);
+    }
     if (onCloseMobile) onCloseMobile();
+  };
+
+  const isItemActive = (item) => {
+    if (item.id === "case-1-nav") {
+      return activeTab === "migration" && activeUseCase === "app_source";
+    }
+    if (item.id === "case-2-nav") {
+      return activeTab === "migration" && activeUseCase === "vm_image";
+    }
+    if (item.id === "migration") {
+      return false; // Highlighted via specific active case above
+    }
+    return activeTab === item.id;
   };
 
   return (
@@ -87,7 +126,10 @@ export default function Sidebar({
           {!collapsed && (
             <div className="sidebar-brand-group">
               <div>
-                <span className="brand-name">Migration Hub</span>
+                <span className="brand-name">AWS Migration Hub</span>
+                <span style={{ display: "block", fontSize: 11.5, color: "#545b64", fontWeight: 500 }}>
+                  CloudMove v2.1
+                </span>
               </div>
             </div>
           )}
@@ -124,12 +166,12 @@ export default function Sidebar({
                 <div className="sidebar-group-label">{group.group}</div>
               )}
               {group.items.map((item) => {
-                const isActive = activeTab === item.id;
+                const isActive = isItemActive(item);
                 return (
                   <button
                     key={item.id}
                     type="button"
-                    onClick={() => handleSelect(item.id)}
+                    onClick={() => handleSelect(item)}
                     className={`sidebar-nav-btn ${isActive ? "active" : ""}`}
                     aria-current={isActive ? "page" : undefined}
                     data-nav-id={item.id}
@@ -154,11 +196,11 @@ export default function Sidebar({
           <div className="sidebar-footer">
             <div className="system-status-indicator">
               <span className="status-dot healthy" aria-hidden="true" />
-              <span>CMIR v2.1 · AWS / GCP</span>
+              <span>CMIR v2.1 · Casos 1 y 2</span>
             </div>
             {typeof systemStats.jobsCount === "number" && (
               <div className="sidebar-footer-sub">
-                {systemStats.jobsCount} planes registrados
+                {systemStats.jobsCount} plan(es) en base de datos ACID
               </div>
             )}
           </div>

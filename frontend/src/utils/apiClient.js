@@ -1,7 +1,7 @@
 /**
  * CloudMove — Unified API Client & Endpoint Resolver
  * Guarantees consistent connectivity across Architecture, Discovery,
- * Data Center Campaigns, Migration Orchestrator, Connectors, and Audit modules.
+ * Centralized API Client for Discovery, Migration Orchestrator (Case 1 & Case 2), Connectors, and Audit modules.
  */
 
 const ENV_API = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");

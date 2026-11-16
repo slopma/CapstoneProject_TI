@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import { getApiBase, buildUrl } from "../../utils/apiClient";
 import DiscoveryDiagramCanvas from "./DiscoveryDiagramCanvas";
 import CloudMoveDiscovery from "./CloudMoveDiscovery";
-import DataCenterCampaignPanel from "./DataCenterCampaignPanel";
 import {
   SummarySection,
   HardwareSection,
@@ -68,14 +67,9 @@ const SECTION_NAV = [
     label: "Arquitectura AWS y Terraform",
     subtitle: "Archify + HCL desde JSON",
   },
-  {
-    id: "datacenter-campaigns",
-    label: "Campañas datacenter",
-    subtitle: "Descubrimiento masivo 1-clic",
-  },
 ];
 
-// Agrupación de secciones en 5 pestañas principales para evitar saturación visual
+// Agrupación de secciones en 4 pestañas principales para evitar saturación visual
 const SECTION_GROUPS = [
   { id: "g-summary", label: "Resumen", sections: ["summary"] },
   { id: "g-topology", label: "Topología", sections: ["diagram"] },
@@ -85,7 +79,6 @@ const SECTION_GROUPS = [
     sections: ["hardware", "software", "network", "runtime", "databases"],
   },
   { id: "g-cloud", label: "Evaluación y AWS", sections: ["assessment", "aws-archify"] },
-  { id: "g-campaigns", label: "Campañas", sections: ["datacenter-campaigns"] },
 ];
 
 export default function DiscoveryWorkspace({
@@ -706,9 +699,6 @@ export default function DiscoveryWorkspace({
                   data={sessionData}
                   apiUrl={resolvedApiBase}
                 />
-              )}
-              {activeSection === "datacenter-campaigns" && (
-                <DataCenterCampaignPanel apiBaseUrl={resolvedApiBase} />
               )}
               {activeSection === "summary" && (
                 <SummarySection
