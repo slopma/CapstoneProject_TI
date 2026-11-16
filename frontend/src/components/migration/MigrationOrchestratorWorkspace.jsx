@@ -12,6 +12,7 @@ import { apiFetch } from "../../utils/apiClient";
 import {
   getSessionAgentToken,
   saveSessionAgentToken,
+  copyTextToClipboard,
 } from "../../utils/credentialVault";
 import {
   AwsPageHeader,
@@ -2029,7 +2030,7 @@ export default function MigrationOrchestratorWorkspace({
                       </button>
                     </div>
 
-                    {agentTokenData?.token && (
+                    {agentTokenData && (agentTokenData.token || agentTokenData.enrollment_token) && (
                       <div
                         style={{
                           marginTop: 10,
@@ -2041,20 +2042,37 @@ export default function MigrationOrchestratorWorkspace({
                       >
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
                           <span style={{ fontSize: 12.5, fontWeight: 700, color: "#0f172a" }}>
-                            Token generado: <code>{agentTokenData.token}</code>
+                            Token generado: <code>{agentTokenData.token || agentTokenData.enrollment_token}</code>
                           </span>
-                          <button
-                            type="button"
-                            className="cm-btn sm secondary"
-                            onClick={() => {
-                              const installCmd = `curl -fsSL "${window.location.origin}/api/v1/agents/install.sh?token=${agentTokenData.token}" | sudo bash`;
-                              navigator.clipboard.writeText(installCmd);
-                              setCopiedAgentCmd("install");
-                              setTimeout(() => setCopiedAgentCmd(""), 2500);
-                            }}
-                          >
-                            {copiedAgentCmd === "install" ? "Comando Copiado" : "Copiar Comando de Instalación Linux/macOS"}
-                          </button>
+                          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                            <button
+                              type="button"
+                              className="cm-btn sm secondary"
+                              onClick={async () => {
+                                const rawTok = agentTokenData.token || agentTokenData.enrollment_token;
+                                await copyTextToClipboard(rawTok);
+                                setCopiedAgentCmd("token_only");
+                                setTimeout(() => setCopiedAgentCmd(""), 2500);
+                              }}
+                            >
+                              {copiedAgentCmd === "token_only" ? "Token Copiado" : "Copiar Solo Token"}
+                            </button>
+                            <button
+                              type="button"
+                              className="cm-btn sm secondary"
+                              onClick={async () => {
+                                const rawTok = agentTokenData.token || agentTokenData.enrollment_token;
+                                const installCmd =
+                                  agentTokenData.install_command_linux ||
+                                  `curl -sSL ${window.location.origin}/api/v1/agents/install.sh | sudo bash -s -- --token ${rawTok} --server ${window.location.origin}`;
+                                await copyTextToClipboard(installCmd);
+                                setCopiedAgentCmd("install");
+                                setTimeout(() => setCopiedAgentCmd(""), 2500);
+                              }}
+                            >
+                              {copiedAgentCmd === "install" ? "Comando Copiado" : "Copiar Comando de Instalación Linux/macOS"}
+                            </button>
+                          </div>
                         </div>
                         <pre
                           style={{
@@ -2067,7 +2085,8 @@ export default function MigrationOrchestratorWorkspace({
                             overflowX: "auto",
                           }}
                         >
-                          {`curl -fsSL "${typeof window !== "undefined" ? window.location.origin : ""}/api/v1/agents/install.sh?token=${agentTokenData.token}" | sudo bash`}
+                          {agentTokenData.install_command_linux ||
+                            `curl -sSL ${typeof window !== "undefined" ? window.location.origin : ""}/api/v1/agents/install.sh | sudo bash -s -- --token ${agentTokenData.token || agentTokenData.enrollment_token} --server ${typeof window !== "undefined" ? window.location.origin : ""}`}
                         </pre>
                       </div>
                     )}

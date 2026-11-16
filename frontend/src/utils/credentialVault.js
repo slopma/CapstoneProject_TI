@@ -169,18 +169,53 @@ export function clearSessionCredentials() {
 }
 
 export function saveSessionAgentToken(tokenData) {
-  if (typeof window === "undefined" || !window.sessionStorage || !tokenData) return;
+  if (typeof window === "undefined" || !window.sessionStorage || !tokenData) return null;
+  const rawToken = tokenData.token || tokenData.enrollment_token || "";
+  const origin =
+    typeof window !== "undefined" && window.location?.origin
+      ? window.location.origin
+      : "https://digitalcafeluna.store";
+  const defaultLinuxCmd = rawToken
+    ? `curl -sSL ${origin}/api/v1/agents/install.sh | sudo bash -s -- --token ${rawToken} --server ${origin}`
+    : "";
+  const defaultWindowsCmd = rawToken
+    ? `Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('${origin}/api/v1/agents/install.ps1')) -Server '${origin}' -Token '${rawToken}'`
+    : "";
+  const fingerprint = computeCredentialHash(rawToken || tokenData.token_prefix || "");
+  const payload = {
+    ...tokenData,
+    token: rawToken,
+    enrollment_token: rawToken,
+    token_prefix: tokenData.token_prefix || (rawToken ? `${rawToken.slice(0, 12)}...` : ""),
+    install_command_linux:
+      tokenData.install_command_linux ||
+      tokenData.install_commands?.linux ||
+      defaultLinuxCmd,
+    install_command_windows:
+      tokenData.install_command_windows ||
+      tokenData.install_commands?.windows_powershell ||
+      defaultWindowsCmd,
+    install_commands: {
+      linux:
+        tokenData.install_command_linux ||
+        tokenData.install_commands?.linux ||
+        defaultLinuxCmd,
+      windows_powershell:
+        tokenData.install_command_windows ||
+        tokenData.install_commands?.windows_powershell ||
+        defaultWindowsCmd,
+    },
+    fingerprint,
+    token_hash: fingerprint,
+    saved_at: new Date().toISOString(),
+  };
   try {
-    const payload = {
-      ...tokenData,
-      token_hash: computeCredentialHash(tokenData.token || tokenData.token_prefix || ""),
-      saved_at: new Date().toISOString(),
-    };
     window.sessionStorage.setItem(AGENT_TOKEN_STORAGE_KEY, obfuscatePayload(payload));
     window.dispatchEvent(new CustomEvent("cloudmove:agent-token-updated"));
   } catch {
     // Ignore error
   }
+  return payload;
 }
 
 export function getSessionAgentToken() {
@@ -188,9 +223,46 @@ export function getSessionAgentToken() {
   try {
     const raw = window.sessionStorage.getItem(AGENT_TOKEN_STORAGE_KEY);
     if (!raw) return null;
-    return deobfuscatePayload(raw);
+    const parsed = deobfuscatePayload(raw);
+    if (!parsed) return null;
+    const rawToken = parsed.token || parsed.enrollment_token || "";
+    if (!rawToken) return parsed;
+    return {
+      ...parsed,
+      token: rawToken,
+      enrollment_token: rawToken,
+    };
   } catch {
     return null;
+  }
+}
+
+export async function copyTextToClipboard(text) {
+  const str = String(text || "");
+  if (!str) return false;
+  try {
+    if (navigator?.clipboard?.writeText && window.isSecureContext) {
+      await navigator.clipboard.writeText(str);
+      return true;
+    }
+  } catch {
+    // Fallback to textarea copy below
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = str;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-9999px";
+    ta.style.left = "-9999px";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return Boolean(ok);
+  } catch {
+    return false;
   }
 }
 

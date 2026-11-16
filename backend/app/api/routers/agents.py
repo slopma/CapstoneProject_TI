@@ -41,6 +41,8 @@ def _get_server_url(request: Request) -> str:
         return env_url.rstrip("/")
     proto = request.headers.get("x-forwarded-proto", request.url.scheme)
     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    if "digitalcafeluna.store" in (host or ""):
+        proto = "https"
     return f"{proto}://{host}".rstrip("/")
 
 
@@ -136,21 +138,30 @@ def create_enrollment_token(req: CreateEnrollmentTokenRequest, request: Request)
         org_id=req.org_id,
     )
     server_url = _get_server_url(request)
+    raw_token = token_record["enrollment_token"]
+    linux_cmd = (
+        f"curl -sSL {server_url}/api/v1/agents/install.sh | sudo bash -s -- "
+        f"--token {raw_token} --server {server_url}"
+    )
+    windows_cmd = (
+        f"Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('{server_url}/api/v1/agents/install.ps1')) "
+        f"-Server '{server_url}' -Token '{raw_token}'"
+    )
     return {
         "status": "created",
         "token_id": token_record["token_id"],
-        "enrollment_token": token_record["enrollment_token"],
+        "token": raw_token,
+        "enrollment_token": raw_token,
         "token_prefix": token_record["token_prefix"],
         "expires_at": token_record["expires_at"],
         "max_uses": token_record["max_uses"],
-        "install_command_linux": (
-            f"curl -sSL {server_url}/api/v1/agents/install.sh | sudo bash -s -- "
-            f"--token {token_record['enrollment_token']} --server {server_url}"
-        ),
-        "install_command_windows": (
-            f"Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('{server_url}/api/v1/agents/install.ps1')) "
-            f"-Server '{server_url}' -Token '{token_record['enrollment_token']}'"
-        ),
+        "install_command_linux": linux_cmd,
+        "install_command_windows": windows_cmd,
+        "install_commands": {
+            "linux": linux_cmd,
+            "linux_macos": linux_cmd,
+            "windows_powershell": windows_cmd,
+        },
     }
 
 
@@ -250,9 +261,10 @@ def download_agent_bundle():
 
 
 @router.get("/install.sh")
-def download_linux_installer(request: Request):
+def download_linux_installer(request: Request, token: Optional[str] = Query(None)):
     """Deliver a self-contained, reproducible bash installer script for systemd-managed Linux."""
     host_url = _get_server_url(request)
+    default_token = (token or "").strip()
     script = f"""#!/usr/bin/env bash
 # ==============================================================================
 # CloudMove Agent — Script de Instalación Oficial para Linux (systemd)
@@ -261,7 +273,7 @@ def download_linux_installer(request: Request):
 set -euo pipefail
 
 SERVER_URL="{host_url}"
-ENROLLMENT_TOKEN=""
+ENROLLMENT_TOKEN="{default_token}"
 INSTALL_DIR="/opt/cloudmove-agent"
 SERVICE_NAME="cloudmove-agent"
 

@@ -4,6 +4,7 @@ import {
   saveSessionAgentToken,
   getSessionAgentToken,
   getCredentialsSummary,
+  copyTextToClipboard,
 } from "../../utils/credentialVault";
 import {
   AwsPageHeader,
@@ -86,13 +87,13 @@ export default function SourcesAndTargetsWorkspace({ onQuickStartUseCase }) {
       if (!res.ok) {
         throw new Error(data.detail || "No se pudo generar el token de inscripción.");
       }
-      setGeneratedToken(data);
-      saveSessionAgentToken(data);
+      const normalized = saveSessionAgentToken(data) || data;
+      setGeneratedToken(normalized);
       await loadData();
       setFeedback({
         type: "success",
         title: "Paso 1 completado: Token de inscripción generado",
-        message: `Token '${data.token_prefix}' activo en la sesión actual (válido por 24 horas). Ejecuta el comando del Paso 2 en el servidor objetivo.`,
+        message: `Token '${normalized.token || normalized.enrollment_token || data.token_prefix}' activo en la sesión actual (válido por 24 horas). Ejecuta el comando del Paso 2 en el servidor objetivo.`,
       });
     } catch (err) {
       setFeedback({
@@ -205,27 +206,31 @@ export default function SourcesAndTargetsWorkspace({ onQuickStartUseCase }) {
     }
   };
 
-  const handleCopyCommand = (cmd, key) => {
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(cmd);
-      setCopiedCmd(key);
-      setTimeout(() => setCopiedCmd(""), 2000);
-    }
+  const handleCopyCommand = async (cmd, key) => {
+    if (!cmd) return;
+    await copyTextToClipboard(cmd);
+    setCopiedCmd(key);
+    setTimeout(() => setCopiedCmd(""), 2000);
   };
 
   const onlineAgentsCount = agents.filter((a) => a.status === "ONLINE").length;
   const awsInfo = providersData?.providers?.aws;
 
+  const rawTokenValue =
+    generatedToken?.token || generatedToken?.enrollment_token || "";
+
   const linuxCommand =
+    generatedToken?.install_command_linux ||
     generatedToken?.install_commands?.linux ||
-    (generatedToken?.token
-      ? `curl -sSL ${window.location.origin}/api/v1/agents/install.sh | sudo bash -s -- --token ${generatedToken.token} --server ${window.location.origin}`
+    (rawTokenValue
+      ? `curl -sSL ${window.location.origin}/api/v1/agents/install.sh | sudo bash -s -- --token ${rawTokenValue} --server ${window.location.origin}`
       : "");
 
   const windowsCommand =
+    generatedToken?.install_command_windows ||
     generatedToken?.install_commands?.windows_powershell ||
-    (generatedToken?.token
-      ? `iwr -useb ${window.location.origin}/api/v1/agents/install.ps1 -OutFile install.ps1; .\\install.ps1 -Token "${generatedToken.token}" -Server "${window.location.origin}"`
+    (rawTokenValue
+      ? `Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('${window.location.origin}/api/v1/agents/install.ps1')) -Server '${window.location.origin}' -Token '${rawTokenValue}'`
       : "");
 
   return (
@@ -365,6 +370,33 @@ export default function SourcesAndTargetsWorkspace({ onQuickStartUseCase }) {
                   <p className="cm-hint" style={{ margin: "0 0 12px 0" }}>
                     Genera un token criptográfico temporal (`cmat_...`) para autorizar la conexión saliente desde tu máquina objetivo hacia CloudMove.
                   </p>
+                  {rawTokenValue && (
+                    <div
+                      style={{
+                        marginBottom: 10,
+                        padding: "6px 8px",
+                        backgroundColor: "#f8fafc",
+                        border: "1px solid #cbd5e1",
+                        borderRadius: 4,
+                        fontSize: 12,
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
+                        <span style={{ fontWeight: 700, color: "#0f172a" }}>Token completo:</span>
+                        <button
+                          type="button"
+                          className="awsui-crumb-link"
+                          style={{ fontSize: 11.5 }}
+                          onClick={() => handleCopyCommand(rawTokenValue, "token")}
+                        >
+                          {copiedCmd === "token" ? "Token copiado" : "Copiar token"}
+                        </button>
+                      </div>
+                      <code style={{ wordBreak: "break-all", fontSize: 11.5, color: "#0972d3" }}>
+                        {rawTokenValue}
+                      </code>
+                    </div>
+                  )}
                 </div>
                 <button
                   type="button"
