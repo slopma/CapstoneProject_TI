@@ -1140,6 +1140,11 @@ class MigrationOrchestrator:
             )
         else:
             app_disc = dict(job.get("source_environment") or {})
+            if not app_disc.get("app_id"):
+                raise ValueError(
+                    "Este plan aún no cuenta con una inspección válida de la aplicación (source_environment vacío). "
+                    "Valida nuevamente el enlace GitHub o directorio origen para inspeccionar."
+                )
             deployment_mode = src_cfg.get("deployment_mode", "vm_rehost")
 
             cmir_obj = build_application_cmir(
