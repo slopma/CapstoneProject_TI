@@ -14,40 +14,6 @@ Este proyecto nació como nuestro trabajo de grado (**Capstone Project in IT · 
 
 ---
 
-## Tabla de Contenidos
-
-1. [Qué resuelve CloudMove y sus 2 casos de uso](#1-qué-resuelve-cloudmove-y-sus-2-casos-de-uso)
-2. [Cómo funciona por dentro: arquitectura de 7 capas](#2-cómo-funciona-por-dentro-arquitectura-de-7-capas)
-   - [2.1 Capa 1: Motores de descubrimiento en solo lectura](#21-capa-1-motores-de-descubrimiento-en-solo-lectura)
-   - [2.2 Capa 2: Modelo intermedio neutral (`CMIR v2.1`)](#22-capa-2-modelo-intermedio-neutral-cmir-v21)
-   - [2.3 Capa 3: Grafo `networkx.DiGraph` y resolución de dependencias (BFS)](#23-capa-3-grafo-networkxdigraph-y-resolución-de-dependencias-bfs)
-   - [2.4 Capa 4: Adaptador único de destino (`AWSAdapter`)](#24-capa-4-adaptador-único-de-destino-awsadapter)
-   - [2.5 Capa 5: Generador modular de Terraform HCL y chequeo en 4 niveles](#25-capa-5-generador-modular-de-terraform-hcl-y-chequeo-en-4-niveles)
-   - [2.6 Capa 6: Orquestador de estados y base transaccional ACID (`SQLite WAL`)](#26-capa-6-orquestador-de-estados-y-base-transaccional-acid-sqlite-wal)
-   - [2.7 Capa 7: Consola de despliegue real con Terraform (`CloudDeploymentRunner`)](#27-capa-7-consola-de-despliegue-real-con-terraform-clouddeploymentrunner)
-3. [Caso de Uso 1 (`app_source`): migrar desde GitHub o código fuente](#3-caso-de-uso-1-app_source-migrar-desde-github-o-código-fuente)
-   - [3.1 Flujo completo del Caso 1](#31-flujo-completo-del-caso-1)
-   - [3.2 Paso 1: Bajada desde GitHub, commit SHA fijo y sandbox limpio anti-Tar-Slip](#32-paso-1-bajada-desde-github-commit-sha-fijo-y-sandbox-limpio-anti-tar-slip)
-   - [3.3 Paso 2: Recorrido de carpetas, poda de ruido y lectura de manifiestos](#33-paso-2-recorrido-de-carpetas-poda-de-ruido-y-lectura-de-manifiestos)
-   - [3.4 Paso 3: Escaneo estático de código multi-componente (AST / Regex)](#34-paso-3-escaneo-estático-de-código-multi-componente-ast--regex)
-   - [3.5 Paso 4: Lectura directa de backups PostgreSQL (`PGDMP` / `.sql`) y semillas](#35-paso-4-lectura-directa-de-backups-postgresql-pgdmp--sql-y-semillas)
-   - [3.6 Paso 5: Ocultación de secretos y clasificación de dependencias](#36-paso-5-ocultación-de-secretos-y-clasificación-de-dependencias)
-   - [3.7 Paso 6: Opciones interactivas, 6 chequeos pre-flight y viabilidad](#37-paso-6-opciones-interactivas-6-chequeos-pre-flight-y-viabilidad)
-   - [3.8 Paso 7: Armado del CMIR v2.1 y generación híbrida (reglas + IA)](#38-paso-7-armado-del-cmir-v21-y-generación-híbrida-reglas--ia)
-   - [3.9 Paso 8: Archivos generados y arranque automático en la EC2 (`user_data.sh`)](#39-paso-8-archivos-generados-y-arranque-automático-en-la-ec2-user_datash)
-4. [Caso de Uso 2 (`vm_image`): imágenes de disco, ISO, VM y captura en vivo del SO](#4-caso-de-uso-2-vm_image-imágenes-de-disco-iso-vm-y-captura-en-vivo-del-so)
-   - [4.1 Qué mueve al Caso 2 por debajo](#41-qué-mueve-al-caso-2-por-debajo)
-   - [4.2 Modo A: Lectura binaria de imágenes (`VMDK`, `QCOW2`, `VHD`, `VHDX`, `RAW`, `OVA`, `OVF`)](#42-modo-a-lectura-binaria-de-imágenes-vmdk-qcow2-vhd-vhdx-raw-ova-ovf)
-   - [4.3 Modo B: Sondeo y captura en vivo del sistema operativo (`Live OS Capture`)](#43-modo-b-sondeo-y-captura-en-vivo-del-sistema-operativo-live-os-capture)
-   - [4.4 Validación de la imagen: bloqueadores, drivers de arranque y las 8 dimensiones de fidelidad](#44-validación-de-la-imagen-bloqueadores-drivers-de-arranque-y-las-8-dimensiones-de-fidelidad)
-   - [4.5 Cuándo usa replicación continua (`AWS MGN`) o importación de imagen](#45-cuándo-usa-replicación-continua-aws-mgn-o-importación-de-imagen)
-   - [4.6 Catálogo interactivo y las 4 protecciones para AWS Academy Learner Lab](#46-catálogo-interactivo-y-las-4-protecciones-para-aws-academy-learner-lab)
-   - [4.7 Copia en staging, conversión `qemu-img convert` y scripts multi-hipervisor](#47-copia-en-staging-conversión-qemu-img-convert-y-scripts-multi-hipervisor)
-   - [4.8 Rehidratación con Cloud-Init y portal web de telemetría en vivo](#48-rehidratación-con-cloud-init-y-portal-web-de-telemetría-en-vivo)
-5. [Estructura del proyecto y comandos para correrlo](#5-estructura-del-proyecto-y-comandos-para-correrlo)
-
----
-
 ## 1. Qué resuelve CloudMove y sus 2 casos de uso
 
 Casi todas las herramientas automáticas de migración se estrellan contra dos problemas muy comunes:
