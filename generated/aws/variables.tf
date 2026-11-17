@@ -70,3 +70,27 @@ variable "github_token" {
   sensitive   = true
   default     = ""
 }
+
+variable "ssh_ingress_cidr" {
+  description = "CIDR block allowed for SSH administration (port 22). Restrict to your IP/32 in production."
+  type        = string
+  default     = "0.0.0.0/0"
+}
+
+variable "db_ingress_cidr" {
+  description = "CIDR block allowed for database ingress (port 5432). Restricted to target VPC CIDR by default."
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "eks_cluster_role_arn" {
+  description = "IAM Role ARN for Amazon EKS cluster (required when deploying aws_eks_cluster)"
+  type        = string
+  default     = ""
+}
+
+variable "vm_import_s3_bucket" {
+  description = "S3 bucket name holding staged VM images for AWS VM Import/Export"
+  type        = string
+  default     = ""
+}

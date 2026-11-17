@@ -21,9 +21,17 @@ import urllib.request
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import boto3
-from botocore.config import Config as BotocoreConfig
-from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError, PartialCredentialsError
+try:
+    import boto3
+    from botocore.config import Config as BotocoreConfig
+    from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError, PartialCredentialsError
+except ImportError:
+    boto3 = None  # type: ignore
+    BotocoreConfig = None  # type: ignore
+    BotoCoreError = Exception  # type: ignore
+    ClientError = Exception  # type: ignore
+    NoCredentialsError = Exception  # type: ignore
+    PartialCredentialsError = Exception  # type: ignore
 
 from app.cmir.builder import build_cmir_hierarchy
 from app.cmir.models import CMIR, deterministic_node_id

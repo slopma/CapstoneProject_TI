@@ -22,8 +22,15 @@ from typing import Any, Callable, Dict, List, Optional
 import urllib.error
 import urllib.request
 
-import boto3
-from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError, PartialCredentialsError
+try:
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError, NoCredentialsError, PartialCredentialsError
+except ImportError:
+    boto3 = None  # type: ignore
+    BotoCoreError = Exception  # type: ignore
+    ClientError = Exception  # type: ignore
+    NoCredentialsError = Exception  # type: ignore
+    PartialCredentialsError = Exception  # type: ignore
 
 from app.core.text_utils import utc_now_iso
 from app.discovery.connectors import ConnectorAuthError, ConnectorError, ConnectorTimeoutError
