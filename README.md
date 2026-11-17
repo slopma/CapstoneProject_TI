@@ -8,8 +8,8 @@ En esta guía te contamos cómo funciona CloudMove por debajo, desde su arquitec
 
 ### Quiénes construimos CloudMove
 
-Este proyecto nació como nuestro trabajo de grado (**Capstone Project in IT · Universidad EAFIT · 2026-2**) hecho por:
-- **Sara Lopez Marin**
+Este proyecto nació como nuestro trabajo para (**Capstone Project in IT · Universidad EAFIT · 2026-2**) hecho por:
+- **Sara López Marín**
 - **Luis Alejandro Castrillón Pulgarín**
 
 ---
