@@ -1,8 +1,13 @@
 # CloudMove — Caso de Uso 2: Migración de Imágenes de VM, Captura de SO en Vivo y Agente Remoto
 
-En el [README principal](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/README.md) ves la foto general de CloudMove, y en el [README del Caso 1](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/README_CASO_1.md) ves cómo migramos aplicaciones desde repositorios Git o carpetas de código. Aquí nos metemos de lleno en el **Caso de Uso 2 (`vm_image`)**: agarrar una máquina virtual completa o un servidor Linux encendido y levantarlo en AWS EC2 con Terraform y Cloud-Init.
+> **Proyecto:** CloudMove — Plataforma Web de Abstracción Semántica y Migración Selectiva a AWS  
+> **Integrantes:** Sara Lopez Marin · Luis Alejandro Castrillón Pulgarín  
+> **Capstone Project in IT · Universidad EAFIT · 2026-2**  
+> **Caso analizado:** Caso 2 (`vm_image`) — Imágenes de VM, captura de SO Linux en vivo y agente remoto
 
-Este caso tiene dos protagonistas que trabajan juntos: el motor de inspección y rehidratación en el backend, y el [agente instalable de CloudMove](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/README.md) cuando el usuario quiere capturar un servidor real que está corriendo en producción o en su laboratorio. Para una guía archivo por archivo de todo el repositorio, también puedes consultar [docs/README.md](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/docs/README.md).
+Este proyecto fue desarrollado por **Sara Lopez Marin** y **Luis Alejandro Castrillón Pulgarín** como trabajo de grado de Ingeniería de Sistemas. En el [README principal](./README.md) ves la foto general de CloudMove, y en el [README del Caso 1](./README_CASO_1.md) ves cómo migramos aplicaciones desde repositorios Git o carpetas de código. Aquí nos metemos de lleno en el **Caso de Uso 2 (`vm_image`)**: agarrar una máquina virtual completa o un servidor Linux encendido y levantarlo en AWS EC2 con Terraform y Cloud-Init.
+
+Este caso tiene dos protagonistas que trabajan juntos: el motor de inspección y rehidratación en el backend, y el [agente instalable de CloudMove](./cloudmove_agent/README.md) cuando el usuario quiere capturar un servidor real que está corriendo en producción o en su laboratorio. Para una guía archivo por archivo de todo el repositorio, también puedes consultar [docs/README.md](./docs/README.md).
 
 ---
 
@@ -30,7 +35,7 @@ Cuando migras código (Caso 1), te enfocas en el runtime, el Dockerfile, las var
 
 CloudMove resuelve dos escenarios reales bajo el mismo pipeline (`use_case = "vm_image"`):
 
-1. **Modo A — Imagen de disco offline**: ya tienes un archivo de disco virtual exportado de VMware, VirtualBox, KVM o Proxmox (`.vmdk`, `.qcow2`, `.vhd`, `.vhdx`, `.raw`, `.ova` u `.ovf`), o un manifiesto de VM como [`debian12-erp-prod.manifest.json`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/inventory/sample_images/debian12-erp-prod.manifest.json).
+1. **Modo A — Imagen de disco offline**: ya tienes un archivo de disco virtual exportado de VMware, VirtualBox, KVM o Proxmox (`.vmdk`, `.qcow2`, `.vhd`, `.vhdx`, `.raw`, `.ova` u `.ovf`), o un manifiesto de VM como [`debian12-erp-prod.manifest.json`](./inventory/sample_images/debian12-erp-prod.manifest.json).
 2. **Modo B — Servidor Linux vivo con agente + carpetas reales**: tienes una máquina corriendo (por ejemplo en tu red, en un laboratorio o en otra nube), instalas `cloudmove-agent` con un token de un solo uso y el panel web te deja ver sus discos, puertos, procesos y carpetas reales (`/home/*`, `/opt`, `/var/www`, `/srv`, `/etc`) para migrarlos hacia EC2 y un volumen EBS adicional.
 
 > [!NOTE]
@@ -75,19 +80,19 @@ Desde la modularización del backend, la lógica de UC2 y del agente ya no vive 
 
 | Capa | Archivo | Qué hace exactamente |
 | :--- | :--- | :--- |
-| **API UC2** | [migration_uc2.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/api/routers/migration_uc2.py) | Expone `/use-case-2/inspect`, `/use-case-2/devices`, `/use-case-2/probe-devices`, `/use-case-2/capture-live`, `/use-case-2/migrate`, remediación de bloqueadores, endpoints `/uc2-stage/*` y sondeo `/probe-uc2-*`. |
-| **API Agentes** | [agents.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/api/routers/agents.py) | Genera tokens de inscripción, sirve `/bundle.tar.gz`, `/install.sh` y `/install.ps1`, atiende `/enroll`, `/heartbeat`, `/tasks`, `/inventory` y `/stage-chunk` + `/stage-commit`. |
-| **Motor UC2** | [image_migrator.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/image_migrator.py) | Valida compatibilidad y los 4 bloqueadores, arma las 8 dimensiones de fidelidad, construye el catálogo interactivo y el grafo CMIR v2.1, genera el reporte diff y produce los scripts multi-hipervisor. |
-| **Sonda e inspección** | [uc2_live_probe.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/uc2_live_probe.py) | Lee cabeceras binarias (*magic bytes*), calcula SHA-256 *sparse*, copia y convierte imágenes en staging, consulta agentes remotos y ejecuta `capture_live_operating_system()`. |
-| **Staging de archivos** | [uc2_staging.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/uc2_staging.py) | Recibe paquetes por chunks de 1 MiB (desde navegador o agente), verifica SHA-256 y anti-Tar-Slip, limpia sesiones viejas, y despacha `stage_selected_paths` o `push_selected_paths_to_ec2`. |
-| **Portal y Cloud-Init** | [uc2_rehydration_portal.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/uc2_rehydration_portal.py) | Genera `user_data.sh` con `sync_ebs.sh`, `apply_tar.sh`, `sync_stage.sh` y `telemetry_server.py`, recortando contenido en 3 pasadas para nunca pasar el límite de 16 KB en EC2. |
-| **MGN y VM Import** | [replication_and_import.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/replication_and_import.py) | Selecciona entre replicación continua (`aws_mgn`) e importación de imagen (`aws_vm_import`) y llama vía `boto3` a S3, EC2 (`ImportImage`) y MGN. |
-| **Orquestación** | [orchestrator.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/orchestrator.py) | Controla la máquina de estados, el lock por etapa, la versión optimista, la remediación de bloqueadores (`remediate_compatibility_blocker`) y las transiciones del job. |
-| **Seguridad & Catálogo** | [security.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/core/security.py), [agents_catalog.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/core/agents_catalog.py) | Identifica y oculta el propio servidor CloudMove (`is_control_plane_agent`) usando IMDSv2 + variables de entorno; compara versiones de agente y normaliza respuestas de live discovery. |
-| **Persistencia SQLite** | [transactional_db.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/persistence/transactional_db.py) | Guarda `agent_enrollment_tokens`, `agents`, `agent_nonces`, `agent_tasks` (con lista blanca cerrada), `audit_events` y las migraciones. |
-| **Adaptador y HCL** | [aws_adapter.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/aws_adapter.py), [terraform.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/generators/terraform.py) | Convierte nodos CMIR (`virtual_machine`, `machine_image`, `disk`) a `aws_instance` (con `base64gzip(user_data.sh)`), `aws_ebs_volume`, `aws_ebs_snapshot_import` y `aws_ami`. |
-| **Daemon del agente** | [agent_daemon.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/agent_daemon.py), [system_collector.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/system_collector.py), [installer.py](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/installer.py) | Daemon `cloudmove-agent` v2.2.0 (`systemd`), inventario real del host (`lsblk`, `ss`, `systemctl`, árbol de archivos) e instalador CLI Python. |
-| **Frontend UC2** | [WizardCase2VmSection.jsx](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/src/components/migration/WizardCase2VmSection.jsx), [Case2InspectionPanels.jsx](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/src/components/migration/Case2InspectionPanels.jsx), [UserFileSelectionPanel.jsx](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/src/components/migration/UserFileSelectionPanel.jsx), [Uc2StageTransferBox.jsx](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/src/components/migration/Uc2StageTransferBox.jsx), [VmOsToCloudTransformationMap.jsx](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/src/components/migration/VmOsToCloudTransformationMap.jsx), [Case2AwsValidationView.jsx](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/src/components/migration/Case2AwsValidationView.jsx) | Flujo visual completo en el wizard: generación de token e instalador, explorador de carpetas del servidor, progreso de staging por chunks, catálogo AWS Academy, mapa VM-a-Nube y panel de verificación remota contra la EC2 desplegada. |
+| **API UC2** | [migration_uc2.py](./backend/app/api/routers/migration_uc2.py) | Expone `/use-case-2/inspect`, `/use-case-2/devices`, `/use-case-2/probe-devices`, `/use-case-2/capture-live`, `/use-case-2/migrate`, remediación de bloqueadores, endpoints `/uc2-stage/*` y sondeo `/probe-uc2-*`. |
+| **API Agentes** | [agents.py](./backend/app/api/routers/agents.py) | Genera tokens de inscripción, sirve `/bundle.tar.gz`, `/install.sh` y `/install.ps1`, atiende `/enroll`, `/heartbeat`, `/tasks`, `/inventory` y `/stage-chunk` + `/stage-commit`. |
+| **Motor UC2** | [image_migrator.py](./backend/app/migration/image_migrator.py) | Valida compatibilidad y los 4 bloqueadores, arma las 8 dimensiones de fidelidad, construye el catálogo interactivo y el grafo CMIR v2.1, genera el reporte diff y produce los scripts multi-hipervisor. |
+| **Sonda e inspección** | [uc2_live_probe.py](./backend/app/migration/uc2_live_probe.py) | Lee cabeceras binarias (*magic bytes*), calcula SHA-256 *sparse*, copia y convierte imágenes en staging, consulta agentes remotos y ejecuta `capture_live_operating_system()`. |
+| **Staging de archivos** | [uc2_staging.py](./backend/app/migration/uc2_staging.py) | Recibe paquetes por chunks de 1 MiB (desde navegador o agente), verifica SHA-256 y anti-Tar-Slip, limpia sesiones viejas, y despacha `stage_selected_paths` o `push_selected_paths_to_ec2`. |
+| **Portal y Cloud-Init** | [uc2_rehydration_portal.py](./backend/app/migration/uc2_rehydration_portal.py) | Genera `user_data.sh` con `sync_ebs.sh`, `apply_tar.sh`, `sync_stage.sh` y `telemetry_server.py`, recortando contenido en 3 pasadas para nunca pasar el límite de 16 KB en EC2. |
+| **MGN y VM Import** | [replication_and_import.py](./backend/app/migration/replication_and_import.py) | Selecciona entre replicación continua (`aws_mgn`) e importación de imagen (`aws_vm_import`) y llama vía `boto3` a S3, EC2 (`ImportImage`) y MGN. |
+| **Orquestación** | [orchestrator.py](./backend/app/migration/orchestrator.py) | Controla la máquina de estados, el lock por etapa, la versión optimista, la remediación de bloqueadores (`remediate_compatibility_blocker`) y las transiciones del job. |
+| **Seguridad & Catálogo** | [security.py](./backend/app/core/security.py), [agents_catalog.py](./backend/app/core/agents_catalog.py) | Identifica y oculta el propio servidor CloudMove (`is_control_plane_agent`) usando IMDSv2 + variables de entorno; compara versiones de agente y normaliza respuestas de live discovery. |
+| **Persistencia SQLite** | [transactional_db.py](./backend/app/persistence/transactional_db.py) | Guarda `agent_enrollment_tokens`, `agents`, `agent_nonces`, `agent_tasks` (con lista blanca cerrada), `audit_events` y las migraciones. |
+| **Adaptador y HCL** | [aws_adapter.py](./backend/app/adapters/aws_adapter.py), [terraform.py](./backend/app/generators/terraform.py) | Convierte nodos CMIR (`virtual_machine`, `machine_image`, `disk`) a `aws_instance` (con `base64gzip(user_data.sh)`), `aws_ebs_volume`, `aws_ebs_snapshot_import` y `aws_ami`. |
+| **Daemon del agente** | [agent_daemon.py](./cloudmove_agent/agent_daemon.py), [system_collector.py](./cloudmove_agent/system_collector.py), [installer.py](./cloudmove_agent/installer.py) | Daemon `cloudmove-agent` v2.2.0 (`systemd`), inventario real del host (`lsblk`, `ss`, `systemctl`, árbol de archivos) e instalador CLI Python. |
+| **Frontend UC2** | [WizardCase2VmSection.jsx](./frontend/src/components/migration/WizardCase2VmSection.jsx), [Case2InspectionPanels.jsx](./frontend/src/components/migration/Case2InspectionPanels.jsx), [UserFileSelectionPanel.jsx](./frontend/src/components/migration/UserFileSelectionPanel.jsx), [Uc2StageTransferBox.jsx](./frontend/src/components/migration/Uc2StageTransferBox.jsx), [VmOsToCloudTransformationMap.jsx](./frontend/src/components/migration/VmOsToCloudTransformationMap.jsx), [Case2AwsValidationView.jsx](./frontend/src/components/migration/Case2AwsValidationView.jsx) | Flujo visual completo en el wizard: generación de token e instalador, explorador de carpetas del servidor, progreso de staging por chunks, catálogo AWS Academy, mapa VM-a-Nube y panel de verificación remota contra la EC2 desplegada. |
 
 ---
 
@@ -97,7 +102,7 @@ Como CloudMove corre publicado en AWS para que distintos usuarios entren desde s
 
 ### 4.1 Token de inscripción de un solo uso y descarga dinámica
 
-Todo empieza cuando el usuario pide un token desde la UI (`POST /api/v1/agents/enrollment-tokens`). En [`transactional_db.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/persistence/transactional_db.py):
+Todo empieza cuando el usuario pide un token desde la UI (`POST /api/v1/agents/enrollment-tokens`). En [`transactional_db.py`](./backend/app/persistence/transactional_db.py):
 
 - Se genera una clave aleatoria `cmat_<32_bytes_urlsafe>`.
 - La base de datos **no guarda el token en texto plano**: almacena su hash SHA-256 en `agent_enrollment_tokens`, junto con `token_prefix` (los primeros 12 caracteres + `...`), `max_uses` (por defecto `1`) y `expires_at` (`ttl_seconds = 86400`, o sea 24 horas).
@@ -110,13 +115,13 @@ curl -sSL https://tu-servidor-cloudmove/api/v1/agents/install.sh | sudo bash -s 
 Al ejecutarse `install.sh` (servido dinámicamente por `GET /api/v1/agents/install.sh` con la URL del servidor validada por regex y escapada con `shlex.quote`), el script:
 1. Descarga el paquete Python actualizado desde `GET /api/v1/agents/bundle.tar.gz` hacia `/opt/cloudmove-agent/cloudmove_agent`.
 2. Lee la IP primaria real, el hostname (`platform.node()` / `socket.gethostname()`) y el `/etc/machine-id` si existe.
-3. Llama a `POST /api/v1/agents/enroll` enviando el `enrollment_token` y declarando `version: "2.2.0"`. Si usas Windows, existe el equivalente [install.ps1](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/install.ps1), y para instalaciones manuales en Python está [`installer.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/installer.py).
+3. Llama a `POST /api/v1/agents/enroll` enviando el `enrollment_token` y declarando `version: "2.2.0"`. Si usas Windows, existe el equivalente [install.ps1](./cloudmove_agent/install.ps1), y para instalaciones manuales en Python está [`installer.py`](./cloudmove_agent/installer.py).
 
 ### 4.2 Credenciales del agente y endurecimiento con `systemd`
 
 Cuando el backend verifica el hash SHA-256 del token y comprueba que no venció ni superó `max_uses`, registra el equipo en la tabla `agents` y le entrega un `agent_id` y una llave `agent_api_key` permanente (revocable en cualquier momento).
 
-El instalador guarda esa configuración en `/etc/cloudmove/agent.conf` con permisos `chmod 600` (y `heartbeat_interval = 10`, aunque el constructor de [`CloudMoveAgentDaemon`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/agent_daemon.py#L93-L108) toma `20` segundos si se ejecuta directo sin archivo de configuración). Además, registra el servicio `/etc/systemd/system/cloudmove-agent.service` con dos protecciones del propio kernel Linux vía `systemd`:
+El instalador guarda esa configuración en `/etc/cloudmove/agent.conf` con permisos `chmod 600` (y `heartbeat_interval = 10`, aunque el constructor de [`CloudMoveAgentDaemon`](./cloudmove_agent/agent_daemon.py#L93-L108) toma `20` segundos si se ejecuta directo sin archivo de configuración). Además, registra el servicio `/etc/systemd/system/cloudmove-agent.service` con dos protecciones del propio kernel Linux vía `systemd`:
 
 - `NoNewPrivileges=true`
 - `ProtectSystem=full` (monta `/usr`, `/boot` y `/etc` en modo solo lectura para el servicio)
@@ -124,12 +129,12 @@ El instalador guarda esa configuración en `/etc/cloudmove/agent.conf` con permi
 
 ### 4.3 Aislamiento del plano de control (`is_control_plane_agent`)
 
-Aquí hay una regla crítica de seguridad multiusuario que vive en [`security.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/core/security.py#L186-L273). Imagina que alguien prueba CloudMove en línea desde AWS y no instaló ningún agente todavía. Sin una barrera clara, una llamada a `/use-case-2/probe-devices` o a `/api/v1/agents/live-discovery` podría terminar leyendo los discos o el `/home` de la propia instancia EC2 donde está alojado CloudMove.
+Aquí hay una regla crítica de seguridad multiusuario que vive en [`security.py`](./backend/app/core/security.py#L186-L273). Imagina que alguien prueba CloudMove en línea desde AWS y no instaló ningún agente todavía. Sin una barrera clara, una llamada a `/use-case-2/probe-devices` o a `/api/v1/agents/live-discovery` podría terminar leyendo los discos o el `/home` de la propia instancia EC2 donde está alojado CloudMove.
 
 Para impedir eso por diseño:
 - `get_control_plane_metadata()` consulta de forma dinámica al arrancarse el servicio **EC2 IMDSv2** (`http://169.254.169.254/latest/api/token` con timeout de `0.25s`) para conocer su propio `instance-id`, `public-ipv4` y `local-ipv4`, y los combina con variables de entorno opcionales (`CLOUDMOVE_PROTECTED_INSTANCE_IDS`, `CLOUDMOVE_PROTECTED_VPC_IDS`, `CLOUDMOVE_CONTROL_PLANE_IPS`, `CLOUDMOVE_CONTROL_PLANE_HOSTS` y `CLOUDMOVE_API_URL`).
 - `is_control_plane_agent(agent)` devuelve `True` si el hostname coincide con nombres reservados (`cloudmove-server`, `localhost`, `127.0.0.1`, el host de la API), si tiene forma de ID de contenedor Docker (`[0-9a-f]{12}`), o si su IP coincide con las protegidas.
-- Tanto `probe_live_storage_devices()` como `_find_active_remote_agent()` en [`uc2_staging.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/uc2_staging.py#L551-L567) y los endpoints de descubrimiento filtran fuera cualquier agente del plano de control. Si no hay un agente remoto externo en línea, `probe_live_storage_devices` responde `requires_agent_enrollment: True` y no expone nada del servidor central.
+- Tanto `probe_live_storage_devices()` como `_find_active_remote_agent()` en [`uc2_staging.py`](./backend/app/migration/uc2_staging.py#L551-L567) y los endpoints de descubrimiento filtran fuera cualquier agente del plano de control. Si no hay un agente remoto externo en línea, `probe_live_storage_devices` responde `requires_agent_enrollment: True` y no expone nada del servidor central.
 
 ### 4.4 Heartbeat, protección anti-replay y secuencia de trabajo
 
@@ -182,11 +187,11 @@ sequenceDiagram
 
 ### 4.5 Lista blanca cerrada de acciones y qué recolecta `system_collector.py`
 
-Por política de seguridad, **el agente rechaza cualquier orden arbitraria de shell**. Tanto el backend al crear tareas (`create_agent_task` en [`transactional_db.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/persistence/transactional_db.py#L1218-L1233)) como el daemon al recibirlas (`_execute_single_task` en [`agent_daemon.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/agent_daemon.py#L223-L244)) exigen que `action` esté dentro de la lista permitida:
+Por política de seguridad, **el agente rechaza cualquier orden arbitraria de shell**. Tanto el backend al crear tareas (`create_agent_task` en [`transactional_db.py`](./backend/app/persistence/transactional_db.py#L1218-L1233)) como el daemon al recibirlas (`_execute_single_task` en [`agent_daemon.py`](./cloudmove_agent/agent_daemon.py#L223-L244)) exigen que `action` esté dentro de la lista permitida:
 
 | Acción permitida | Qué hace en el host |
 | :--- | :--- |
-| `collect_inventory` | Ejecuta `collect_system_inventory()` de [`system_collector.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/system_collector.py#L677-L740) y sube el resultado a `POST /api/v1/agents/{agent_id}/inventory`. |
+| `collect_inventory` | Ejecuta `collect_system_inventory()` de [`system_collector.py`](./cloudmove_agent/system_collector.py#L677-L740) y sube el resultado a `POST /api/v1/agents/{agent_id}/inventory`. |
 | `inspect_disk` | Revisa geometría de discos, particiones, tamaños y UUIDs con `collect_disks_and_mounts()`. |
 | `check_mgn_prerequisites` | Prueba conectividad TCP saliente hacia `mgn.<region>.amazonaws.com:443` sin simular éxito si hay bloqueo de firewall. |
 | `quiesce_database` / `unquiesce_database` | Llama a `libc.sync()` de forma segura para vaciar búferes pendientes a disco antes de una captura. |
@@ -195,7 +200,7 @@ Por política de seguridad, **el agente rechaza cualquier orden arbitraria de sh
 | `self_update` | Descarga `GET /api/v1/agents/bundle.tar.gz`, actualiza el código del paquete y termina limpio para que `systemd` reinicie la nueva versión. |
 | `install_mgn_agent` / `capture_live_os` | Reservadas en esquema/política: el daemon remoto actual delega la captura de archivos en `stage_selected_paths` y rechaza acciones fuera de su bloque permitido. |
 
-Cuando corre `collect_system_inventory()`, [`system_collector.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/system_collector.py#L631-L740) marca el paquete con `"evidence_provenance": "observed_by_cloudmove_agent"` y reúne:
+Cuando corre `collect_system_inventory()`, [`system_collector.py`](./cloudmove_agent/system_collector.py#L631-L740) marca el paquete con `"evidence_provenance": "observed_by_cloudmove_agent"` y reúne:
 - Identidad estable (`hostname` real y `machine_id`), familia de SO, arquitectura y versión del kernel.
 - CPU, RAM (`/proc/meminfo`) y discos/particiones (`lsblk` + puntos de montaje).
 - Interfaces de red, puertos escuchando, servicios de `systemd` (hasta `120`), procesos activos (hasta `80`), runtimes detectados (`python3`, `node`, `java`, `go`, `docker`) y bases de datos locales.
@@ -209,7 +214,7 @@ Si el usuario sube o apunta a una imagen de disco (`.vmdk`, `.qcow2`, `.vhd`, `.
 
 ### 5.1 Lectura de cabeceras reales (*magic bytes*) y detección de stubs falsos
 
-En [`uc2_live_probe.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/uc2_live_probe.py#L62-L207), `inspect_binary_disk_header_and_structure(path)` lee únicamente los primeros `4096` bytes (`header`) y un bloque de muestra de `262144` bytes (256 KiB) para confirmar que la imagen es real y no un archivo de texto disfrazado:
+En [`uc2_live_probe.py`](./backend/app/migration/uc2_live_probe.py#L62-L207), `inspect_binary_disk_header_and_structure(path)` lee únicamente los primeros `4096` bytes (`header`) y un bloque de muestra de `262144` bytes (256 KiB) para confirmar que la imagen es real y no un archivo de texto disfrazado:
 
 | Formato | Firma / Bytes inspeccionados | Qué extrae o valida |
 | :--- | :--- | :--- |
@@ -237,13 +242,13 @@ Una imagen de disco virtual puede declarar 50 GiB virtuales pero ocupar solo uno
 
 Cuando el usuario no parte de un `.vmdk` offline sino de su servidor vivo conectado mediante `cloudmove-agent`, entran en juego dos piezas distintas:
 
-1. **Captura de metadatos e imagen de sistema (`capture_live_operating_system`)** en [`uc2_live_probe.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/uc2_live_probe.py#L1285-L1760):
+1. **Captura de metadatos e imagen de sistema (`capture_live_operating_system`)** en [`uc2_live_probe.py`](./backend/app/migration/uc2_live_probe.py#L1285-L1760):
    - Llama primero a `probe_live_storage_devices(agent_id=...)` —que exige un agente remoto enrolado, protegiendo el plano de control—.
    - Ejecuta `os.sync()` para dejar el snapshot en estado `application_quiesced_snapshot`.
    - Crea la imagen base con `qemu-img create` (o escribe cabecera binaria `QFI\xfb` / MBR+GPT real si `qemu-img` no está presente en el entorno).
    - Recolecta `/etc/passwd` (`_probe_real_users`), interfaces de red (`ip -j addr`), paquetes instalados, procesos y puertos en escucha, tareas programadas, servicios `systemd` y configuraciones clave en `/etc/` (`/etc/os-release`, `/etc/fstab`, `/etc/hostname`, `/etc/hosts`, `/etc/resolv.conf`, `/etc/default/grub`, `/etc/sysctl.conf`, `/etc/security/limits.conf`, `/etc/environment`, `/etc/ssh/sshd_config` y overrides en `/etc/systemd/system/*.service`), empaquetándolo en `system_image_snapshot_<host>.tar.gz`.
 
-2. **Staging de carpetas y archivos reales elegidos por el usuario ([`uc2_staging.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/uc2_staging.py))**:
+2. **Staging de carpetas y archivos reales elegidos por el usuario ([`uc2_staging.py`](./backend/app/migration/uc2_staging.py))**:
    AWS EC2 limita `user_data` a **16,384 bytes**. Obviamente ahí no caben 500 MB o 4 GB de carpetas de `/home/usuario` o `/var/www`. Para superar ese límite sin perder archivos reales, CloudMove soporta dos caminos:
 
    - **Desde el agente v2.2.0+ (`stage_selected_paths`)**:
@@ -256,7 +261,7 @@ Cuando el usuario no parte de un `.vmdk` offline sino de su servidor vivo conect
      6. En el backend, `commit_stage_archive()` concatena los fragmentos, verifica que el SHA-256 coincida, recorre el `.tar.gz` con `_inspect_and_validate_tarball()` aplicando `_safe_rel_path()` para bloquear intentos de *Path Traversal / Tar-Slip* (`..`), respeta un tope por stage (`DEFAULT_MAX_STAGE_BYTES = 15 GiB`) y reserva al menos `MIN_FREE_DISK_BYTES = 4 GiB` libres en el disco del servidor CloudMove (`prune_old_stages(keep_latest=3)` borra stages viejos automáticamente).
 
    - **Desde el navegador (`browser_upload`)**:
-     Si el usuario selecciona una carpeta local directamente en [`UserFileSelectionPanel.jsx`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/src/components/migration/UserFileSelectionPanel.jsx) y [`Uc2StageTransferBox.jsx`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/src/components/migration/Uc2StageTransferBox.jsx), el frontend inicializa una sesión (`POST /uc2-stage/init`), manda lotes en JSON/Base64 (`POST /uc2-stage/{stage_id}/upload-files`) y cierra con `POST /uc2-stage/{stage_id}/commit`, generando un `bundle.tar.gz` idéntico listo para la instancia EC2.
+     Si el usuario selecciona una carpeta local directamente en [`UserFileSelectionPanel.jsx`](./frontend/src/components/migration/UserFileSelectionPanel.jsx) y [`Uc2StageTransferBox.jsx`](./frontend/src/components/migration/Uc2StageTransferBox.jsx), el frontend inicializa una sesión (`POST /uc2-stage/init`), manda lotes en JSON/Base64 (`POST /uc2-stage/{stage_id}/upload-files`) y cierra con `POST /uc2-stage/{stage_id}/commit`, generando un `bundle.tar.gz` idéntico listo para la instancia EC2.
 
    - **Modo empuje directo a EC2 (`push_selected_paths_to_ec2`)**:
      Si el volumen de archivos supera el presupuesto disponible en el servidor CloudMove (por ejemplo hasta `24,000` MiB o `1024` MiB por archivo), `dispatch_push_to_ec2()` instruye al agente para transmitir los chunks de `1 MiB` directamente al puerto `3000` de la nueva EC2 (`POST /upload-chunk` + `POST /upload-commit`) usando `X-CloudMove-Sync-Token` una vez que la máquina ya arrancó en AWS.
@@ -265,7 +270,7 @@ Cuando el usuario no parte de un `.vmdk` offline sino de su servidor vivo conect
 
 ## 7. Validación de compatibilidad, bloqueadores, correcciones y las 8 dimensiones de fidelidad
 
-Con el manifiesto en mano (sea de una imagen offline o de captura en vivo), `evaluate_vm_image_compatibility()` en [`image_migrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/image_migrator.py#L315-L525) audita la migración antes de generar infraestructura.
+Con el manifiesto en mano (sea de una imagen offline o de captura en vivo), `evaluate_vm_image_compatibility()` en [`image_migrator.py`](./backend/app/migration/image_migrator.py#L315-L525) audita la migración antes de generar infraestructura.
 
 ### 7.1 Los 4 bloqueadores que detienen la migración
 
@@ -274,7 +279,7 @@ Con el manifiesto en mano (sea de una imagen offline o de captura en vivo), `eva
 3. **Conjunto multi-disco incompleto (`missing_disk_files`)**: si la VM tiene disco de sistema y disco de datos (como `/dev/sda` + `/dev/sdb`) y falta alguno de los archivos.
 4. **Exigencia de memoria RAM volátil en caliente (`require_live_memory_state=True`)**: porque la importación de disco ni la captura en vivo transfieren páginas activas de RAM ni descriptores de sockets abiertos.
 
-Si una migración cae en estado `FAILED` por `require_live_memory_state`, el operador o el frontend puede disparar `POST /api/v1/migration/jobs/{migration_id}/remediate-blocker` (atendido por `remediate_compatibility_blocker()` en [`orchestrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/orchestrator.py#L977-L1031)) eligiendo:
+Si una migración cae en estado `FAILED` por `require_live_memory_state`, el operador o el frontend puede disparar `POST /api/v1/migration/jobs/{migration_id}/remediate-blocker` (atendido por `remediate_compatibility_blocker()` en [`orchestrator.py`](./backend/app/migration/orchestrator.py#L977-L1031)) eligiendo:
 - `apply_quiesced_snapshot`: adopta snapshot consistente *quiesced* (`sync()` + reinicio limpio de servicios en la nube).
 - `switch_continuous_replication`: activa `prefer_continuous_replication=True` para orquestar vía AWS MGN cuando el origen es compatible.
 
@@ -293,7 +298,7 @@ Sin tocar el disco origen, `evaluate_vm_image_compatibility()` programa cuatro a
 
 ### 7.3 Las 8 dimensiones de fidelidad y reporte Origen vs. Destino
 
-Cada inspección devuelve la matriz de **8 dimensiones** y un reporte detallado (`generate_source_vs_target_diff_report()` en [`image_migrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/image_migrator.py#L1177-L1273)) con `"declares_absolute_hardware_equivalence": false`, dejando claro qué es idéntico y qué se adapta por naturaleza al pasar a AWS:
+Cada inspección devuelve la matriz de **8 dimensiones** y un reporte detallado (`generate_source_vs_target_diff_report()` en [`image_migrator.py`](./backend/app/migration/image_migrator.py#L1177-L1273)) con `"declares_absolute_hardware_equivalence": false`, dejando claro qué es idéntico y qué se adapta por naturaleza al pasar a AWS:
 
 1. **Contenido de discos y esquema de particiones** -> `EXACT_MATCH` (bloque a bloque + SHA-256).
 2. **Sistemas de archivos y puntos de montaje** -> `EXACT_MATCH` (por `UUID=` aunque el bus cambie de `/dev/sd*` a `/dev/nvme*`).
@@ -310,7 +315,7 @@ Cada inspección devuelve la matriz de **8 dimensiones** y un reporte detallado 
 
 ### 8.1 Matriz oficial AWS: MGN vs. VM Import/Export vs. Rehidratación Autónoma
 
-En [`replication_and_import.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/replication_and_import.py#L39-L185), `select_machine_migration_strategy()` decide con base en la tabla `MACHINE_MIGRATION_COMPATIBILITY_MATRIX["aws"]`:
+En [`replication_and_import.py`](./backend/app/migration/replication_and_import.py#L39-L185), `select_machine_migration_strategy()` decide con base en la tabla `MACHINE_MIGRATION_COMPATIBILITY_MATRIX["aws"]`:
 
 - **`aws_mgn` (AWS Application Migration Service)**: elegida cuando `prefer_continuous_replication=True` **y** el origen es un servidor vivo o VM de hipervisor (`live_server`, `hypervisor_vm`, `datacenter_host`) Linux o Windows en `x86_64` / `arm64`. Requiere TCP `443` hacia `mgn.<region>.amazonaws.com` y TCP `1500` hacia instancias de replicación en la subred de staging. Nunca aplica para un archivo `.vmdk`/`.qcow2` suelto sin máquina activa (`standalone_offline_disk_image`).
 - **`aws_vm_import` (`ec2:ImportImage` / `ec2:ImportSnapshot`)**: vía oficial para imágenes en frío (`VMDK`, `VHD`, `VHDX`, `RAW`, `OVA`). Sube el disco a Amazon S3 y usa `AWSMachineMigrationClient` (`boto3` `s3` + `ec2`) exigiendo el rol IAM `vmimport` con política de confianza hacia `vmie.amazonaws.com`.
@@ -318,12 +323,12 @@ En [`replication_and_import.py`](file:///home/lacastrilp/Documentos/Semestre_202
 
 ### 8.2 Catálogo interactivo y las 4 protecciones preventivas para AWS Academy
 
-`build_vm_image_transformation_catalog()` ([`image_migrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/image_migrator.py#L553-L815)) presenta al operador opciones editables —tamaño de volumen EBS (`free_tier_t3_micro` 30 GiB, 100 GiB o tamaño original), modo de cómputo (`autonomous_cloud_init`, `native_ami_vm_import`, `ha_launch_template_asg`), perfil de instancia (`t3.micro`, `t3.medium`, `t3.xlarge`) y política de puertos— y aplica automáticamente **cuatro protecciones reales** contra fallos típicos al desplegar en AWS Academy (`Pvoclabs2`):
+`build_vm_image_transformation_catalog()` ([`image_migrator.py`](./backend/app/migration/image_migrator.py#L553-L815)) presenta al operador opciones editables —tamaño de volumen EBS (`free_tier_t3_micro` 30 GiB, 100 GiB o tamaño original), modo de cómputo (`autonomous_cloud_init`, `native_ami_vm_import`, `ha_launch_template_asg`), perfil de instancia (`t3.micro`, `t3.medium`, `t3.xlarge`) y política de puertos— y aplica automáticamente **cuatro protecciones reales** contra fallos típicos al desplegar en AWS Academy (`Pvoclabs2`):
 
 1. **Límite de tamaño EBS (`Pvoclabs2 <= 100 GiB`)**: un portátil o servidor físico suele tener discos de `250 GiB`, `465 GiB` o `120 GiB`. En AWS Academy, pedir un `aws_ebs_volume` o `root_block_device` mayor a 100 GiB falla al instante con `403 UnauthorizedOperation` en `ec2:CreateVolume`. CloudMove aprovisiona por defecto `30 GiB gp3` cifrado (Free Tier) o hasta `100 GiB` si el usuario lo elige, guardando siempre la capacidad real del origen en la etiqueta `Source_Capacity_GiB`.
 2. **Deduplicación del puerto `22` en Security Groups**: un escaneo real (`ss -tulpn`) detecta `sshd` en el puerto `22`. Si se vuelve a agregar el puerto `22` aparte de la regla fija de administración SSH, AWS rechaza la creación con `InvalidParameterValue` por regla duplicada. El catálogo deduplica el `22` y filtra puertos efímeros `>= 32768`, dejando un máximo de 15 puertos limpios.
 3. **Bypass del rol IAM `vmimport`**: como `iam:CreateRole` está restringido en Learner Lab, `enable_vm_import` arranca en `false` para no fallar creando roles ni importando snapshots si el usuario no proporcionó un bucket S3 con `vmimport` preconfigurado.
-4. **Compresión y recorte para el límite de `16,384` bytes en `user_data`**: EC2 rechaza `RunInstances` si `user_data` supera 16 KB. CloudMove usa `base64gzip` en Terraform **y** ejecuta en [`uc2_rehydration_portal.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/uc2_rehydration_portal.py#L590-L638) un recorte progresivo en **3 pasadas** garantizando que el script comprimido pese `<= 15800` bytes:
+4. **Compresión y recorte para el límite de `16,384` bytes en `user_data`**: EC2 rechaza `RunInstances` si `user_data` supera 16 KB. CloudMove usa `base64gzip` en Terraform **y** ejecuta en [`uc2_rehydration_portal.py`](./backend/app/migration/uc2_rehydration_portal.py#L590-L638) un recorte progresivo en **3 pasadas** garantizando que el script comprimido pese `<= 15800` bytes:
    - *Pasada 1*: incrusta manifiesto completo + hasta `40` archivos clave de `/etc` (excluyendo `/etc/ssh/sshd_config` o claves), hasta `10 KB` de texto si cabe.
    - *Pasada 2*: si al comprimir pasa de `15800` bytes, conserva el resumen del sistema pero recorta los listados largos (`running_processes`, `installed_packages`, `filesystem_tree`) y deja hasta `15` archivos críticos.
    - *Pasada 3*: si aún excede, comprime un manifiesto mínimo de identidad (`image_id`, `hostname`, `stage_id`, `sync_token`) y delega el grueso de archivos al paquete staged descargado por HTTP tras el arranque.
@@ -334,7 +339,7 @@ En [`replication_and_import.py`](file:///home/lacastrilp/Documentos/Semestre_202
 
 ### 9.1 Nodos y relaciones del CMIR v2.1 (`build_vm_image_cmir`)
 
-Antes de escribir HCL, `build_vm_image_cmir()` ([`image_migrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/image_migrator.py#L914-L1127)) construye un grafo neutral respecto al proveedor:
+Antes de escribir HCL, `build_vm_image_cmir()` ([`image_migrator.py`](./backend/app/migration/image_migrator.py#L914-L1127)) construye un grafo neutral respecto al proveedor:
 
 - **Nodo `machine_image`**: representa la imagen o captura completa (`img-{slug}`), con `boot_mode`, `partition_scheme`, `os`, `sha256`, `stage_id` y la bandera `enable_vm_import_default`.
 - **Nodo `virtual_machine`**: representa el servidor destino (`vm-{slug}`), enlazado por `migrates_to`, con `root_volume_size_gb`, puertos de entrada seleccionados y perfil de instancia.
@@ -343,7 +348,7 @@ Antes de escribir HCL, `build_vm_image_cmir()` ([`image_migrator.py`](file:///ho
 
 ### 9.2 Traducción a Terraform (`AWSAdapter` + `generators/terraform.py`)
 
-El [`AWSAdapter`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/aws_adapter.py#L13-L40) mapea `virtual_machine -> aws_instance`, `machine_image -> aws_ami` y `disk -> aws_ebs_volume`. Luego [`terraform.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/generators/terraform.py#L673-L920) genera los recursos reales listos para aplicar:
+El [`AWSAdapter`](./backend/app/adapters/aws_adapter.py#L13-L40) mapea `virtual_machine -> aws_instance`, `machine_image -> aws_ami` y `disk -> aws_ebs_volume`. Luego [`terraform.py`](./backend/app/generators/terraform.py#L673-L920) genera los recursos reales listos para aplicar:
 
 ```hcl
 resource "aws_instance" "vm_debian12_erp_prod" {
@@ -399,7 +404,7 @@ Además, si `enable_vm_import = true` y especificas `vm_import_s3_bucket`, Terra
 
 ## 10. Arranque en EC2: rehidratación automática y portal web en vivo
 
-Una vez Terraform crea la instancia EC2, AWS ejecuta `user_data.sh` (construido por [`uc2_rehydration_portal.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/uc2_rehydration_portal.py#L23-L638)) y guarda su bitácora en `/var/log/cloudmove-os-bootstrap.log`. En orden, el script hace cinco cosas concretas:
+Una vez Terraform crea la instancia EC2, AWS ejecuta `user_data.sh` (construido por [`uc2_rehydration_portal.py`](./backend/app/migration/uc2_rehydration_portal.py#L23-L638)) y guarda su bitácora en `/var/log/cloudmove-os-bootstrap.log`. En orden, el script hace cinco cosas concretas:
 
 1. **Siembra base en `/opt/cloudmove/os_capture/`**:
    Escribe `image_manifest.json`, `os_files_map.json`, genera `/opt/cloudmove/os_capture/sync_token` (`chmod 600`), extrae los archivos incrustados bajo `/opt/cloudmove/os_capture/rootfs` (protegidos con `os.path.realpath()` contra *path traversal*), empaqueta `os_real_files_bundle.tar.gz`, aplica `sysctl` y crea los usuarios del servidor origen (`useradd -m -s /bin/bash`).
@@ -425,7 +430,7 @@ Una vez Terraform crea la instancia EC2, AWS ejecuta `user_data.sh` (construido 
 
 ## 11. Máquina de estados, control optimista y etapas del trabajo
 
-El motor de migración en [`orchestrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/orchestrator.py#L9-L100) usa exactamente la misma máquina de estados transaccional para Caso 1 y Caso 2, pero en UC2 aparece un desvío clave cuando un bloqueador de disco/RAM detiene la evaluación y luego se remedia:
+El motor de migración en [`orchestrator.py`](./backend/app/migration/orchestrator.py#L9-L100) usa exactamente la misma máquina de estados transaccional para Caso 1 y Caso 2, pero en UC2 aparece un desvío clave cuando un bloqueador de disco/RAM detiene la evaluación y luego se remedia:
 
 ```mermaid
 stateDiagram-v2
@@ -449,13 +454,13 @@ Para evitar condiciones de carrera si dos pestañas o dos operadores disparan el
 - **Lock atómico por etapa (`acquire_stage_lock`)**: impide correr dos veces en paralelo la misma etapa (`StageLockedError`).
 - **Llaves de idempotencia (`idempotency_key`)**: si una etapa falla a mitad de camino y se reintenta, no duplica recursos en AWS.
 
-En concreto, `build_vm_image_migration_stages()` ([`image_migrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/image_migrator.py#L1129-L1176)) estructura el trabajo de Caso 2 en **13 etapas encadenadas** (`uc2-stage-01` hasta `uc2-stage-13`), cada una configurada con `max_retries = 3` y un punto de recuperación propio (`checkpoint-uc2-stage-XX`) que recorre inspección de origen, cálculo SHA-256 y staging, remediación de boot/drivers, compilación CMIR/Terraform, aprovisionamiento en la nube, arranque con rehidratación y comprobación final en vivo.
+En concreto, `build_vm_image_migration_stages()` ([`image_migrator.py`](./backend/app/migration/image_migrator.py#L1129-L1176)) estructura el trabajo de Caso 2 en **13 etapas encadenadas** (`uc2-stage-01` hasta `uc2-stage-13`), cada una configurada con `max_retries = 3` y un punto de recuperación propio (`checkpoint-uc2-stage-XX`) que recorre inspección de origen, cálculo SHA-256 y staging, remediación de boot/drivers, compilación CMIR/Terraform, aprovisionamiento en la nube, arranque con rehidratación y comprobación final en vivo.
 
 ---
 
 ## 12. Caso práctico real: `debian12-erp-prod` y flujo con agente
 
-En la carpeta [`inventory/sample_images/debian12-erp-prod.manifest.json`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/inventory/sample_images/debian12-erp-prod.manifest.json) tienes el caso de prueba real que usamos como referencia en los tests y demos del Caso 2. Resumido al grano, este es el sistema origen:
+En la carpeta [`inventory/sample_images/debian12-erp-prod.manifest.json`](./inventory/sample_images/debian12-erp-prod.manifest.json) tienes el caso de prueba real que usamos como referencia en los tests y demos del Caso 2. Resumido al grano, este es el sistema origen:
 
 - **Sistema**: `Debian GNU/Linux 12 (bookworm)` con kernel `6.1.0-18-amd64`, firmware `UEFI`, tabla `GPT` y gestor `GRUB2 (2.06-13+deb12u1)`.
 - **Cómputo y drivers ya instalados**: `4` vCPUs, `16384` MiB de RAM (`16 GiB`), drivers `virtio_blk`, `virtio_scsi`, `virtio_net`, `virtio_pci`, `nvme`, `nvme_core`, `ena` y `gvnic`.
@@ -504,7 +509,7 @@ Y si en vez de un archivo offline estás usando el agente v2.2.0+, ese llamado r
 
 ### 13.1 Endpoints de gestión y protocolo del agente (`/api/v1/agents/*`)
 
-Definidos en [`backend/app/api/routers/agents.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/api/routers/agents.py):
+Definidos en [`backend/app/api/routers/agents.py`](./backend/app/api/routers/agents.py):
 
 | Método | Ruta | Quién la llama | Qué hace |
 | :--- | :--- | :--- | :--- |
@@ -528,7 +533,7 @@ Definidos en [`backend/app/api/routers/agents.py`](file:///home/lacastrilp/Docum
 
 ### 13.2 Endpoints del Caso de Uso 2 (`/api/v1/migration/*`)
 
-Definidos en [`backend/app/api/routers/migration_uc2.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/api/routers/migration_uc2.py):
+Definidos en [`backend/app/api/routers/migration_uc2.py`](./backend/app/api/routers/migration_uc2.py):
 
 | Método | Ruta | Quién la llama | Qué hace |
 | :--- | :--- | :--- | :--- |

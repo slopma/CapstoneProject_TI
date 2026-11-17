@@ -1,6 +1,6 @@
 # CloudMove Agent — Informe Técnico Detallado de Arquitectura, Mensajería, Operación Interna y Desinstalación
 
-Este documento explica en detalle cómo funciona el **Agente de CloudMove** ([`cloudmove_agent/`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent)): cómo se instala y autentica contra la plataforma central, cómo funciona su protocolo de mensajería (peticiones, respuestas, cabeceras criptográficas y *polling* de tareas), qué hace exactamente dentro del computador local o servidor remoto, qué archivos crea en el sistema operativo y cómo se revoca y desinstala sin dejar rastro.
+Este documento explica en detalle cómo funciona el **Agente de CloudMove** ([`cloudmove_agent/`](.)): cómo se instala y autentica contra la plataforma central, cómo funciona su protocolo de mensajería (peticiones, respuestas, cabeceras criptográficas y *polling* de tareas), qué hace exactamente dentro del computador local o servidor remoto, qué archivos crea en el sistema operativo y cómo se revoca y desinstala sin dejar rastro.
 
 ---
 
@@ -33,14 +33,14 @@ Este documento explica en detalle cómo funciona el **Agente de CloudMove** ([`c
 
 ## 1. Visión General y los 2 Modos de Operación del Agente
 
-Un navegador web, por restricciones de aislamiento (*sandbox*) de seguridad, no tiene acceso directo a la tabla de particiones físicas, sockets del kernel, procesos del sistema ni demonios locales de una máquina. El paquete **[`cloudmove_agent/`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent)** resuelve esto actuando como un **puente local auditado, de solo lectura y con capacidades acotadas por lista blanca** entre el computador/servidor de origen y el backend de CloudMove.
+Un navegador web, por restricciones de aislamiento (*sandbox*) de seguridad, no tiene acceso directo a la tabla de particiones físicas, sockets del kernel, procesos del sistema ni demonios locales de una máquina. El paquete **[`cloudmove_agent/`](.)** resuelve esto actuando como un **puente local auditado, de solo lectura y con capacidades acotadas por lista blanca** entre el computador/servidor de origen y el backend de CloudMove.
 
 El paquete del agente está diseñado para operar en **dos modos complementarios** según la necesidad del usuario:
 
 | Característica | Modo 1: Demonio de Producción (`agent_daemon.py`) | Modo 2: Puente Local Interactivo + `osquery` Portable (`app.py`) |
 | :--- | :--- | :--- |
-| **Propósito Principal** | Monitoreo continuo de servidores on-premise/VMs, envío periódico de *heartbeats* de salud y ejecución de órdenes remotas de migración (Caso 2 y Caso 3). | Descubrimiento inmediato del PC local desde el asistente web de CloudMove sin necesidad de permisos `root`/`sudo`. |
-| **Archivo Principal** | [`cloudmove_agent/agent_daemon.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/agent_daemon.py) y [`cloudmove_agent/installer.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/installer.py) | [`cloudmove_agent/app.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/app.py), [`cloudmove_agent/osquery_installer.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/osquery_installer.py) y [`cloudmove_osquery_export.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_osquery_export.py) |
+| **Propósito Principal** | Monitoreo continuo de servidores on-premise/VMs, envío periódico de *heartbeats* de salud y ejecución de órdenes remotas de migración (Caso 2). | Descubrimiento inmediato del PC local desde el asistente web de CloudMove sin necesidad de permisos `root`/`sudo`. |
+| **Archivo Principal** | [`cloudmove_agent/agent_daemon.py`](./agent_daemon.py) y [`cloudmove_agent/installer.py`](./installer.py) | [`cloudmove_agent/app.py`](./app.py), [`cloudmove_agent/osquery_installer.py`](./osquery_installer.py) y [`cloudmove_osquery_export.py`](../cloudmove_osquery_export.py) |
 | **Cómo se Ejecuta** | Como servicio de sistema en segundo plano (`systemd`: `cloudmove-agent.service`) o proceso continuo `python3 -m cloudmove_agent.agent_daemon`. | Como microservicio local en el puerto `8001` (`uvicorn cloudmove_agent.app:app --port 8001`) o script CLI. |
 | **Dirección de Red** | **100% Saliente (*Outbound-Only*)**: el agente inicia todas las conexiones HTTP/HTTPS hacia `/api/v1/agents/*` cada 20 segundos. No abre ningún puerto entrante. | Escucha localmente en `127.0.0.1:8001` (con CORS restringido a `localhost`) y sube el inventario a `/api/v1/discovery/osquery`. |
 | **Privilegios Requeridos** | `root` / `sudo` (para registrar `systemd` e inspeccionar dispositivos de bloque físicos). Soportado también en modo usuario (`--no-service`). | **No requiere `root` ni `sudo`**: descarga `osquery` portable en `~/.local/share/cloudmove/osquery` y ejecuta con `--allow-non-root`. |
@@ -49,14 +49,14 @@ El paquete del agente está diseñado para operar en **dos modos complementarios
 
 ## 2. Instalación y Enrolamiento Paso a Paso: ¿Cómo Conecta el Computador con CloudMove?
 
-El proceso de conexión entre el computador local y el backend de CloudMove utiliza un **esquema de autenticación en dos etapas** (implementado en [`backend/app/api/routers/agents.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/api/routers/agents.py) y [`backend/app/persistence/transactional_db.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/persistence/transactional_db.py#L1208-L1389)):
+El proceso de conexión entre el computador local y el backend de CloudMove utiliza un **esquema de autenticación en dos etapas** (implementado en [`backend/app/api/routers/agents.py`](../backend/app/api/routers/agents.py) y [`backend/app/persistence/transactional_db.py`](../backend/app/persistence/transactional_db.py#L1208-L1389)):
 1. Un **Token de Inscripción Efímero (`cmat_...`)** de tiempo y número de usos limitados para autorizar el alta inicial.
 2. Una **Llave de API Permanente por Agente (`cma_...`)** emitida únicamente tras validar el token de inscripción y vinculada al identificador de hardware (`machine_id`) del equipo.
 
 ### 2.1 Fase 1: Generación del Token Efímero de Inscripción (`cmat_...`)
 
 1. El operador solicita en la interfaz de CloudMove (o mediante `POST /api/v1/agents/enrollment-tokens`) un nuevo token de inscripción.
-2. El método [`TransactionalDatabase.create_enrollment_token()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/persistence/transactional_db.py#L1208-L1255) genera un secreto criptográfico de 32 bytes de entropía:
+2. El método [`TransactionalDatabase.create_enrollment_token()`](../backend/app/persistence/transactional_db.py#L1208-L1255) genera un secreto criptográfico de 32 bytes de entropía:
    ```text
    cmat_<secrets.token_urlsafe(32)>
    ```
@@ -80,7 +80,7 @@ El proceso de conexión entre el computador local y el backend de CloudMove util
 
 ### 2.2 Fase 2: Descarga y Ejecución del Instalador (`install.sh` / `install.ps1` / `installer.py`)
 
-Cuando el usuario ejecuta el comando en su computador Linux ([`download_linux_installer()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/api/routers/agents.py#L241-L390) o [`cloudmove_agent/install.sh`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/install.sh)):
+Cuando el usuario ejecuta el comando en su computador Linux ([`download_linux_installer()`](../backend/app/api/routers/agents.py#L241-L390) o [`cloudmove_agent/install.sh`](./install.sh)):
 
 1. **Verificación de Entorno**: Comprueba que se esté ejecutando con permisos `root` (`$EUID -eq 0`) y que existan los binarios `python3`, `curl` y `tar`.
 2. **Creación de Estructura de Directorios**:
@@ -88,13 +88,13 @@ Cuando el usuario ejecuta el comando en su computador Linux ([`download_linux_in
    - `/etc/cloudmove`: donde se almacenará la credencial privada (`agent.conf`).
    - `/var/log/cloudmove`: donde se escribirá la bitácora local (`agent.log`).
 3. **Descarga en Vivo del Paquete (`GET /api/v1/agents/bundle.tar.gz`)**:
-   El servidor empaqueta al vuelo en memoria (`io.BytesIO` + `tarfile`) todos los módulos `.py`, `.sh` y `.service` del directorio [`cloudmove_agent/`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent) y el script los extrae en `/opt/cloudmove-agent/cloudmove_agent`.
+   El servidor empaqueta al vuelo en memoria (`io.BytesIO` + `tarfile`) todos los módulos `.py`, `.sh` y `.service` del directorio [`cloudmove_agent/`](.) y el script los extrae en `/opt/cloudmove-agent/cloudmove_agent`.
 
 ---
 
 ### 2.3 Fase 3: Cálculo de la Identidad Hardware Estable (`machine_id`) y Canje por la `Bearer API Key` (`cma_...`)
 
-Antes de conectarse al endpoint de enrolamiento, el instalador determina la **identidad única e inmutable de la máquina** ([`get_stable_machine_id()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/system_collector.py#L37-L67)):
+Antes de conectarse al endpoint de enrolamiento, el instalador determina la **identidad única e inmutable de la máquina** ([`get_stable_machine_id()`](./system_collector.py#L37-L67)):
 1. En **Linux**, lee en orden de prioridad:
    - `/etc/machine-id` (identificador de 128 bits generado en la instalación del SO).
    - `/var/lib/dbus/machine-id`.
@@ -103,7 +103,7 @@ Antes de conectarse al endpoint de enrolamiento, el instalador determina la **id
    - `HKLM:\SOFTWARE\Microsoft\Cryptography -> MachineGuid`.
 3. Si ninguno está disponible, construye un identificador determinista a partir de la dirección MAC física (`uuid.getnode()`).
 
-Con estos datos, el instalador envía `POST /api/v1/agents/enroll`. El backend ejecuta [`verify_and_consume_enrollment_token()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/persistence/transactional_db.py#L1276-L1304) y [`enroll_agent()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/persistence/transactional_db.py#L1306-L1373):
+Con estos datos, el instalador envía `POST /api/v1/agents/enroll`. El backend ejecuta [`verify_and_consume_enrollment_token()`](../backend/app/persistence/transactional_db.py#L1276-L1304) y [`enroll_agent()`](../backend/app/persistence/transactional_db.py#L1306-L1373):
 - Verifica que el `SHA-256` del `enrollment_token` exista, no esté revocado (`revoked = 0`), no haya expirado (`expires_at > now`) y que `uses_count < max_uses`.
 - Incrementa `uses_count`. Si alcanzó `max_uses`, marca automáticamente el token de inscripción como `revoked = 1` para que **nadie más pueda reutilizarlo**.
 - Calcula el `agent_id` de forma determinista:
@@ -118,7 +118,7 @@ Con estos datos, el instalador envía `POST /api/v1/agents/enroll`. El backend e
 ### 2.4 Fase 4: Persistencia Segura (`chmod 600`) y Registro del Demonio `systemd`
 
 Con el `agent_id` y la `agent_api_key` recibidos:
-1. Escribe el archivo `/etc/cloudmove/agent.conf` ([`write_agent_config()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/installer.py#L121-L143)):
+1. Escribe el archivo `/etc/cloudmove/agent.conf` ([`write_agent_config()`](./installer.py#L121-L143)):
    ```ini
    [agent]
    server_url = http://localhost:8000
@@ -136,15 +136,15 @@ Con el `agent_id` y la `agent_api_key` recibidos:
 
 ### 3.1 Arquitectura de Comunicación 100% Saliente (*Outbound-Only*)
 
-El demonio [`CloudMoveAgentDaemon`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/agent_daemon.py#L77-L370) nunca abre un socket `LISTEN` en la red del computador donde se instala. Toda la mensajería sigue un modelo **Pull / Outbound-Polling** sobre HTTP/HTTPS:
+El demonio [`CloudMoveAgentDaemon`](./agent_daemon.py#L77-L370) nunca abre un socket `LISTEN` en la red del computador donde se instala. Toda la mensajería sigue un modelo **Pull / Outbound-Polling** sobre HTTP/HTTPS:
 - Esto permite que el agente funcione detrás de firewalls corporativos, routers domésticos con NAT o subredes privadas sin necesidad de abrir puertos entrantes ni configurar redirección de puertos.
-- El bucle principal ([`run_forever()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/agent_daemon.py#L344-L366)) ejecuta un escaneo inicial de inventario al arrancar y luego, cada **20 segundos** (`heartbeat_interval`), envía un *heartbeat* y consulta si existen tareas pendientes para él.
+- El bucle principal ([`run_forever()`](./agent_daemon.py#L344-L366)) ejecuta un escaneo inicial de inventario al arrancar y luego, cada **20 segundos** (`heartbeat_interval`), envía un *heartbeat* y consulta si existen tareas pendientes para él.
 
 ---
 
 ### 3.2 Cabeceras HTTP de Autenticación y Protección Anti-Replay
 
-Cada petición HTTP enviada por el agente mediante [`_http_request()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/agent_daemon.py#L121-L156) incluye **5 cabeceras de seguridad**:
+Cada petición HTTP enviada por el agente mediante [`_http_request()`](./agent_daemon.py#L121-L156) incluye **5 cabeceras de seguridad**:
 
 ```http
 User-Agent: CloudMove-Agent/2.1
@@ -157,9 +157,9 @@ X-Agent-Nonce: 7f8c9a12b4e64d109c3a8b5e2f1d0a4c
 ```
 
 **¿Cómo valida el servidor cada mensaje entrante?**
-1. **Verificación Criptográfica de la API Key ([`_verify_agent_auth`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/api/routers/agents.py#L104-L118) y [`authenticate_agent`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/persistence/transactional_db.py#L1375-L1389))**:
+1. **Verificación Criptográfica de la API Key ([`_verify_agent_auth`](../backend/app/api/routers/agents.py#L104-L118) y [`authenticate_agent`](../backend/app/persistence/transactional_db.py#L1375-L1389))**:
    Extrae el token del header `Authorization: Bearer <api_key>`, calcula su hash `SHA-256` y verifica en la tabla `agents` que coincida exactamente con `auth_token_hash` para ese `agent_id` y que su estado no sea `REVOKED`. Si no coincide o fue revocado, responde inmediatamente con `HTTP 401 Unauthorized` o `HTTP 403 Forbidden`.
-2. **Ventana Anti-Replay de 300 Segundos ([`record_agent_heartbeat`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/persistence/transactional_db.py#L1402-L1412))**:
+2. **Ventana Anti-Replay de 300 Segundos ([`record_agent_heartbeat`](../backend/app/persistence/transactional_db.py#L1402-L1412))**:
    El servidor compara `X-Agent-Timestamp` con el reloj UTC actual:
    ```python
    diff = abs((curr_dt - ts_dt).total_seconds())
@@ -298,7 +298,7 @@ A continuación se documenta el contrato exacto de cada endpoint que utiliza el 
     "pending_tasks_count": 1
   }
   ```
-  > **Detección Automática de Desconexión (`OFFLINE`)**: Cuando cualquier usuario consulta la lista de agentes (`GET /api/v1/agents`), [`TransactionalDatabase.list_agents()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/persistence/transactional_db.py#L1458-L1464) calcula `now_ts - last_heartbeat_at`. Si han transcurrido **más de 60 segundos** (3 latidos perdidos) sin recibir un *heartbeat*, el estado del agente cambia dinámicamente de `ONLINE` a `OFFLINE`.
+  > **Detección Automática de Desconexión (`OFFLINE`)**: Cuando cualquier usuario consulta la lista de agentes (`GET /api/v1/agents`), [`TransactionalDatabase.list_agents()`](../backend/app/persistence/transactional_db.py#L1458-L1464) calcula `now_ts - last_heartbeat_at`. Si han transcurrido **más de 60 segundos** (3 latidos perdidos) sin recibir un *heartbeat*, el estado del agente cambia dinámicamente de `ONLINE` a `OFFLINE`.
 
 #### 3. Consulta de Tareas Pendientes (`GET /api/v1/agents/{agent_id}/tasks`)
 - **Respuesta del servidor CloudMove (`200 OK`)**:
@@ -362,7 +362,7 @@ El agente opera bajo un principio estricto: **inspección de solo lectura y ejec
 
 ### 4.1 Sondeo Nativo de Hardware, Red, Discos, Servicios y Bases de Datos (`system_collector.py`)
 
-El módulo [`cloudmove_agent/system_collector.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/system_collector.py) recolecta la radiografía del computador sin depender de librerías externas pesadas:
+El módulo [`cloudmove_agent/system_collector.py`](./system_collector.py) recolecta la radiografía del computador sin depender de librerías externas pesadas:
 
 1. **Procesador y Carga (`collect_cpu_info`)**:
    - Lee `/proc/cpuinfo` para extraer el nombre exacto del procesador (`model name`), cuenta los núcleos con `os.cpu_count()` y consulta la carga del kernel (`1m`, `5m`, `15m`) con `os.getloadavg()`.
@@ -386,7 +386,7 @@ El módulo [`cloudmove_agent/system_collector.py`](file:///home/lacastrilp/Docum
 
 ### 4.2 Auto-Instalación Portable de `osquery` en Espacio de Usuario y las 16 Consultas SQL (`osquery_installer.py`)
 
-Cuando el usuario utiliza el modo de descubrimiento profundo con `osquery` ([`cloudmove_agent/app.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/app.py) + [`cloudmove_agent/osquery_installer.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/osquery_installer.py) + [`cloudmove_osquery_export.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_osquery_export.py)), el agente realiza un flujo completamente automatizado:
+Cuando el usuario utiliza el modo de descubrimiento profundo con `osquery` ([`cloudmove_agent/app.py`](./app.py) + [`cloudmove_agent/osquery_installer.py`](./osquery_installer.py) + [`cloudmove_osquery_export.py`](../cloudmove_osquery_export.py)), el agente realiza un flujo completamente automatizado:
 
 1. **Detección del Equipo y Selección del Paquete Portable (`select_asset_for_current_pc`)**:
    - Detecta el sistema operativo (`linux`, `windows`, `darwin`) y la arquitectura (`x86_64`, `aarch64`).
@@ -397,7 +397,7 @@ Cuando el usuario utiliza el modo de descubrimiento profundo con `osquery` ([`cl
    - Crea el enlace ejecutable en `~/.local/bin/osqueryi` (en Linux/macOS) o `%LOCALAPPDATA%\CloudMove\bin\osqueryi.exe` (en Windows).
 3. **Prueba Funcional (*Smoke Test*) y Ejecución de las 16 Consultas SQL**:
    - Ejecuta `osqueryi --json "SELECT version, build_platform, build_distro FROM osquery_info LIMIT 1;"` para certificar que el binario funciona en el computador.
-   - A continuación, [`cloudmove_osquery_export.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_osquery_export.py#L31-L54) ejecuta las **16 consultas SQL de solo lectura** contra las tablas virtuales del sistema operativo:
+   - A continuación, [`cloudmove_osquery_export.py`](../cloudmove_osquery_export.py#L31-L54) ejecuta las **16 consultas SQL de solo lectura** contra las tablas virtuales del sistema operativo:
      `system_info`, `os_version`, `platform_info`, `cpu_info`, `memory_info`, `uptime`, `interface_addresses`, `routes`, `mounts`, `block_devices`, `listening_ports`, `processes`, `process_open_sockets`, `deb_packages`, `systemd_units` y `kernel_modules`.
    - Guarda el resultado en `backend/data/cloudmove-osquery-agent-inventory.json` y lo sube automáticamente al backend de CloudMove (`POST /api/v1/discovery/osquery`).
 
@@ -405,7 +405,7 @@ Cuando el usuario utiliza el modo de descubrimiento profundo con `osquery` ([`cl
 
 ### 4.3 Lista Blanca de Tareas Autorizadas (`_execute_single_task`) y Bloqueo de Shell Arbitrario
 
-Por diseño de seguridad, **el Agente de CloudMove NO permite la ejecución remota de comandos arbitrarios (RCE)**. Ni el backend ([`TransactionalDatabase.create_agent_task()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/persistence/transactional_db.py#L1524-L1537)) ni el demonio local ([`CloudMoveAgentDaemon._execute_single_task()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/agent_daemon.py#L194-L217)) aceptan cadenas de comandos bash/powershell libres.
+Por diseño de seguridad, **el Agente de CloudMove NO permite la ejecución remota de comandos arbitrarios (RCE)**. Ni el backend ([`TransactionalDatabase.create_agent_task()`](../backend/app/persistence/transactional_db.py#L1524-L1537)) ni el demonio local ([`CloudMoveAgentDaemon._execute_single_task()`](./agent_daemon.py#L194-L217)) aceptan cadenas de comandos bash/powershell libres.
 
 Únicamente pueden ejecutarse las siguientes **acciones cerradas en lista blanca**:
 
@@ -416,7 +416,7 @@ Por diseño de seguridad, **el Agente de CloudMove NO permite la ejecución remo
 | **`check_mgn_prerequisites`** | Comprueba desde el computador local si existe salida TCP en el puerto `443` hacia el endpoint regional de **AWS Application Migration Service** (`mgn.<region>.amazonaws.com`) y valida el soporte de Python para el agente de replicación de bloques de AWS. |
 | **`check_gcp_migrate_prerequisites`** | Comprueba desde el computador local la conectividad TCP saliente en el puerto `443` hacia **Google Cloud Migrate to Virtual Machines** (`vmmigration.googleapis.com`). |
 | **`quiesce_database` / `unquiesce_database`** | Invoca directamente a la librería C del sistema (`ctypes.CDLL("libc.so.6").sync()`) para volcar todos los buffers de memoria del kernel a los discos físicos antes de tomar un snapshot de bloque consistente. |
-| **`capture_live_os` / `create_disk_image`** | Invoca a [`capture_live_operating_system()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/image_migrator.py#L774-L1085) para capturar el estado del sistema operativo en vivo, empaquetar los manifiestos y generar la imagen virtual en staging con su hash SHA-256. |
+| **`capture_live_os` / `create_disk_image`** | Invoca a [`capture_live_operating_system()`](../backend/app/migration/image_migrator.py#L774-L1085) para capturar el estado del sistema operativo en vivo, empaquetar los manifiestos y generar la imagen virtual en staging con su hash SHA-256. |
 
 Si cualquier petición intenta despachar una acción fuera de esta lista (por ejemplo, `action: "run_shell"`), el agente lanza inmediatamente un `ValueError("Acción rechazada por la política de seguridad del agente. Ejecución arbitraria no autorizada.")` y reporta la tarea como `FAILED`.
 
@@ -458,13 +458,13 @@ Antes o después de desinstalar el agente en la máquina, el operador puede inva
     }'
   ```
 - **¿Qué hace esto en el backend?**:
-  Ejecuta [`TransactionalDatabase.revoke_agent()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/persistence/transactional_db.py#L1481-L1509), cambiando el estado del agente a `REVOKED`, registrando la fecha exacta (`revoked_at`), el motivo (`revocation_reason`) y escribiendo un evento inmutable `REVOKE_AGENT` en `audit_events`. A partir de ese milisegundo, cualquier intento de usar esa `agent_api_key` recibe `HTTP 403 Forbidden`.
+  Ejecuta [`TransactionalDatabase.revoke_agent()`](../backend/app/persistence/transactional_db.py#L1481-L1509), cambiando el estado del agente a `REVOKED`, registrando la fecha exacta (`revoked_at`), el motivo (`revocation_reason`) y escribiendo un evento inmutable `REVOKE_AGENT` en `audit_events`. A partir de ese milisegundo, cualquier intento de usar esa `agent_api_key` recibe `HTTP 403 Forbidden`.
 
 ---
 
 ### 6.2 Paso 2: Desinstalación Automática en Linux (`uninstall.sh`)
 
-El paquete incluye el script oficial [`cloudmove_agent/uninstall.sh`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/uninstall.sh). Para ejecutarlo en el computador donde se instaló el servicio:
+El paquete incluye el script oficial [`cloudmove_agent/uninstall.sh`](./uninstall.sh). Para ejecutarlo en el computador donde se instaló el servicio:
 
 ```bash
 sudo bash /opt/cloudmove-agent/uninstall.sh
@@ -482,7 +482,7 @@ sudo bash /opt/cloudmove-agent/uninstall.sh
 
 ### 6.3 Paso 3: Limpieza del Motor Portable `osquery` en Espacio de Usuario (Sin Root)
 
-Si además utilizaste el modo de descubrimiento local sin root ([`osquery_installer.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/osquery_installer.py)), que instala el binario portable de `osquery` dentro de la carpeta personal del usuario (`~/.local`), puedes eliminarlo con un solo comando sin necesitar `sudo`:
+Si además utilizaste el modo de descubrimiento local sin root ([`osquery_installer.py`](./osquery_installer.py)), que instala el binario portable de `osquery` dentro de la carpeta personal del usuario (`~/.local`), puedes eliminarlo con un solo comando sin necesitar `sudo`:
 
 ```bash
 rm -rf ~/.local/share/cloudmove ~/.local/bin/osqueryi ~/.cloudmove
@@ -492,7 +492,7 @@ rm -rf ~/.local/share/cloudmove ~/.local/bin/osqueryi ~/.cloudmove
 
 ### 6.4 Paso 4: Desinstalación Automática en Windows (`uninstall.ps1`)
 
-En sistemas Windows, abre una consola de **PowerShell como Administrador** y ejecuta el script oficial [`cloudmove_agent/uninstall.ps1`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/cloudmove_agent/uninstall.ps1):
+En sistemas Windows, abre una consola de **PowerShell como Administrador** y ejecuta el script oficial [`cloudmove_agent/uninstall.ps1`](./uninstall.ps1):
 
 ```powershell
 .\cloudmove_agent\uninstall.ps1

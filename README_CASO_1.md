@@ -2,8 +2,11 @@
 ## Cómo pasa una app desde código fuente o GitHub hasta Terraform en AWS
 
 > **Proyecto:** CloudMove — Plataforma Web de Abstracción Semántica y Migración Selectiva a AWS  
+> **Integrantes:** Sara Lopez Marin · Luis Alejandro Castrillón Pulgarín  
 > **Capstone Project in IT · Universidad EAFIT · 2026-2**  
 > **Caso analizado:** Caso 1 (`app_source`) — Migración guiada desde aplicación, código fuente o repositorio GitHub hacia **AWS**
+
+CloudMove fue diseñado y construido por **Sara Lopez Marin** y **Luis Alejandro Castrillón Pulgarín** como trabajo de grado de Ingeniería de Sistemas. Esta guía explica cómo funciona por dentro el **Caso de Uso 1 (`app_source`)**.
 
 ---
 
@@ -126,22 +129,22 @@ Cada parte del Caso 1 vive en su propio módulo para no mezclar el análisis de 
 
 | Parte del flujo | Archivo en el repositorio | Clases y funciones clave | Qué hace |
 | :--- | :--- | :--- | :--- |
-| **1. Conector GitHub** | [`backend/app/discovery/github_connector.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/github_connector.py) | `GitHubConnector`, `parse_repo_url()`, `validate_repository()`, `resolve_and_pin_commit()`, `get_repository_tree()`, `ephemeral_checkout()`, `build_hierarchical_tree()` | Habla con la API REST de GitHub, valida repos públicos o privados, fija el commit SHA de 40 caracteres y descomprime el código en una carpeta temporal segura. |
-| **2. Limpieza de secretos** | [`backend/app/discovery/connectors.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/connectors.py) y [`app_migrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py#L100-L127) | `SecretRedactor.redact_text()`, `redact_env_value()` | Tapa contraseñas, tokens, llaves PEM y claves metidas dentro de URLs de conexión antes de guardar nada en el CMIR o en la base de datos. |
-| **3. Motor Caso 1 (`app_source`)** | [`backend/app/migration/app_migrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py) | `inspect_application_source()`, `scan_local_filesystem_tree()`, `discover_app_components_and_code()`, `_analyze_source_payload()`, `build_application_cmir()`, `evaluate_app_migration_viability()`, `build_app_migration_stages()`, `generate_app_migration_artifacts()` | Lee el código estáticamente en varios lenguajes, clasifica dependencias, arma el CMIR de la app, evalúa viabilidad en AWS y escribe los scripts operativos. |
-| **4. Modelo CMIR v2.1** | [`backend/app/cmir/models.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/cmir/models.py) y [`backend/app/cmir/builder.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/cmir/builder.py) | `CMIR`, `CMIRNode`, `CMIRRelationship`, `CMIREvidence`, `build_hierarchical_cmir()`, `build_cmir_hierarchy()`, `TYPE_LEVEL_MAP` | Define los esquemas Pydantic v2.1, normaliza evidencias, asigna niveles jerárquicos del 0 al 8 y enlaza cada padre con sus hijos. |
-| **5. Grafo y dependencias** | [`backend/app/graph/builder.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/graph/builder.py) y [`backend/app/dependencies/resolver.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/dependencies/resolver.py) | `build_graph()`, `resolve_dependencies()` | Mete el CMIR en un grafo `networkx.DiGraph` y corre un recorrido en anchura (BFS) separando dependencias confirmadas, inferidas, desconocidas y compartidas. |
-| **6. Adaptador AWS** | [`backend/app/adapters/base.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/base.py), [`aws_adapter.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/aws_adapter.py) | `BaseProviderAdapter`, `AWSAdapter`, `translate_cmir()`, `generate_iac()`, `validate_artifacts()` | Convierte cada `CMIRNode` genérico a su recurso en Terraform (`aws_*`), limpia los nombres y revisa el HCL resultante. |
-| **7. Generador Terraform HCL** | [`backend/app/generators/terraform.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/generators/terraform.py) | `generate_aws_terraform_files()`, `format_terraform_code()` | Escribe los 4 archivos HCL (`provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`) y les pasa `terraform fmt`. |
-| **8. Generador de guías AWS** | [`backend/app/migration/deployment_guide_generator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/deployment_guide_generator.py) | `generate_deployment_guide()`, `_build_case_1_guide()` | Arma el manual `DEPLOYMENT_INSTRUCTIONS.md` con el commit, puerto, runtime y servicios AWS que escogiste (EC2/ALB+ASG/ECS/RDS). |
-| **9. Orquestador y API REST** | [`backend/app/migration/orchestrator.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/orchestrator.py) y [`backend/app/api/routers/migration.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/api/routers/migration.py) | `MigrationOrchestrator`, `/api/v1/migration/github/validate`, `/use-case-1/inspect`, `/use-case-1/migrate`, `/jobs/{id}/*` | Lleva la máquina de estados, exige aprobación (`APPROVED`), corre pruebas pre-cutover, arma el `.zip` y persiste todo en SQLite ACID. |
-| **10. Interfaz Web (UI)** | [`frontend/src/components/migration/MigrationOrchestratorWorkspace.jsx`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/src/components/migration/MigrationOrchestratorWorkspace.jsx), [`RepositoryTreeViewer.jsx`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/src/components/migration/RepositoryTreeViewer.jsx), [`IaCViewer.jsx`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/frontend/src/components/migration/IaCViewer.jsx) | Componentes React 19 | Muestra el formulario GitHub/Local, el explorador de carpetas del repo, el visor por pestañas del Terraform y el control paso a paso de las 12 etapas. |
+| **1. Conector GitHub** | [`backend/app/discovery/github_connector.py`](./backend/app/discovery/github_connector.py) | `GitHubConnector`, `parse_repo_url()`, `validate_repository()`, `resolve_and_pin_commit()`, `get_repository_tree()`, `ephemeral_checkout()`, `build_hierarchical_tree()` | Habla con la API REST de GitHub, valida repos públicos o privados, fija el commit SHA de 40 caracteres y descomprime el código en una carpeta temporal segura. |
+| **2. Limpieza de secretos** | [`backend/app/discovery/connectors.py`](./backend/app/discovery/connectors.py) y [`app_migrator.py`](./backend/app/migration/app_migrator.py#L100-L127) | `SecretRedactor.redact_text()`, `redact_env_value()` | Tapa contraseñas, tokens, llaves PEM y claves metidas dentro de URLs de conexión antes de guardar nada en el CMIR o en la base de datos. |
+| **3. Motor Caso 1 (`app_source`)** | [`backend/app/migration/app_migrator.py`](./backend/app/migration/app_migrator.py) | `inspect_application_source()`, `scan_local_filesystem_tree()`, `discover_app_components_and_code()`, `_analyze_source_payload()`, `build_application_cmir()`, `evaluate_app_migration_viability()`, `build_app_migration_stages()`, `generate_app_migration_artifacts()` | Lee el código estáticamente en varios lenguajes, clasifica dependencias, arma el CMIR de la app, evalúa viabilidad en AWS y escribe los scripts operativos. |
+| **4. Modelo CMIR v2.1** | [`backend/app/cmir/models.py`](./backend/app/cmir/models.py) y [`backend/app/cmir/builder.py`](./backend/app/cmir/builder.py) | `CMIR`, `CMIRNode`, `CMIRRelationship`, `CMIREvidence`, `build_hierarchical_cmir()`, `build_cmir_hierarchy()`, `TYPE_LEVEL_MAP` | Define los esquemas Pydantic v2.1, normaliza evidencias, asigna niveles jerárquicos del 0 al 8 y enlaza cada padre con sus hijos. |
+| **5. Grafo y dependencias** | [`backend/app/graph/builder.py`](./backend/app/graph/builder.py) y [`backend/app/dependencies/resolver.py`](./backend/app/dependencies/resolver.py) | `build_graph()`, `resolve_dependencies()` | Mete el CMIR en un grafo `networkx.DiGraph` y corre un recorrido en anchura (BFS) separando dependencias confirmadas, inferidas, desconocidas y compartidas. |
+| **6. Adaptador AWS** | [`backend/app/adapters/base.py`](./backend/app/adapters/base.py), [`aws_adapter.py`](./backend/app/adapters/aws_adapter.py) | `BaseProviderAdapter`, `AWSAdapter`, `translate_cmir()`, `generate_iac()`, `validate_artifacts()` | Convierte cada `CMIRNode` genérico a su recurso en Terraform (`aws_*`), limpia los nombres y revisa el HCL resultante. |
+| **7. Generador Terraform HCL** | [`backend/app/generators/terraform.py`](./backend/app/generators/terraform.py) | `generate_aws_terraform_files()`, `format_terraform_code()` | Escribe los 4 archivos HCL (`provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`) y les pasa `terraform fmt`. |
+| **8. Generador de guías AWS** | [`backend/app/migration/deployment_guide_generator.py`](./backend/app/migration/deployment_guide_generator.py) | `generate_deployment_guide()`, `_build_case_1_guide()` | Arma el manual `DEPLOYMENT_INSTRUCTIONS.md` con el commit, puerto, runtime y servicios AWS que escogiste (EC2/ALB+ASG/ECS/RDS). |
+| **9. Orquestador y API REST** | [`backend/app/migration/orchestrator.py`](./backend/app/migration/orchestrator.py) y [`backend/app/api/routers/migration.py`](./backend/app/api/routers/migration.py) | `MigrationOrchestrator`, `/api/v1/migration/github/validate`, `/use-case-1/inspect`, `/use-case-1/migrate`, `/jobs/{id}/*` | Lleva la máquina de estados, exige aprobación (`APPROVED`), corre pruebas pre-cutover, arma el `.zip` y persiste todo en SQLite ACID. |
+| **10. Interfaz Web (UI)** | [`frontend/src/components/migration/MigrationOrchestratorWorkspace.jsx`](./frontend/src/components/migration/MigrationOrchestratorWorkspace.jsx), [`RepositoryTreeViewer.jsx`](./frontend/src/components/migration/RepositoryTreeViewer.jsx), [`IaCViewer.jsx`](./frontend/src/components/migration/IaCViewer.jsx) | Componentes React 19 | Muestra el formulario GitHub/Local, el explorador de carpetas del repo, el visor por pestañas del Terraform y el control paso a paso de las 12 etapas. |
 
 ---
 
 ## 4. Fase 1: Cómo analiza el código sin ejecutarlo (`Discovery`)
 
-Todo arranca en [`inspect_application_source()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py#L130-L183) dentro de `backend/app/migration/app_migrator.py`.
+Todo arranca en [`inspect_application_source()`](./backend/app/migration/app_migrator.py#L130-L183) dentro de `backend/app/migration/app_migrator.py`.
 
 > [!IMPORTANT]
 > **Análisis estático de solo lectura:** CloudMove **nunca corre código** del proyecto que está analizando (`static_analysis_only = True`, `arbitrary_code_executed = False`). No hace `pip install`, ni `npm install`, ni importa módulos del repositorio: lee archivos como texto plano usando expresiones regulares y recorrido de carpetas.
@@ -158,7 +161,7 @@ Todo arranca en [`inspect_application_source()`](file:///home/lacastrilp/Documen
 
 ### 4.2. Conector GitHub: validación, commit fijo y sandbox limpio anti-Zip-Slip
 
-Cuando pegas una URL de GitHub, [`GitHubConnector`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/discovery/github_connector.py#L212-L525) sigue exactamente estos 4 pasos:
+Cuando pegas una URL de GitHub, [`GitHubConnector`](./backend/app/discovery/github_connector.py#L212-L525) sigue exactamente estos 4 pasos:
 
 ```mermaid
 sequenceDiagram
@@ -199,7 +202,7 @@ sequenceDiagram
 
 ### 4.3. Recorrido del árbol de archivos y lectura de manifiestos
 
-Ya con la carpeta lista en disco, [`scan_local_filesystem_tree(target_dir)`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py#L186-L293) hace cuatro cosas:
+Ya con la carpeta lista en disco, [`scan_local_filesystem_tree(target_dir)`](./backend/app/migration/app_migrator.py#L186-L293) hace cuatro cosas:
 
 1. **Salta carpetas que solo meten ruido**: mientras camina el árbol con `os.walk(target_dir)`, poda directo en memoria (`dirnames[:] = ...`) las carpetas de dependencias o builds:
    `{".git", ".svn", ".hg", "__pycache__", ".venv", "venv", "node_modules", ".idea", ".vscode", "dist", "build", ".next", "target", "bin", "obj", ".pytest_cache", ".mypy_cache"}`.
@@ -211,7 +214,7 @@ Ya con la carpeta lista en disco, [`scan_local_filesystem_tree(target_dir)`](fil
 
 ### 4.4. Detección de apps con varios servicios y escaneo estático (AST/Regex)
 
-Muchos proyectos modernos no tienen todo en la raíz: traen un `backend/` en FastAPI y un `frontend/` en React dentro del mismo repo. Para no quedarse corto, [`discover_app_components_and_code(target_dir, files_map)`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py#L296-L566) busca esa estructura por capas:
+Muchos proyectos modernos no tienen todo en la raíz: traen un `backend/` en FastAPI y un `frontend/` en React dentro del mismo repo. Para no quedarse corto, [`discover_app_components_and_code(target_dir, files_map)`](./backend/app/migration/app_migrator.py#L296-L566) busca esa estructura por capas:
 
 1. **Servicios desde Docker Compose o subcarpetas**:
    - Si encuentra algún `*compose*.yml`, lee el bloque `services:` línea por línea y saca `context:`, `dockerfile:`, los puertos `host:container` y `depends_on:`. Luego etiqueta el `tier` de cada servicio como `"backend"` (si el nombre contiene `back`, `api`, `server`, `srv`), `"frontend"` (`front`, `ui`, `web`, `client`) o `"service"`.
@@ -235,7 +238,7 @@ Muchos proyectos modernos no tienen todo en la raíz: traen un `backend/` en Fas
 
 ### 4.5. Qué saca de cada lenguaje, framework y contenedor
 
-Dentro de [`_analyze_source_payload()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py#L569-L1160), CloudMove junta todo según el tipo de archivo:
+Dentro de [`_analyze_source_payload()`](./backend/app/migration/app_migrator.py#L569-L1160), CloudMove junta todo según el tipo de archivo:
 
 | Archivo / Fuente | Qué saca exactamente | Qué asume si falta algún dato |
 | :--- | :--- | :--- |
@@ -254,7 +257,7 @@ Dentro de [`_analyze_source_payload()`](file:///home/lacastrilp/Documentos/Semes
 
 ### 4.6. Seguridad: cómo oculta secretos y contraseñas en URLs
 
-Al leer `.env`, `.env.example` o la sección `environment:` de `docker-compose.yml`, cada par `clave=valor` pasa por [`redact_env_value(key, raw_value)`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py#L100-L127):
+Al leer `.env`, `.env.example` o la sección `environment:` de `docker-compose.yml`, cada par `clave=valor` pasa por [`redact_env_value(key, raw_value)`](./backend/app/migration/app_migrator.py#L100-L127):
 
 1. **Filtro por nombre de variable (`SECRET_KEY_PATTERNS`)**:
    Revisa el nombre contra esta expresión regular:
@@ -279,7 +282,7 @@ Al leer `.env`, `.env.example` o la sección `environment:` de `docker-compose.y
 
 ### 4.7. Cómo separa hechos confirmados de suposiciones (`observed`, `inferred`, `unknown`)
 
-Una regla clave de CloudMove v2.1 (explicada en [`ADR-002`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/docs/ADR/ADR-002-extended-cmir-v2_1-and-evidence-provenance.md)) es **no mezclar un dato visto en el código con una corazonada**. En la práctica, ese "estado epistémico" simplemente responde *cómo sabe CloudMove que esa dependencia existe*:
+Una regla clave de CloudMove v2.1 es **no mezclar un dato visto en el código con una corazonada**. En la práctica, ese "estado epistémico" simplemente responde *cómo sabe CloudMove que esa dependencia existe*:
 
 | Servicio / Dependencia | Cuándo cuenta como `confirmed` (`epistemic_state = "observed"`) | Cuándo queda como `inferred` (`epistemic_state = "inferred"`) | Cuándo queda como `unknown` (`epistemic_state = "unknown"`) |
 | :--- | :--- | :--- | :--- |
@@ -297,7 +300,7 @@ Una regla clave de CloudMove v2.1 (explicada en [`ADR-002`](file:///home/lacastr
 
 ### 5.1. Por qué existe CMIR y qué trae en v2.1
 
-Si tuvieras $N$ fuentes (GitHub, carpetas locales, discos VM, campañas osquery/Proxmox, cuentas cloud en vivo) y $M$ destinos distintos, terminarías manteniendo $N \times M$ traductores enredados entre sí. Para evitarlo, todo pasa primero por **CMIR (CloudMove Intermediate Representation) v2.1** validado con Pydantic v2 ([`backend/app/cmir/models.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/cmir/models.py)):
+Si tuvieras $N$ fuentes (GitHub, carpetas locales, discos VM, campañas osquery/Proxmox, cuentas cloud en vivo) y $M$ destinos distintos, terminarías manteniendo $N \times M$ traductores enredados entre sí. Para evitarlo, todo pasa primero por **CMIR (CloudMove Intermediate Representation) v2.1** validado con Pydantic v2 ([`backend/app/cmir/models.py`](./backend/app/cmir/models.py)):
 
 - **`CMIRNode`**: representa cualquier componente con:
   - Identidad fija: `id`, `canonical_id` (`asset:<categoria>:<slug>`), `name`, `type`, `category`.
@@ -310,7 +313,7 @@ Si tuvieras $N$ fuentes (GitHub, carpetas locales, discos VM, campañas osquery/
 
 ### 5.2. Cómo arma el subgrafo paso a paso (`build_application_cmir`)
 
-[`build_application_cmir(app_discovery, target_provider, deployment_mode)`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py#L1162-L1488) agarra el diccionario que salió de `inspect_application_source()` y va armando el subgrafo en este orden:
+[`build_application_cmir(app_discovery, target_provider, deployment_mode)`](./backend/app/migration/app_migrator.py#L1162-L1488) agarra el diccionario que salió de `inspect_application_source()` y va armando el subgrafo en este orden:
 
 ```mermaid
 flowchart LR
@@ -363,7 +366,7 @@ flowchart LR
 
 ### 5.3. Niveles jerárquicos (0 a 8) y enlaces padre-hijo
 
-Al terminar, `build_application_cmir()` llama a [`build_cmir_hierarchy()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/cmir/builder.py#L117-L249) en `backend/app/cmir/builder.py`, que hace tres ajustes:
+Al terminar, `build_application_cmir()` llama a [`build_cmir_hierarchy()`](./backend/app/cmir/builder.py#L117-L249) en `backend/app/cmir/builder.py`, que hace tres ajustes:
 
 1. Revisa `TYPE_LEVEL_MAP` y asigna el nivel del 0 al 8 a cada nodo:
    - `virtual_machine` → **Nivel 5** (Máquina virtual / cómputo)
@@ -379,11 +382,11 @@ Al terminar, `build_application_cmir()` llama a [`build_cmir_hierarchy()`](file:
 
 ### 6.1. El grafo `networkx.DiGraph` y el recorrido BFS (`resolve_dependencies`)
 
-Con el CMIR listo, [`evaluate_app_migration_viability()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py#L1491-L1593) pasa el modelo por el motor de grafos:
+Con el CMIR listo, [`evaluate_app_migration_viability()`](./backend/app/migration/app_migrator.py#L1491-L1593) pasa el modelo por el motor de grafos:
 
-1. **Armar el grafo dirigido ([`build_graph(cmir)`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/graph/builder.py))**:
+1. **Armar el grafo dirigido ([`build_graph(cmir)`](./backend/app/graph/builder.py))**:
    Crea un `networkx.DiGraph()`, mete cada `CMIRNode` como vértice, añade aristas jerárquicas (`is_hierarchy = True`) de `parent_id` a hijo y agrega las relaciones de `cmir.relationships` como aristas dirigidas.
-2. **Resolver dependencias con BFS ([`resolve_dependencies(graph, [app_id])`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/dependencies/resolver.py#L6-L158))**:
+2. **Resolver dependencias con BFS ([`resolve_dependencies(graph, [app_id])`](./backend/app/dependencies/resolver.py#L6-L158))**:
    - **Paso 1 (Hijos del nodo elegido)**: incluye `app-{slug}` y todos sus descendientes (`get_descendants`).
    - **Paso 2 (Salientes y filtro epistémico)**: revisa las aristas salientes (`out_edges`) que no son de jerarquía:
      - Si la arista o el destino es `unknown`, lo mete en `unknown_dependencies`.
@@ -439,7 +442,7 @@ Para no revolver reglas de negocio de AWS con plantillas de texto HCL, la traduc
 
 ### 7.2. Tabla completa de traducción (`CMIR` → `AWS`)
 
-Cuando `generate_app_migration_artifacts()` llama a `adapter.generate_iac(cmir)`, [`AWSAdapter`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/aws_adapter.py) busca el tipo de cada `CMIRNode` dentro de `AWS_RESOURCE_MAP`:
+Cuando `generate_app_migration_artifacts()` llama a `adapter.generate_iac(cmir)`, [`AWSAdapter`](./backend/app/adapters/aws_adapter.py) busca el tipo de cada `CMIRNode` dentro de `AWS_RESOURCE_MAP`:
 
 | Nodo en el CMIR del Caso 1 (`node.type`) | Qué representa en la app | Recurso Terraform en **AWS** (`AWS_RESOURCE_MAP`) |
 | :--- | :--- | :--- |
@@ -503,7 +506,7 @@ Y devuelve un diccionario uniforme como este:
 
 ### 8.1. Los 4 archivos HCL modulares (`provider.tf`, `variables.tf`, `main.tf`, `outputs.tf`)
 
-[`backend/app/generators/terraform.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/generators/terraform.py) toma la lista de diccionarios traducidos y la reparte en los cuatro archivos clásicos de cualquier proyecto Terraform:
+[`backend/app/generators/terraform.py`](./backend/app/generators/terraform.py) toma la lista de diccionarios traducidos y la reparte en los cuatro archivos clásicos de cualquier proyecto Terraform:
 
 | Archivo HCL | Qué lleva adentro |
 | :--- | :--- |
@@ -516,7 +519,7 @@ Y devuelve un diccionario uniforme como este:
 
 ### 8.2. Cómo construye `main.tf` por dentro: red, reglas, secretos y recursos
 
-Si abres [`generate_aws_terraform_files()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/generators/terraform.py), ves que `main.tf` se arma en 5 pasos:
+Si abres [`generate_aws_terraform_files()`](./backend/app/generators/terraform.py), ves que `main.tf` se arma en 5 pasos:
 
 #### Paso 1: Contraseña segura sin quemarla en el código (`random_password` + `locals`)
 Para que `terraform plan` y `terraform apply` corran sin pedir contraseñas fijas en `variables.tf`, escribe arriba en `main.tf`:
@@ -588,9 +591,9 @@ Luego recorre recurso por recurso en `resources`:
 
 Antes de marcar el plan como `PLAN_READY`, CloudMove pasa dos filtros de calidad sobre el HCL generado:
 
-1. **Formateo oficial (`format_terraform_code` en [`terraform.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/generators/terraform.py#L8-L35))**:
+1. **Formateo oficial (`format_terraform_code` en [`terraform.py`](./backend/app/generators/terraform.py#L8-L35))**:
    Para cada `.tf`, revisa si `/usr/bin/terraform` está instalado (`shutil.which("terraform")`). Si está, escribe un archivo temporal y ejecuta `terraform fmt` (`subprocess.run(..., timeout=5)`) para dejar la indentación oficial de HashiCorp.
-2. **Validación en 4 niveles (`BaseProviderAdapter.validate_artifacts` en [`base.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/adapters/base.py#L66-L162))**:
+2. **Validación en 4 niveles (`BaseProviderAdapter.validate_artifacts` en [`base.py`](./backend/app/adapters/base.py#L66-L162))**:
    - **Nivel 1 (Archivos no vacíos y llaves `{}`)**: comprueba que ningún `.tf` esté vacío y que haya exactamente las mismas `{` que `}`.
    - **Nivel 2 (Sin credenciales filtradas)**: escanea que no aparezcan llaves AWS (`\bAKIA[0-9A-Z]{16}\b`) ni llaves privadas (`BEGIN RSA PRIVATE KEY`). Si ve una, frena todo con error.
    - **Nivel 3 (Referencias cruzadas `var.*` y recursos)**: saca todas las declaraciones `variable "<nombre>"` y `resource "<tipo>" "<nombre>"` de los archivos y confirma que toda referencia en `main.tf` u `outputs.tf` apunte a algo que realmente existe.
@@ -607,7 +610,7 @@ Antes de marcar el plan como `PLAN_READY`, CloudMove pasa dos filtros de calidad
 
 ### 8.4. Scripts complementarios y paquete descargable (`bundle.zip`)
 
-Subir infraestructura vacía no basta para dejar andando una app real. Por eso [`generate_app_migration_artifacts()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py#L1742-L1852) y [`generate_deployment_guide()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/deployment_guide_generator.py#L83-L443) arman **6 archivos más** y meten todo dentro del `.zip` de `GET /api/v1/migration/jobs/{migration_id}/bundle.zip`:
+Subir infraestructura vacía no basta para dejar andando una app real. Por eso [`generate_app_migration_artifacts()`](./backend/app/migration/app_migrator.py#L1742-L1852) y [`generate_deployment_guide()`](./backend/app/migration/deployment_guide_generator.py#L83-L443) arman **6 archivos más** y meten todo dentro del `.zip` de `GET /api/v1/migration/jobs/{migration_id}/bundle.zip`:
 
 | Archivo en `bundle.zip` | Para qué sirve |
 | :--- | :--- |
@@ -624,7 +627,7 @@ Subir infraestructura vacía no basta para dejar andando una app real. Por eso [
 
 ### 9.1. Estados explícitos de `MigrationOrchestrator`
 
-Cada plan del Caso 1 lo maneja [`MigrationOrchestrator`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/orchestrator.py) y se guarda en SQLite WAL mediante [`TransactionalDatabase`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/persistence/transactional_db.py):
+Cada plan del Caso 1 lo maneja [`MigrationOrchestrator`](./backend/app/migration/orchestrator.py) y se guarda en SQLite WAL mediante [`TransactionalDatabase`](./backend/app/persistence/transactional_db.py):
 
 ```mermaid
 stateDiagram-v2
@@ -658,7 +661,7 @@ stateDiagram-v2
 
 ### 9.2. Las 12 etapas guiadas del Caso de Uso 1 (`uc1-stage-01` a `uc1-stage-12`)
 
-[`build_app_migration_stages()`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/migration/app_migrator.py#L1701-L1740) parte la migración en 12 pasos ordenados, cada uno con su punto de recuperación (`checkpoint-uc1-stage-01` hasta `checkpoint-uc1-stage-12`):
+[`build_app_migration_stages()`](./backend/app/migration/app_migrator.py#L1701-L1740) parte la migración en 12 pasos ordenados, cada uno con su punto de recuperación (`checkpoint-uc1-stage-01` hasta `checkpoint-uc1-stage-12`):
 
 | Orden | ID de etapa | Transición de estado | Qué hace en ese paso |
 | :---: | :--- | :---: | :--- |
@@ -679,7 +682,7 @@ stateDiagram-v2
 
 ## 10. Caso real paso a paso: migración de `CocoaApp` (`ReportCocoApp.json`)
 
-En una corrida real documentada en [`ReportCocoApp.json`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/ReportCocoApp.json) (`migration_id: "mig-app-aws-b6d554"`), se migró el repositorio real de GitHub `https://github.com/slopma/CocoaApp` hacia **AWS**. Así pasaron los datos reales por cada módulo:
+En una corrida real registrada en `ReportCocoApp.json` (`migration_id: "mig-app-aws-b6d554"`), se migró el repositorio real de GitHub `https://github.com/slopma/CocoaApp` hacia **AWS**. Así pasaron los datos reales por cada módulo:
 
 ### 10.1. Entrada y commit fijado en GitHub
 - **Input (`source_config`)**:
@@ -734,7 +737,7 @@ El motor armó **6 nodos `CMIRNode`** y **5 relaciones `CMIRRelationship`**:
 
 ## 11. Referencia de endpoints API REST del Caso 1
 
-Todas las rutas del Caso 1 cuelgan de `/api/v1/migration` en [`backend/app/api/routers/migration.py`](file:///home/lacastrilp/Documentos/Semestre_2026_2/CapstoneProject_TI/backend/app/api/routers/migration.py):
+Todas las rutas del Caso 1 cuelgan de `/api/v1/migration` en [`backend/app/api/routers/migration.py`](./backend/app/api/routers/migration.py):
 
 | Método | Ruta | Entrada (`JSON`) | Qué hace y qué devuelve |
 | :---: | :--- | :--- | :--- |
